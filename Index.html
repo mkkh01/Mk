@@ -1,147 +1,183 @@
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
 <title>رسائل من مخطوف</title>
 <style>
 body {
-  background:black;
-  color:#eee;
-  font-family: Arial;
+  margin:0;
+  font-family: Tahoma, Arial;
+  background: linear-gradient(#000, #111);
+  color:#fff;
   display:flex;
   justify-content:center;
   align-items:center;
   height:100vh;
 }
 #game {
-  width:360px;
-  background:#111;
-  padding:12px;
-  border-radius:12px;
-  box-shadow:0 0 15px red;
+  width:90%;
+  max-width:400px;
+  background:#1a1a1a;
+  border-radius:15px;
+  overflow:hidden;
+  box-shadow:0 0 20px #000;
 }
-img {
+#image {
   width:100%;
-  border-radius:8px;
-  margin:8px 0;
+  height:200px;
+  object-fit:cover;
+}
+#text {
+  padding:15px;
+  min-height:100px;
 }
 button {
   width:100%;
-  margin-top:6px;
-  padding:10px;
   background:#222;
-  color:white;
+  color:#fff;
   border:none;
-  border-radius:6px;
+  padding:12px;
+  margin:5px 0;
+  border-radius:8px;
+  font-size:16px;
 }
-#stats {font-size:11px;color:#777;}
+button:hover {
+  background:#444;
+}
 </style>
 </head>
-<body>
 
+<body>
 <div id="game">
-  <img id="img">
+  <img id="image" src="">
   <div id="text"></div>
   <div id="choices"></div>
-  <div id="stats"></div>
 </div>
 
 <script>
-let F=0, I=0, R=0;
-let step=1;
+const questions = {
+  q1:{
+    text:"أنا مخطوف… الرقم الوحيد اللي حفظته رقمك.",
+    img:"https://images.unsplash.com/photo-1500530855697-b586d89ba3ee",
+    choices:[
+      {t:"من أنت؟", n:"q2A"},
+      {t:"هل أنت مصاب؟", n:"q2B"},
+      {t:"لازم نبلغ الشرطة", n:"q2C"}
+    ]
+  },
 
-const scenes = {
-1:{
-  base:"أنا مخطوف… الرقم الوحيد اللي حافظه رقمك.",
-  img:"https://i.imgur.com/6R8K4fL.jpg",
-  choices:[
-    {t:"من أنت؟", i:1},
-    {t:"هل أنت مصاب؟", i:1},
-    {t:"بلّغ الشرطة", r:1}
-  ]
-},
+  q2A:{
+    text:"اسمي سامي… اختطفوني من سيارة أجرة.",
+    img:"https://images.unsplash.com/photo-1519681393784-d120267933ba",
+    choices:[
+      {t:"اسأله عن السائق", n:"q3AA"},
+      {t:"اسأله عن المكان", n:"q3AB"}
+    ]
+  },
 
-2:{
-  smart:"أنا اسمي آدم… المكان بارد وفيه رطوبة.",
-  fear:"أنا خايف… أسمع أصوات قريبة.",
-  rash:"ليش تأخرت؟ في حد يقترب!",
-  img:"https://i.imgur.com/xlU1Q0s.jpg",
-  choices:[
-    {t:"صف لي المكان", i:1},
-    {t:"ابقَ هادئ", f:-1},
-    {t:"صوّر المكان", r:1}
-  ]
-},
+  q2B:{
+    text:"رجلي تؤلمني ومربوط.",
+    img:"https://images.unsplash.com/photo-1500534314209-a26db0f5c8f0",
+    choices:[
+      {t:"خليه يضغط على الجرح", n:"q3BA"},
+      {t:"خليه يهدأ", n:"q3BB"}
+    ]
+  },
 
-3:{
-  smart:"لمست الجدار… فيه صدأ وباب صغير.",
-  fear:"أنا ما نقدرش نتحرك…",
-  rash:"وجدت باب وبدون تفكير دفعته!",
-  img:"https://i.imgur.com/Br8k4Zd.jpg",
-  choices:[
-    {t:"افتحه ببطء", i:1},
-    {t:"ابقَ مكانك", f:1},
-    {t:"اضربه", r:1}
-  ]
-},
+  q2C:{
+    text:"لا تقول شرطة… لو عرفوا بيقتلوني.",
+    img:"https://images.unsplash.com/photo-1505678261036-a3fcc5e884ee",
+    choices:[
+      {t:"نكذب ونقول ما بلغناش", n:"q3CA"},
+      {t:"نصر على التبليغ", n:"q3CB"}
+    ]
+  },
 
-4:{
-  smart:"فتحته قليلاً… فيه درج للأعلى.",
-  fear:"الصوت قريب… قلبي يدق بسرعة.",
-  rash:"طلعت درج بسرعة!",
-  img:"https://i.imgur.com/HZ9s0R6.jpg",
-  choices:[
-    {t:"اصعد ببطء", i:1},
-    {t:"اختبئ", f:1},
-    {t:"اركض", r:1}
-  ]
-},
+  q3AA:{
+    text:"السائق كان لابس قبعة سوداء.",
+    img:"https://images.unsplash.com/photo-1495433324511-bf8e92934d90",
+    choices:[
+      {t:"اسأله عن السيارة", n:"q4AAA"},
+      {t:"اسأله عن الطريق", n:"q4AAB"}
+    ]
+  },
 
-5:{
-  smart:"شفت ضوء خافت فوقي.",
-  fear:"أنا ارتجف… الضوء يخوفني.",
-  rash:"أنا فوق تقريبًا!",
-  img:"https://i.imgur.com/w7GCRPb.jpg",
-  choices:[
-    {t:"راقب المكان", i:1},
-    {t:"توقف", f:1},
-    {t:"نادِ على أحد", r:1}
-  ]
-}
+  q3AB:{
+    text:"كنت قريب من مصنع مهجور.",
+    img:"https://images.unsplash.com/photo-1501785888041-af3ef285b470",
+    choices:[
+      {t:"اسأله عن أصوات", n:"q4ABA"},
+      {t:"اسأله عن روائح", n:"q4ABB"}
+    ]
+  },
+
+  q3BA:{
+    text:"الدم خفّ شوي.",
+    img:"https://images.unsplash.com/photo-1470337458703-46ad1756a187",
+    choices:[
+      {t:"اسأله عن الغرفة", n:"q4BAA"},
+      {t:"خليه يصور", n:"q4BAB"}
+    ]
+  },
+
+  q3BB:{
+    text:"أنا أرتجف… حد قريب.",
+    img:"https://images.unsplash.com/photo-1505693416388-ac5ce068fe85",
+    choices:[
+      {t:"خليه يسكت", n:"q4BBA"},
+      {t:"خليه يخبّي الهاتف", n:"q4BBB"}
+    ]
+  },
+
+  q3CA:{
+    text:"تمام… بس الوقت قصير.",
+    img:"https://images.unsplash.com/photo-1519125323398-675f0ddb6308",
+    choices:[
+      {t:"نسأله عن القيود", n:"q4CAA"},
+      {t:"نسأله عن عدد الخاطفين", n:"q4CAB"}
+    ]
+  },
+
+  q3CB:{
+    text:"أسمع باب يُفتح!",
+    img:"https://images.unsplash.com/photo-1500534314209-a26db0f5c8f0",
+    choices:[
+      {t:"خليه يرمي الهاتف", n:"q4CBA"},
+      {t:"خليه يخفيه", n:"q4CBB"}
+    ]
+  },
+
+  q4AAA:{text:"السيارة بيضاء قديمة.",img:"https://images.unsplash.com/photo-1500530855697-b586d89ba3ee",choices:[]},
+  q4AAB:{text:"مرّينا بطريق ترابي.",img:"https://images.unsplash.com/photo-1501785888041-af3ef285b470",choices:[]},
+  q4ABA:{text:"أسمع ماكينات.",img:"https://images.unsplash.com/photo-1505678261036-a3fcc5e884ee",choices:[]},
+  q4ABB:{text:"ريحة زيت.",img:"https://images.unsplash.com/photo-1495433324511-bf8e92934d90",choices:[]},
+  q4BAA:{text:"غرفة صغيرة.",img:"https://images.unsplash.com/photo-1505693416388-ac5ce068fe85",choices:[]},
+  q4BAB:{text:"الإضاءة ضعيفة.",img:"https://images.unsplash.com/photo-1519681393784-d120267933ba",choices:[]},
+  q4BBA:{text:"سكت تماماً.",img:"https://images.unsplash.com/photo-1500534314209-a26db0f5c8f0",choices:[]},
+  q4BBB:{text:"الهاتف تحت الطاولة.",img:"https://images.unsplash.com/photo-1470337458703-46ad1756a187",choices:[]},
+  q4CAA:{text:"مربوط بحبل.",img:"https://images.unsplash.com/photo-1500530855697-b586d89ba3ee",choices:[]},
+  q4CAB:{text:"اثنين.",img:"https://images.unsplash.com/photo-1501785888041-af3ef285b470",choices:[]},
+  q4CBA:{text:"انقطع الاتصال.",img:"https://images.unsplash.com/photo-1505678261036-a3fcc5e884ee",choices:[]},
+  q4CBB:{text:"ما زال معنا.",img:"https://images.unsplash.com/photo-1519125323398-675f0ddb6308",choices:[]}
 };
 
-function getMode(){
-  if(I>=F && I>=R) return "smart";
-  if(F>=I && F>=R) return "fear";
-  return "rash";
-}
+let current="q1";
 
-function loadScene(){
-  let s = scenes[step];
-  let mode = step==1 ? "base" : getMode();
-  document.getElementById("img").src = s.img;
-  document.getElementById("text").innerText = s[mode];
-  document.getElementById("stats").innerText = `ذكاء:${I} | خوف:${F} | تهور:${R}`;
-  let c = document.getElementById("choices");
+function showQuestion(id){
+  const q=questions[id];
+  document.getElementById("text").innerText=q.text;
+  document.getElementById("image").src=q.img;
+  const c=document.getElementById("choices");
   c.innerHTML="";
-  s.choices.forEach(ch=>{
-    let b=document.createElement("button");
+  q.choices.forEach(ch=>{
+    const b=document.createElement("button");
     b.innerText=ch.t;
-    b.onclick=()=>{
-      F+=ch.f||0;
-      I+=ch.i||0;
-      R+=ch.r||0;
-      step++;
-      if(!scenes[step]){
-        document.getElementById("text").innerText="…هنا نكمل القصة في الجزء التالي";
-        c.innerHTML="";
-      } else loadScene();
-    };
+    b.onclick=()=>showQuestion(ch.n);
     c.appendChild(b);
   });
 }
 
-loadScene();
+showQuestion(current);
 </script>
 </body>
 </html>
