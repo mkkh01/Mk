@@ -25,10 +25,11 @@ async def start_background_tasks(app):
 async def post_init(app: Application):
     asyncio.create_task(start_background_tasks(app))
 
-def main():
+async def run_bot():
     print("🚀 جاري إقلاع نظام التداول المؤسسي CT V4.0...")
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_db())
+    
+    # تهيئة قاعدة البيانات
+    await init_db()
     
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
@@ -50,7 +51,20 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("✅ النظام المؤسسي جاهز بالكامل.")
-    app.run_polling(drop_pending_updates=True)
+    
+    async with app:
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        # ابقاء البوت يعمل
+        while True:
+            await asyncio.sleep(1)
+
+def main():
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
     main()
