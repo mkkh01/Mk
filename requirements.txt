@@ -1,0 +1,14 @@
+python-telegram-bot
+SQLAlchemy
+asyncpg
+websockets
+pandas
+ta
+scipy
+xgboost
+yfinance
+greenlet
+flask
+scikit-learn
+requests
+ccxt
