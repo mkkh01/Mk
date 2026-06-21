@@ -76,8 +76,11 @@ class AIEngine:
                 if os.path.exists(KLINES_CACHE):
                     with open(KLINES_CACHE, 'r') as f:
                         klines_data = json.load(f)
-                    if symbol in klines_data:
-                        k = klines_data[symbol]
+                    
+                    # استخدام المفتاح الديناميكي (العملة + الإطار الزمني)
+                    cache_key = f"{symbol}_{coin.timeframe}"
+                    if cache_key in klines_data:
+                        k = klines_data[cache_key]
                         # إذا كانت الشمعة الحالية قد أغلقت (x=True)، نضيفها للبيانات التاريخية
                         if k.get('x', False):
                             new_row = [datetime.now().timestamp()*1000, k['o'], k['h'], k['l'], k['c'], k['v']]

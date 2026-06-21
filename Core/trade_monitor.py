@@ -42,7 +42,16 @@ class TradeMonitor:
                         await asyncio.sleep(10)
                         continue
 
-                    streams = [f"{s.lower()}@miniTicker" for s in symbols] + [f"{s.lower()}@kline_15m" for s in symbols]
+                    # جلب قائمة العملات مع أطرها الزمنية لإنشاء روابط البث ديناميكياً
+                    coins_res = await session.execute(select(TrackedCoin).where(TrackedCoin.enabled == True))
+                    active_coins = coins_res.scalars().all()
+                    
+                    streams = []
+                    for c in active_coins:
+                        s_lower = c.symbol.lower()
+                        streams.append(f"{s_lower}@miniTicker")
+                        streams.append(f"{s_lower}@kline_{c.timeframe}")
+                    
                     uri = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
                     
                     async with websockets.connect(uri) as ws:
@@ -69,7 +78,17 @@ class TradeMonitor:
                                 await self._check_live_trades(symbol, price)
                             elif 'kline' in payload['stream']:
                                 k = data['k']
-                                self.live_klines[symbol] = {'o': float(k['o']), 'h': float(k['h']), 'l': float(k['l']), 'c': float(k['c']), 'v': float(k['v']), 'x': k['x']}
+                                interval = k['i']
+                                # استخدام مفتاح يجمع بين العملة والإطار الزمني لضمان الديناميكية
+                                cache_key = f"{symbol}_{interval}"
+                                self.live_klines[cache_key] = {
+                                    'o': float(k['o']), 
+                                    'h': float(k['h']), 
+                                    'l': float(k['l']), 
+                                    'c': float(k['c']), 
+                                    'v': float(k['v']), 
+                                    'x': k['x']
+                                }
                             
                             self._save_data()
 

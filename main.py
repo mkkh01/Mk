@@ -54,17 +54,22 @@ async def main():
     print("✅ النظام المؤسسي جاهز بالكامل.")
     
     # استخدام run_polling وهي الطريقة الأكثر استقراراً وبساطة
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
-    
-    # إبقاء البرنامج يعمل للأبد
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        await application.stop()
-        await application.shutdown()
+    # تم إضافة drop_pending_updates=True لحل مشكلة Conflict: terminated by other getUpdates request
+    # كما نستخدم run_polling() مباشرة بدلاً من البدء اليدوي لضمان إدارة أفضل للدورة الحياة
+    async with application:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=True)
+        print("✅ النظام المؤسسي جاهز بالكامل.")
+        
+        # إبقاء البرنامج يعمل للأبد
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except (KeyboardInterrupt, SystemExit):
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
 
 if __name__ == "__main__":
     # تشغيل الـ Loop الرئيسي
