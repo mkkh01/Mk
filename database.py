@@ -1,4 +1,5 @@
 import os
+import ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from datetime import datetime
@@ -6,13 +7,22 @@ from typing import Optional
 from sqlalchemy import Text, func, JSON
 from config import DATABASE_URL
 
-# إعداد المحرك للعمل مع Supabase/PostgreSQL
+# إعداد SSLContext لضمان اتصال آمن ومستقر مع Supabase على منصة Render
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
+# إعداد المحرك للعمل مع Supabase/PostgreSQL باستخدام Transaction Pooler
 engine = create_async_engine(
     DATABASE_URL,
     connect_args={
+        "ssl": ssl_context,
+        "command_timeout": 60,
         "statement_cache_size": 0,
         "prepared_statement_cache_size": 0
-    }
+    },
+    pool_pre_ping=True,
+    pool_recycle=3600
 )
 
 AsyncSessionLocal = async_sessionmaker(
