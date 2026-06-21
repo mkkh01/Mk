@@ -1,4 +1,4 @@
-import os
+
 import ssl
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -7,19 +7,16 @@ from typing import Optional
 from sqlalchemy import Text, func, JSON
 from config import DATABASE_URL
 
-# إعداد SSLContext لضمان اتصال آمن ومستقر مع Supabase على منصة Render
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
+# ❌ لا داعي لتعطيل التحقق SSL نهائيًا
+# Supabase يعمل بشكل طبيعي مع verify SSL
 
-# إعداد المحرك للعمل مع Supabase/PostgreSQL باستخدام Transaction Pooler
+ssl_context = ssl.create_default_context()
+
+# ✔️ إعداد المحرك بشكل صحيح لـ Supabase Session Pooler
 engine = create_async_engine(
     DATABASE_URL,
     connect_args={
-        "ssl": ssl_context,
-        "command_timeout": 60,
-        "statement_cache_size": 0,
-        "prepared_statement_cache_size": 0
+        "ssl": ssl_context
     },
     pool_pre_ping=True,
     pool_recycle=3600
@@ -33,22 +30,25 @@ AsyncSessionLocal = async_sessionmaker(
 
 class Base(DeclarativeBase):
     def __repr__(self):
-        return f"<{self.__class__.__name__} {', '.join([f'{c.name}={getattr(self, c.name)!r}' for c in self.__table__.columns])}>"
+        return f"<{self.__class__.__name__}>"
+
+# ---------------- MODELS ----------------
 
 class UserConfig(Base):
     __tablename__ = "user_config_v4"
-    
+
     telegram_id: Mapped[int] = mapped_column(primary_key=True)
     total_capital: Mapped[float] = mapped_column(default=1000.0)
     is_active: Mapped[bool] = mapped_column(default=False)
     emergency_stop: Mapped[bool] = mapped_column(default=False)
     consecutive_losses: Mapped[int] = mapped_column(default=0)
-    max_drawdown_limit: Mapped[float] = mapped_column(default=10.0) # 10% limit
-    risk_per_trade: Mapped[float] = mapped_column(default=1.0) # 1% default
-    
+    max_drawdown_limit: Mapped[float] = mapped_column(default=10.0)
+    risk_per_trade: Mapped[float] = mapped_column(default=1.0)
+
+
 class TrackedCoin(Base):
     __tablename__ = "tracked_coins_v4"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(unique=True, nullable=False)
     capital: Mapped[float] = mapped_column(default=100.0)
@@ -57,20 +57,21 @@ class TrackedCoin(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     added_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
+
 class LiveTrade(Base):
     __tablename__ = "live_trades_v4"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(nullable=False)
-    type: Mapped[str] = mapped_column(nullable=False) # BUY / SELL
+    type: Mapped[str] = mapped_column(nullable=False)
     entry_price: Mapped[float] = mapped_column(nullable=False)
     exit_price: Mapped[Optional[float]] = mapped_column(nullable=True)
     stop_loss: Mapped[Optional[float]] = mapped_column(nullable=True)
     take_profit: Mapped[Optional[float]] = mapped_column(nullable=True)
     amount: Mapped[float] = mapped_column(nullable=False)
-    status: Mapped[str] = mapped_column(default="OPEN") # OPEN, WON, LOST
+    status: Mapped[str] = mapped_column(default="OPEN")
     pnl: Mapped[float] = mapped_column(default=0.0)
-    duration: Mapped[Optional[int]] = mapped_column(nullable=True) # Seconds
+    duration: Mapped[Optional[int]] = mapped_column(nullable=True)
     score: Mapped[float] = mapped_column(default=0.0)
     entry_reason: Mapped[Optional[str]] = mapped_column(Text)
     exit_reason: Mapped[Optional[str]] = mapped_column(Text)
@@ -78,18 +79,22 @@ class LiveTrade(Base):
     timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
     closed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
 
+
 class ShadowTrade(Base):
     __tablename__ = "shadow_trades_v4"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(nullable=False)
     indicators_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
     market_state: Mapped[Optional[str]] = mapped_column(Text)
     score: Mapped[float] = mapped_column(default=0.0)
-    result: Mapped[Optional[str]] = mapped_column(Text) # WIN / LOSS
+    result: Mapped[Optional[str]] = mapped_column(Text)
     timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+# ---------------- INIT DB ----------------
 
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        print("✅ Institutional Database Schema V4 Initialized.")
+        print("✅ Database Initialized Successfully.")
