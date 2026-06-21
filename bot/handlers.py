@@ -17,7 +17,11 @@ async def check_admin(update: Update) -> bool:
     return update.effective_user.id == ADMIN_ID
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_admin(update): return
+    print(f"DEBUG: Received /start from user {update.effective_user.id}")
+    if not await check_admin(update):
+        print(f"DEBUG: User {update.effective_user.id} is NOT admin. Admin ID is {ADMIN_ID}")
+        return
+    print(f"DEBUG: User {update.effective_user.id} is authorized admin.")
     user_id = update.effective_user.id
     async with AsyncSessionLocal() as session:
         res = await session.execute(select(UserConfig).where(UserConfig.telegram_id == user_id))
@@ -32,6 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"DEBUG: Received message: {update.message.text} from {update.effective_user.id}")
     if not await check_admin(update): return
     text = update.message.text
     action = context.user_data.get('action')
