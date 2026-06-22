@@ -4,6 +4,8 @@ All actions route to Services layer.
 """
 import asyncio
 import logging
+import traceback
+import sys
 from typing import Optional
 
 from telegram import Update
@@ -12,13 +14,10 @@ from telegram.ext import (
     ConversationHandler, filters, ContextTypes
 )
 
-from bots.telegram.handlers import Handlers
+from bots.telegram.handlers import Handlers, ADD_SYMBOL, ADD_CAPITAL, ADD_RISK, ADD_TF
 from bots.telegram.keyboards import get_main_menu
 
 logger = logging.getLogger("telegram_engine")
-
-# Conversation states
-ADD_SYMBOL, ADD_CAPITAL, ADD_RISK, ADD_TF = range(4)
 
 
 class TelegramEngine:
@@ -41,48 +40,114 @@ class TelegramEngine:
             portfolio_service=portfolio_service,
             risk_service=risk_service,
         )
+        logger.info(f"[TELEGRAM] Engine initialized (admin={admin_id})")
+
+    async def _error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Global PTB error handler — catches all unhandled exceptions."""
+        tb_list = traceback.format_exception(
+            type(context.error), context.error, context.error.__traceback__
+        )
+        tb_str = "".join(tb_list)
+        logger.critical(
+            f"[TELEGRAM] Unhandled exception in handler: {context.error}",
+        )
+        logger.critical(f"[TELEGRAM] Traceback:\n{tb_str}")
+
+        # Try to notify user
+        if update and hasattr(update, "effective_chat"):
+            try:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="⚠️ حدث خطأ داخلي. جاري تسجيل المشكلة وإعادة المحاولة...",
+                )
+            except Exception:
+                pass
 
     async def initialize(self):
         """Build and configure the Telegram application."""
+        logger.info("[TELEGRAM] Initializing bot application...")
         self.application = Application.builder().token(self.token).build()
 
+        # ── Global error handler ──
+        self.application.add_error_handler(self._error_handler)
+        logger.info("[TELEGRAM] Error handler registered.")
+
         # ── Conversation Handler for adding coins ──
+        # NOTE: entry_point is the ONLY way to enter — NOT via handle_message route dict
         conv_handler = ConversationHandler(
             entry_points=[
-                MessageHandler(filters.Regex("^➕ إضافة عملة$"), self.handlers.start_add_coin),
+                MessageHandler(
+                    filters.Regex("^➕ إضافة عملة$"),
+                    self.handlers.start_add_coin
+                ),
             ],
             states={
-                ADD_SYMBOL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.process_add_symbol)],
-                ADD_CAPITAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.process_add_capital)],
-                ADD_RISK: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.process_add_risk)],
-                ADD_TF: [CallbackQueryHandler(self.handlers.process_add_tf, pattern='^tf_')],
+                ADD_SYMBOL: [
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.handlers.process_add_symbol
+                    ),
+                ],
+                ADD_CAPITAL: [
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.handlers.process_add_capital
+                    ),
+                ],
+                ADD_RISK: [
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self.handlers.process_add_risk
+                    ),
+                ],
+                ADD_TF: [
+                    CallbackQueryHandler(
+                        self.handlers.process_add_tf,
+                        pattern=r'^tf_'
+                    ),
+                ],
             },
-            fallbacks=[CommandHandler('start', self.handlers.start)],
-            per_message=False,
+            fallbacks=[
+                CommandHandler('start', self.handlers.start),
+                CommandHandler('cancel', self.handlers.cancel_conversation),
+            ],
+            name="add_coin_conversation",
+            allow_reentry=True,
         )
 
         # ── Register handlers ──
+        # Order matters: ConversationHandler BEFORE global handlers
         self.application.add_handler(CommandHandler("start", self.handlers.start))
+        self.application.add_handler(CommandHandler("cancel", self.handlers.cancel_conversation))
         self.application.add_handler(conv_handler)
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_message))
-        self.application.add_handler(CallbackQueryHandler(self.handlers.handle_callback))
+        # Global MessageHandler — catches everything NOT in a conversation
+        self.application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_message)
+        )
+        # Global CallbackQueryHandler — ONLY for non-conversation callbacks
+        self.application.add_handler(
+            CallbackQueryHandler(self.handlers.handle_callback)
+        )
 
-        logger.info("Telegram bot handlers registered.")
+        logger.info("[TELEGRAM] Handlers registered (start, cancel, conv_handler, message, callback).")
 
     async def start(self):
         """Start polling."""
         if not self.application:
             await self.initialize()
+
+        logger.info("[TELEGRAM] Starting bot polling...")
         async with self.application:
             await self.application.initialize()
             await self.application.start()
             await self.application.updater.start_polling(drop_pending_updates=True)
-            logger.info("Telegram bot started polling.")
+            logger.info("[TELEGRAM] ✅ Bot polling started. Listening for messages.")
 
             try:
                 while True:
                     await asyncio.sleep(3600)
             except (KeyboardInterrupt, SystemExit):
+                logger.info("[TELEGRAM] Shutdown signal received.")
                 await self.application.updater.stop()
                 await self.application.stop()
                 await self.application.shutdown()
@@ -90,9 +155,11 @@ class TelegramEngine:
     async def stop(self):
         """Stop bot gracefully."""
         if self.application:
+            logger.info("[TELEGRAM] Stopping bot...")
             await self.application.updater.stop()
             await self.application.stop()
             await self.application.shutdown()
+            logger.info("[TELEGRAM] Bot stopped.")
 
     async def send_message(self, chat_id: int, text: str, parse_mode: str = "Markdown"):
         """Send a message to a specific chat."""
@@ -101,5 +168,6 @@ class TelegramEngine:
                 await self.application.bot.send_message(
                     chat_id=chat_id, text=text, parse_mode=parse_mode
                 )
+                logger.debug(f"[TELEGRAM] Message sent to {chat_id}")
             except Exception as e:
-                logger.error(f"Failed to send message: {e}")
+                logger.error(f"[TELEGRAM] Failed to send message to {chat_id}: {e}")
