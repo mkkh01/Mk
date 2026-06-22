@@ -214,7 +214,7 @@ class HealthMonitor(BaseEngine):
     async def _check_system_resources(self):
         """فحص CPU، الذاكرة، القرص."""
         mem = psutil.virtual_memory()
-        cpu = psutil.cpu_percent(interval=0.5)
+        cpu = psutil.cpu_percent(interval=0.1)  # 0.1 بدل 0.5 لتقليل الحجب
 
         if mem.percent > 90:
             await self._send_alert(

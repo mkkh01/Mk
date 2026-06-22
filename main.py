@@ -653,10 +653,12 @@ async def main():
             except Exception as e:
                 logger.error(f"[دورة #{cycle}] ❌ خطأ: {e}", exc_info=True)
 
-            await asyncio.sleep(120)
+            # أول 5 دورات سريعة، ثم كل 30 ثانية
+            delay = 10 if cycle <= 5 else 30
+            await asyncio.sleep(delay)
 
     asyncio.create_task(trading_loop())
-    logger.info("[النظام] حلقة التداول بدأت (دورة كل دقيقتين)")
+    logger.info("[النظام] حلقة التداول بدأت (أول 5 دورات كل 10ث، ثم كل 30ث)")
 
     # ── النظام جاهز ────────────────────────────────────────
     set_system_status("يعمل")
