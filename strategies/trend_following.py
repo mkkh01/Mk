@@ -6,21 +6,35 @@
 """
 from strategies import BaseStrategy, StrategySignal
 from core.types import MarketAnalysis
+from core.strategy_contract import StrategyMeta
 
 
 class TrendFollowingStrategy(BaseStrategy):
-    name = "تتبع_الاتجاه"
-    supported_timeframes = ["15m", "1h", "4h", "1d"]
+    meta = StrategyMeta(
+        name="تتبع_الاتجاه",
+        version="1.0.0",
+        description="استراتيجية تتبع الاتجاه — تتداول في اتجاه الاتجاه القائم. تتجنب الأسواق المتذبذبة.",
+        min_confidence=65.0,
+        supported_timeframes=["15m", "1h", "4h", "1d"],
+        suitable_regimes=["TRENDING"],
+        required_inputs=["trend_direction", "trend_strength", "momentum", "volatility", "liquidity_score"],
+    )
 
     async def evaluate(self, analysis: MarketAnalysis) -> StrategySignal:
         signal = StrategySignal(
             symbol=analysis.symbol,
-            strategy_name=self.name,
+            strategy_name=self.meta.name,
             action="HOLD",
             confidence=0.0,
             score_breakdown={},
             reasoning="",
         )
+
+        # تحقق: هل نظام السوق مناسب لهذه الاستراتيجية؟
+        if not self.is_suitable_for_regime(analysis.regime):
+            signal.reasoning = f"نظام السوق {analysis.regime} غير مناسب لـ {self.meta.name} — الاستراتيجية مناسبة لـ {self.meta.suitable_regimes}"
+            signal.confidence = 5.0
+            return signal
 
         # لا نتداول إلا في الأسواق ذات الاتجاه
         if analysis.regime not in ("TRENDING",):
@@ -29,7 +43,7 @@ class TrendFollowingStrategy(BaseStrategy):
             return signal
 
         # ثقة منخفضة — لا نتداول
-        if analysis.confidence < 60:
+        if analysis.confidence < self.meta.min_confidence:
             signal.reasoning = f"ثقة التحليل منخفضة ({analysis.confidence:.0f}%) — تخطي"
             signal.confidence = 15.0
             return signal

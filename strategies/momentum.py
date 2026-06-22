@@ -6,21 +6,34 @@
 """
 from strategies import BaseStrategy, StrategySignal
 from core.types import MarketAnalysis
+from core.strategy_contract import StrategyMeta
 
 
 class MomentumStrategy(BaseStrategy):
-    name = "الزخم"
-    supported_timeframes = ["1m", "5m", "15m", "1h"]
+    meta = StrategyMeta(
+        name="الزخم",
+        version="1.0.0",
+        description="استراتيجية الزخم — تتداول الزخم الاتجاهي القوي مع تأكيد الحجم.",
+        min_confidence=65.0,
+        supported_timeframes=["1m", "5m", "15m", "1h"],
+        suitable_regimes=["TRENDING", "CHOPPY"],
+    )
 
     async def evaluate(self, analysis: MarketAnalysis) -> StrategySignal:
         signal = StrategySignal(
             symbol=analysis.symbol,
-            strategy_name=self.name,
+            strategy_name=self.meta.name,
             action="HOLD",
             confidence=0.0,
             score_breakdown={},
             reasoning="",
         )
+
+        # تحقق: هل نظام السوق مناسب؟
+        if not self.is_suitable_for_regime(analysis.regime):
+            signal.reasoning = f"نظام السوق {analysis.regime} غير مناسب لـ {self.meta.name}"
+            signal.confidence = 5.0
+            return signal
 
         # الزخم أقل من الحد الأدنى — لا نتداول
         if analysis.momentum < 60:

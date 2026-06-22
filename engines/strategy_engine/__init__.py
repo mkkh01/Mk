@@ -73,11 +73,20 @@ class StrategyEngine(BaseEngine):
                                     and attr is not BaseStrategy
                                     and attr_name.endswith("Strategy")):
                                 instance = attr()
+                                # تحقق من العقد قبل التشغيل
+                                valid, msg = instance.validate_contract()
+                                if not valid:
+                                    self.logger.error(
+                                        f"[الاستراتيجيات] ❌ {module_name} مرفوضة: {msg}"
+                                    )
+                                    continue
                                 self.strategies[module_name] = instance
                                 self._active_strategies.add(module_name)
                                 self.logger.info(
-                                    f"[الاستراتيجيات] ✓ تم تحميل: {instance.name} "
-                                    f"| الأطر: {instance.supported_timeframes}"
+                                    f"[الاستراتيجيات] ✓ تم تحميل: {instance.meta.name} v{instance.meta.version} "
+                                    f"| الأطر: {instance.meta.supported_timeframes} "
+                                    f"| min_confidence: {instance.meta.min_confidence}% "
+                                    f"| Regimes: {instance.meta.suitable_regimes}"
                                 )
                     except Exception as e:
                         self.logger.error(f"[الاستراتيجيات] فشل تحميل {module_name}: {e}")
@@ -124,7 +133,7 @@ class StrategyEngine(BaseEngine):
                 continue
 
             # تصفية حسب الإطار الزمني إذا كان محدداً
-            if timeframe is not None and timeframe not in strategy.supported_timeframes:
+            if timeframe is not None and timeframe not in strategy.meta.supported_timeframes:
                 continue
 
             try:
@@ -224,7 +233,7 @@ class StrategyEngine(BaseEngine):
         """قائمة الاستراتيجيات التي تدعم إطاراً زمنياً محدداً."""
         return [
             s for s in self.strategies.values()
-            if timeframe in s.supported_timeframes and s.name in self._active_strategies
+            if timeframe in s.meta.supported_timeframes and s.meta.name in self._active_strategies
         ]
 
     def enable_strategy(self, name: str):
