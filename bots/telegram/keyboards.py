@@ -8,10 +8,9 @@ def get_main_menu():
     keyboard = [
         [KeyboardButton("📈 الأسعار المباشرة")],
         [KeyboardButton("➕ إضافة عملة"), KeyboardButton("➖ حذف عملة")],
-        [KeyboardButton("⚙️ تعديل العملة"), KeyboardButton("💰 إدارة رأس المال")],
+        [KeyboardButton("⚙️ تعديل العملة")],
         [KeyboardButton("📊 الإحصائيات"), KeyboardButton("📋 سجل الصفقات")],
-        [KeyboardButton("🧠 تقرير الذكاء الاصطناعي"), KeyboardButton("🎯 تقرير الأداء")],
-        [KeyboardButton("📡 حالة النظام")],
+        [KeyboardButton("🧠 توصيات النظام"), KeyboardButton("📡 حالة النظام")],
         [KeyboardButton("⏸ إيقاف التداول"), KeyboardButton("▶️ تشغيل التداول")],
         [KeyboardButton("🛑 إيقاف الطوارئ")],
     ]

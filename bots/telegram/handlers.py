@@ -116,14 +116,12 @@ class Handlers:
             "📈 الأسعار المباشرة": self.cmd_live_prices,
             "➖ حذف عملة": self.cmd_delete_coin,
             "⚙️ تعديل العملة": self.cmd_edit_coin,
-            "💰 إدارة رأس المال": self.cmd_capital_mgmt,
             "📊 الإحصائيات": self.cmd_stats,
             "📋 سجل الصفقات": self.cmd_trade_history,
             "🛑 إيقاف الطوارئ": self.cmd_emergency_stop,
             "▶️ تشغيل التداول": self.cmd_start_trading,
             "⏸ إيقاف التداول": self.cmd_stop_trading,
-            "🧠 تقرير الذكاء الاصطناعي": self.cmd_ai_report,
-            "🎯 تقرير الأداء": self.cmd_performance,
+            "🧠 توصيات النظام": self.cmd_recommendations,
             "📡 حالة النظام": self.cmd_status,
         }
 
@@ -513,34 +511,50 @@ class Handlers:
                 logger.error(f"[أمر] خطأ في الأداء: {e}")
         await update.message.reply_text("📊 استخدم 📊 الإحصائيات للحصول على التفاصيل.")
 
-    async def cmd_ai_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[أمر] تقرير_الذكاء user={update.effective_user.id}")
+    async def cmd_recommendations(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """توصيات النظام — أداء الاستراتيجيات + توصيات التعلم."""
+        logger.info(f"[أمر] توصيات user={update.effective_user.id}")
+        user_id = str(update.effective_user.id)
+        msg_parts = ["🧠 *توصيات النظام*\n━━━━━━━━━━━━━━"]
+        has_data = False
+
+        # 1. أداء الاستراتيجيات من محرك التعلم
         if self.portfolio_service:
             try:
-                status = await self.portfolio_service.get_full_status(
-                    str(update.effective_user.id)
-                )
-                recs = status.get("recommendations", [])
+                status = await self.portfolio_service.get_full_status(user_id)
                 strat = status.get("strategy_performance", {})
-                msg = "🧠 *تقرير النظام*\n━━━━━━━━━━━━━━\n"
-                if recs:
-                    msg += "\n💡 *توصيات:*\n"
-                    for r in recs[:5]:
-                        msg += f"• {r}\n"
                 if strat:
-                    msg += "\n📊 *أداء الاستراتيجيات:*\n"
+                    has_data = True
+                    msg_parts.append("\n📊 *أداء الاستراتيجيات:*")
                     for name, perf in list(strat.items())[:5]:
-                        msg += (
-                            f"• {name}: {perf.get('win_rate', 0)}% WR "
-                            f"| {perf.get('total_trades', 0)} trades\n"
+                        msg_parts.append(
+                            f"• {name}: {perf.get('win_rate', 0):.0f}% فوز "
+                            f"| {perf.get('total_trades', 0)} صفقة"
                         )
-                if not recs and not strat:
-                    msg += "\nلا توجد بيانات كافية بعد."
-                await update.message.reply_text(msg, parse_mode="Markdown")
-                return
+
+                recs = status.get("recommendations", [])
+                if recs:
+                    has_data = True
+                    msg_parts.append("\n💡 *توصيات:*")
+                    for r in recs[:5]:
+                        msg_parts.append(f"• {r}")
+
+                # 2. ملخص الأداء (Performance)
+                try:
+                    perf = await self.portfolio_service.get_performance_report(user_id)
+                    if perf:
+                        has_data = True
+                        msg_parts.append(f"\n🎯 *ملخص الأداء:*\n{perf[:500]}")
+                except Exception:
+                    pass
+
             except Exception as e:
-                logger.error(f"[أمر] خطأ في تقرير_الذكاء: {e}", exc_info=True)
-        await update.message.reply_text("🧠 لا توجد بيانات تعلم كافية بعد.")
+                logger.error(f"[أمر] خطأ في التوصيات: {e}")
+
+        if not has_data:
+            msg_parts.append("\n⏳ لا توجد بيانات كافية بعد. انتظر تنفيذ بعض الصفقات.")
+
+        await update.message.reply_text("\n".join(msg_parts), parse_mode="Markdown")
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """تقرير حالة النظام — تقرير ديناميكي شامل."""
