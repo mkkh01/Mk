@@ -7,7 +7,11 @@ import logging
 import sys
 import os
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
+
+def _utcnow():
+    """تُرجع datetime.now(tz=timezone.utc) — متوافقة مع Python 3.9+ كبديل لـ utcnow()."""
+    return datetime.now(tz=timezone.utc)
 
 # ── سجلات منظمة ───────────────────────────────────────────
 logging.basicConfig(
@@ -60,47 +64,57 @@ from keep_alive import keep_alive
 # ═══════════════════════════════════════════════════════════════
 
 async def preflight_check_schema() -> tuple[bool, str]:
-    """التحقق من تطابق الـ schema بين الـ models وقاعدة البيانات."""
+    """التحقق من تطابق الـ schema باستخدام استعلامات SQL خالصة (متوافقة مع async)."""
     try:
-        from sqlalchemy import inspect, text
+        from sqlalchemy import text
         from database.repositories import _engine
 
         if _engine is None:
             return False, "محرك قاعدة البيانات غير مهيأ"
 
         async with _engine.connect() as conn:
-            inspector = inspect(_engine.sync_engine)
-
             # التحقق من وجود الجداول الأساسية
             required_tables = ["users", "coins", "trades", "positions",
                               "market_data", "market_state", "signals",
                               "risk_events", "portfolio_snapshots", "logs"]
-            existing_tables = await conn.run_sync(
-                lambda sync_conn: inspector.get_table_names()
-            )
 
             for table in required_tables:
-                if table not in existing_tables:
+                result = await conn.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                        "WHERE table_name = :tname)"
+                    ),
+                    {"tname": table},
+                )
+                exists = result.scalar()
+                if not exists:
                     return False, f"الجدول مفقود: {table}"
 
             # التحقق من الأعمدة المطلوبة في جدول coins
-            coins_columns = await conn.run_sync(
-                lambda sync_conn: [c["name"] for c in inspector.get_columns("coins")]
-            )
-
             required_coins_columns = [
                 "id", "user_id", "symbol", "capital_allocated",
                 "risk_per_trade", "timeframes", "is_active"
             ]
+            result = await conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'coins'"
+                )
+            )
+            coins_columns = {row[0] for row in result}
             for col in required_coins_columns:
                 if col not in coins_columns:
                     return False, f"العمود مفقود في جدول coins: {col}"
 
             # التحقق من الأعمدة المطلوبة في جدول users
-            users_columns = await conn.run_sync(
-                lambda sync_conn: [c["name"] for c in inspector.get_columns("users")]
-            )
             required_users_columns = ["id", "telegram_id", "total_capital", "is_active"]
+            result = await conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'users'"
+                )
+            )
+            users_columns = {row[0] for row in result}
             for col in required_users_columns:
                 if col not in users_columns:
                     return False, f"العمود مفقود في جدول users: {col}"
@@ -161,7 +175,7 @@ def set_system_status(status: str):
 
 
 def record_error(component: str, error: str):
-    _system_state["errors"].append({"component": component, "error": error, "time": datetime.utcnow().isoformat()})
+    _system_state["errors"].append({"component": component, "error": error, "time": _utcnow().isoformat()})
     logger.error(f"[النظام] ❌ {component}: {error}")
 
 
@@ -191,7 +205,7 @@ def log_banner():
 
 async def main():
     log_banner()
-    _system_state["started_at"] = datetime.utcnow()
+    _system_state["started_at"] = _utcnow()
     logger.info("═" * 50)
     logger.info("[النظام] بدء تشغيل CT V4.0")
     logger.info("═" * 50)
@@ -384,11 +398,11 @@ async def main():
         """حلقة تداول دورية — تعالج كل العملات بكل أطرها الزمنية."""
         from database.repositories import CoinRepository, get_session
         cycle = 0
-        last_sync = datetime.utcnow()
+        last_sync = _utcnow()
 
         while True:
             cycle += 1
-            cycle_start = datetime.utcnow()
+            cycle_start = _utcnow()
             logger.info(f"[الدورة #{cycle}] ═══ بدء معالجة ═══")
 
             try:
@@ -446,12 +460,12 @@ async def main():
 
                             await asyncio.sleep(1)
 
-                last_sync = datetime.utcnow()
+                last_sync = _utcnow()
 
             except Exception as e:
                 logger.error(f"[الدورة #{cycle}] ❌ خطأ: {e}", exc_info=True)
 
-            cycle_duration = (datetime.utcnow() - cycle_start).total_seconds()
+            cycle_duration = (_utcnow() - cycle_start).total_seconds()
             logger.info(
                 f"[الدورة #{cycle}] ✅ اكتملت | "
                 f"المدة: {cycle_duration:.1f}ث | "
