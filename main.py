@@ -64,7 +64,19 @@ from keep_alive import keep_alive
 # ═══════════════════════════════════════════════════════════════
 
 class TradingState:
-    """حالة النظام المركزية — مصدر وحيد للحقيقة. كل المتغيرات مهيأة مسبقاً."""
+    """حالة النظام المركزية — مصدر وحيد للحقيقة. كل المتغيرات مهيأة مسبقاً.
+
+    آلة الحالات (State Machine):
+        INIT ──▶ CONNECTING_WS ──▶ LOADING_HISTORY ──▶ WARMING_UP ──▶ RUNNING
+
+    الانتقالات المسموحة:
+        INIT           → CONNECTING_WS  (بدء تهيئة المحركات)
+        CONNECTING_WS  → LOADING_HISTORY (بعد تهيئة المحركات — تحميل تاريخي)
+        LOADING_HISTORY → WARMING_UP     (بعد اكتمال/فشل التسخين — بناء مخازن)
+        WARMING_UP     → RUNNING         (WebSocket متصل + ticks كافية)
+
+    لا توجد مراحل طرفية (Dead Ends). كل مرحلة لها مخرج.
+    """
 
     INIT = "INIT"
     CONNECTING_WS = "CONNECTING_WS"
@@ -73,10 +85,22 @@ class TradingState:
     RUNNING = "RUNNING"
     ERROR = "ERROR"
 
+    # الانتقالات المسموحة (Allowed Transitions)
+    _VALID_TRANSITIONS: dict[str, set[str]] = {
+        "INIT": {"CONNECTING_WS", "ERROR"},
+        "CONNECTING_WS": {"LOADING_HISTORY", "WARMING_UP", "ERROR"},
+        "LOADING_HISTORY": {"WARMING_UP", "ERROR"},
+        "WARMING_UP": {"RUNNING", "ERROR"},
+        "RUNNING": {"ERROR"},
+        "ERROR": {"WARMING_UP"},  # استرداد من الخطأ
+    }
+
     def __init__(self):
         self.phase: str = self.INIT
+        self.phase_set_at: float = _utcnow().timestamp()
         self.started_at = _utcnow()
         self.errors: list = []
+        self._transition_count: int = 0
 
         # التداول — مهيأة دائماً
         self.open_positions: list = []
@@ -96,9 +120,36 @@ class TradingState:
         self.MIN_CANDLES = 50
         self.MIN_WS_TICKS = 20
 
+        # ضمان عدم بقاء الحالة عالقة
+        self._phase_stuck_warned: set = set()
+        self.MAX_CYCLES_IN_PHASE: dict[str, int] = {
+            "INIT": 0,              # لا دورات — قبل الحلقة
+            "CONNECTING_WS": 0,      # لا دورات — قبل الحلقة
+            "LOADING_HISTORY": 10,   # 10 دورات كحد أقصى (~110 ثانية)
+            "WARMING_UP": 300,       # 300 دورة (~50 دقيقة)
+            "RUNNING": 0,            # غير محدود
+        }
+
     def transition(self, new_phase: str) -> None:
+        """تنفيذ انتقال آلة الحالات مع التحقق من الصلاحية."""
         old = self.phase
+        now = _utcnow()
+        now_ts = now.timestamp()
+        duration = now_ts - self.phase_set_at
+
+        # 🛡️ تحقق: هل الانتقال مسموح؟
+        allowed = self._VALID_TRANSITIONS.get(old, set())
+        if new_phase not in allowed and old != new_phase:
+            logger.critical(
+                f"[آلة_الحالات] ❌ انتقال غير مسموح: {old} → {new_phase} | "
+                f"المسموح من {old}: {sorted(allowed) | '—'}"
+            )
+            return  # منع الانتقال غير القانوني
+
         self.phase = new_phase
+        self.phase_set_at = now_ts
+        self._transition_count += 1
+
         labels = {
             self.INIT: "🟡 بدء التشغيل",
             self.CONNECTING_WS: "🔌 الاتصال بـ WebSocket",
@@ -108,8 +159,16 @@ class TradingState:
             self.ERROR: "🔴 خطأ",
         }
         logger.info("═" * 50)
-        logger.info(f"[حالة] {old} → {new_phase}")
-        logger.info(f"[حالة] {labels.get(new_phase, new_phase)}")
+        logger.info(
+            f"[آلة_الحالات] انتقال #{self._transition_count}: {old} → {new_phase}"
+        )
+        logger.info(
+            f"[آلة_الحالات] السبب: {labels.get(new_phase, new_phase)} | "
+            f"المدة في {old}: {duration:.1f}ث"
+        )
+        logger.info(
+            f"[آلة_الحالات] الحالة الآن: {labels.get(new_phase, new_phase)}"
+        )
         logger.info("═" * 50)
 
     @property
@@ -127,6 +186,18 @@ class TradingState:
         if self.phase == self.RUNNING:
             return "صحيحة"
         return self.phase
+
+    def check_stuck(self, cycle: int) -> None:
+        """تحقق من عدم بقاء الحالة عالقة أكثر من الحد المسموح."""
+        max_cycles = self.MAX_CYCLES_IN_PHASE.get(self.phase, 0)
+        if max_cycles > 0 and cycle > max_cycles and self.phase not in self._phase_stuck_warned:
+            self._phase_stuck_warned.add(self.phase)
+            duration = _utcnow().timestamp() - self.phase_set_at
+            logger.error(
+                f"[آلة_الحالات] ⚠️ حالة عالقة: {self.phase} لمدة {cycle} دورة "
+                f"({duration:.0f}ث) — الحد الأقصى: {max_cycles} دورة | "
+                f"الانتقالات المسموحة: {sorted(self._VALID_TRANSITIONS.get(self.phase, set()))}"
+            )
 
     def add_error(self, component: str, error: str) -> None:
         self.errors.append({"component": component, "error": error, "time": _utcnow().isoformat()})
@@ -441,6 +512,10 @@ async def main():
     else:
         logger.warning("[النظام] ⚠️ لا عملات للتسخين")
 
+    # ══ انتقال: LOADING_HISTORY → WARMING_UP ══
+    # (حتى لو فشل التسخين REST — نعتمد على WebSocket لبناء الشموع)
+    state.transition(TradingState.WARMING_UP)
+
     # ── 10. بوت تيليجرام + حلقة التداول ────────────────────
     set_system_status("بدء_البوت")
     telegram_engine = TelegramEngine(
@@ -469,17 +544,17 @@ async def main():
             state.reset_cycle()
 
             try:
-                # ── تتبع اتصال WS ──
+                # ── آلة الحالات: إدارة الانتقالات ──
                 ws_alive = getattr(market_data_engine, '_ws', None) is not None
-                if ws_alive and state.phase == TradingState.CONNECTING_WS:
-                    state.ws_connected = True
-                    state.ws_connected_at = _utcnow().timestamp()
-                    state.transition(TradingState.WARMING_UP)
-
-                # تحديث عداد ticks
                 state.ws_tick_count = getattr(market_data_engine, '_kline_count', 0)
 
-                # الانتقال من WARMING_UP إلى RUNNING
+                # تحديث حالة WebSocket
+                if ws_alive and not state.ws_connected:
+                    state.ws_connected = True
+                    state.ws_connected_at = _utcnow().timestamp()
+                    logger.info(f"[آلة_الحالات] 🔌 WebSocket متصل — ticks={state.ws_tick_count}")
+
+                # الانتقال: WARMING_UP → RUNNING
                 if state.phase == TradingState.WARMING_UP:
                     if state.ws_connected and state.ws_tick_count >= state.MIN_WS_TICKS:
                         state.transition(TradingState.RUNNING)
@@ -488,6 +563,26 @@ async def main():
                             f"[تسخين] 🔥 WS ticks={state.ws_tick_count}/{state.MIN_WS_TICKS} — "
                             f"انتظار بيانات حية..."
                         )
+
+                # 🛡️ شبكة أمان: إذا وصلنا للحلقة في LOADING_HISTORY (لا يجب أن يحدث)
+                elif state.phase == TradingState.LOADING_HISTORY:
+                    logger.warning(
+                        f"[آلة_الحالات] ⚠️ مرحلة غير متوقعة: LOADING_HISTORY في الحلقة — "
+                        f"الانتقال الاضطراري إلى WARMING_UP"
+                    )
+                    state.transition(TradingState.WARMING_UP)
+
+                # 🛡️ شبكة أمان: مرحلة CONNECTING_WS في الحلقة (لا يجب أن يحدث)
+                elif state.phase == TradingState.CONNECTING_WS:
+                    if ws_alive:
+                        logger.info(
+                            f"[آلة_الحالات] ⚠️ CONNECTING_WS في الحلقة مع WS متصل — "
+                            f"الانتقال الاضطراري إلى WARMING_UP"
+                        )
+                        state.transition(TradingState.WARMING_UP)
+
+                # 🛡️ كشف الحالة العالقة
+                state.check_stuck(cycle)
 
                 # ── المرحلة 1: فحص السماح بالتداول ──
                 trading_allowed = (
