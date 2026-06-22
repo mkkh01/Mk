@@ -149,10 +149,11 @@ class TelegramEngine:
         logger.info("[بوت] انتظار 8 ثوانٍ لتجنب تضارب النشر...")
         await asyncio.sleep(8)
 
-        for attempt in range(1, 6):  # لحد 5 محاولات
+        attempt = 0
+        while True:  # حلقة لانهائية — نستمر بالمحاولة حتى ننجح
+            attempt += 1
             try:
-                logger.info(f"[بوت] بدء استطلاع البوت (محاولة {attempt}/5)...")
-                # run_polling تدير حلقة الاستطلاع وإعادة المحاولة داخلياً
+                logger.info(f"[بوت] بدء استطلاع البوت (محاولة {attempt})...")
                 await self.application.run_polling(
                     drop_pending_updates=True,
                     allowed_updates=["message", "callback_query"],
@@ -163,13 +164,12 @@ class TelegramEngine:
             except Exception as e:
                 err_msg = str(e)
                 if "Conflict" in err_msg:
-                    wait = min(10 * attempt, 60)  # 10, 20, 30, 40, 50 ثانية
+                    wait = min(10 * attempt, 120)  # 10, 20, 30, ... لحد 120
                     logger.warning(
-                        f"[بوت] ⚠️ تضارب استطلاع (محاولة {attempt}/5) — "
-                        f"انتظار {wait}ث..."
+                        f"[بوت] ⚠️ تضارب استطلاع (محاولة {attempt}) — "
+                        f"انتظار {wait}ث... (النظام مستمر في التداول)"
                     )
                     await asyncio.sleep(wait)
-                    # إعادة بناء التطبيق بالكامل
                     try:
                         await self.application.stop()
                     except Exception:
@@ -183,8 +183,6 @@ class TelegramEngine:
                 else:
                     logger.critical(f"[بوت] ❌ فشل: {e}", exc_info=True)
                     raise
-
-        logger.critical("[بوت] ❌ فشل بعد 5 محاولات — التضارب مستمر")
 
     async def stop(self):
         """Stop bot gracefully."""
