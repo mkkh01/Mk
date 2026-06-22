@@ -32,7 +32,11 @@ _load_dotenv()
 
 
 def get_env(key: str, default: str = "") -> str:
-    return os.environ.get(key, default)
+    """Get env var. Values are stripped to remove hidden whitespace."""
+    val = os.environ.get(key)
+    if val is not None:
+        return val.strip()
+    return default.strip() if default else ""
 
 
 def get_env_int(key: str, default: int = 0) -> int:

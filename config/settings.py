@@ -20,15 +20,16 @@ _DEFAULT_PORT = 8080
 
 @dataclass
 class DatabaseSettings:
-    """Database connection settings."""
+    """Database connection settings. Uses hardcoded URL directly (no env override)
+    to match old config.py behavior and avoid Render auto-injected DATABASE_URL."""
     raw_url: str = ""
     url: str = ""
 
-    @classmethod
-    def from_config(cls, default_url: str) -> "DatabaseSettings":
-        raw = get_env("DATABASE_URL", default_url)
-        url = raw.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return cls(raw_url=raw, url=url)
+    def __init__(self, hardcoded_url: str = ""):
+        self.raw_url = hardcoded_url
+        # Exact same conversion as old config.py:
+        # DATABASE_URL = RAW_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+        self.url = hardcoded_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
 @dataclass
@@ -49,7 +50,7 @@ class Settings:
         return cls(
             telegram_token=get_env("TELEGRAM_TOKEN", _DEFAULT_TELEGRAM_TOKEN),
             admin_id=get_env_int("ADMIN_ID", _DEFAULT_ADMIN_ID),
-            database=DatabaseSettings.from_config(_DEFAULT_DATABASE_URL),
+            database=DatabaseSettings(hardcoded_url=_DEFAULT_DATABASE_URL),
             binance_ws_url=get_env("BINANCE_WS_URL", _DEFAULT_BINANCE_WS),
             default_capital=get_env_float("DEFAULT_CAPITAL", _DEFAULT_CAPITAL),
             trade_fee=get_env_float("TRADE_FEE", _DEFAULT_TRADE_FEE),
