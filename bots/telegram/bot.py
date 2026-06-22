@@ -154,35 +154,53 @@ class TelegramEngine:
             attempt += 1
             try:
                 logger.info(f"[بوت] بدء استطلاع البوت (محاولة {attempt})...")
-                await self.application.run_polling(
+                # start_polling مناسبة للسياق غير المتزامن (عكس run_polling)
+                await self.application.initialize()
+                await self.application.start()
+                await self.application.updater.start_polling(
                     drop_pending_updates=True,
                     allowed_updates=["message", "callback_query"],
                     poll_interval=2.0,
                 )
-                return  # نجاح — run_polling رجعت (إيقاف طبيعي)
+                logger.info("[بوت] ✅ استطلاع البوت بدأ. في انتظار الرسائل.")
+
+                # البقاء حياً — لو حصل Conflict داخلي، Updater يعيد المحاولة تلقائياً
+                while True:
+                    await asyncio.sleep(60)
 
             except Exception as e:
                 err_msg = str(e)
                 if "Conflict" in err_msg:
-                    wait = min(10 * attempt, 120)  # 10, 20, 30, ... لحد 120
+                    wait = min(10 * attempt, 120)
                     logger.warning(
                         f"[بوت] ⚠️ تضارب استطلاع (محاولة {attempt}) — "
                         f"انتظار {wait}ث... (النظام مستمر في التداول)"
                     )
-                    await asyncio.sleep(wait)
-                    try:
-                        await self.application.stop()
-                    except Exception:
-                        pass
-                    try:
-                        await self.application.shutdown()
-                    except Exception:
-                        pass
-                    await self.initialize()
-                    continue
+                elif "already running" in err_msg or "Cannot close" in err_msg:
+                    wait = min(10 * attempt, 120)
+                    logger.warning(
+                        f"[بوت] ⚠️ تضارب event loop (محاولة {attempt}) — "
+                        f"انتظار {wait}ث..."
+                    )
                 else:
                     logger.critical(f"[بوت] ❌ فشل: {e}", exc_info=True)
                     raise
+
+                try:
+                    await self.application.updater.stop()
+                except Exception:
+                    pass
+                try:
+                    await self.application.stop()
+                except Exception:
+                    pass
+                try:
+                    await self.application.shutdown()
+                except Exception:
+                    pass
+                await asyncio.sleep(wait)
+                await self.initialize()
+                continue
 
     async def stop(self):
         """Stop bot gracefully."""
