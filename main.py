@@ -766,11 +766,17 @@ async def main():
                     continue
 
                 # ── المرحلة 2: جمع البيانات ──
-                async for session in get_session():
-                    state.coins = await CoinRepository.get_all_active(session, telegram_id)
+                # تقليل DB reads: عملات تتحدّث كل 10 دورات (~2 دقيقة)
+                if cycle == 1 or cycle % 10 == 0 or not state.coins:
+                    async for session in get_session():
+                        state.coins = await CoinRepository.get_all_active(session, telegram_id)
+                else:
+                    async for session in get_session():
+                        pass  # جلسة فارغة — نحافظ على الاتصال بدون استعلامات ثقيلة
 
-                    # مراقبة المراكز — فقط في RUNNING
-                    if state.trading_allowed:
+                # مراقبة المراكز — فقط في TRADING_ACTIVE
+                if state.trading_allowed and cycle % 5 == 0:
+                    async for session in get_session():
                         state.open_positions = await PositionRepository.get_open(session, telegram_id)
 
                     for pos in state.open_positions:

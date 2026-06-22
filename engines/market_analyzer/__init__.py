@@ -235,7 +235,7 @@ class MarketAnalyzer(BaseEngine):
                 await asyncio.sleep(ANALYSIS_INTERVAL_SEC)
             except Exception as e:
                 self.logger.error(f"[محلل السوق] ❌ خطأ في حلقة التحليل: {e}", exc_info=True)
-                await asyncio.sleep(5)
+                await asyncio.sleep(60)
 
     # ═══════════════════════════════════════════════════════════
     # التحليل — لكل إطار زمني بشكل مستقل
@@ -610,4 +610,4 @@ class MarketAnalyzer(BaseEngine):
                 latency_ms=0,
                 error_rate=0,
             ))
-            await asyncio.sleep(5)
+            await asyncio.sleep(60)

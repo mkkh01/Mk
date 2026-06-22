@@ -33,7 +33,7 @@ DRAWDOWN_REDUCE_2: float = 0.10   # 10% → خفض التردد للنصف
 DRAWDOWN_STOP: float = 0.15       # 15% → إيقاف الصفقات الخطرة
 
 # ── الفواصل الزمنية ────────────────────────────────────────
-HEARTBEAT_INTERVAL_SEC: int = 60  # فحص الصحة كل دقيقة بدل 5 ثواني (تقليل CPU)
+HEARTBEAT_INTERVAL_SEC: int = 300  # فحص الصحة كل 5 دقائق (تقليل DB egress)
 ANALYSIS_INTERVAL_SEC: int = 120    # دقيقتان بين التحليلات
 RECONNECT_DELAY_SEC: int = 5
 HTF_CACHE_DURATION_SEC: int = 1800  # 30 دقيقة

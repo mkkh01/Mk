@@ -121,7 +121,7 @@ class MarketDataEngine(BaseEngine):
 
         if not self._symbols:
             self.logger.debug("[بيانات السوق] لا توجد عملات للمتابعة، انتظار...")
-            await asyncio.sleep(5)
+            await asyncio.sleep(60)
             return
 
         streams = []
@@ -362,4 +362,4 @@ class MarketDataEngine(BaseEngine):
                 error_rate=self._error_count / max(1, self._error_count + 100),
             ))
             self._save_cache()
-            await asyncio.sleep(5)
+            await asyncio.sleep(60)
