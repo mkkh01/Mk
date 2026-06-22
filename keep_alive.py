@@ -1,20 +1,26 @@
-# keep_alive.py
+# keep_alive.py — Flask server to keep Render free tier alive
 from flask import Flask
 from threading import Thread
 import os
 
 app = Flask(__name__)
 
-@app.route('/')
+
+@app.route("/")
 def home():
-    return "🤖 AI Crypto Bot is Alive and Running!"
+    return "🤖 CT V4.0 — Professional AI Spot Trading Platform | Running"
+
+
+@app.route("/health")
+def health():
+    return {"status": "ok", "version": "4.0"}
+
 
 def run():
-    # Render يعطينا المنفذ عبر متغير البيئة PORT، وإلا نستخدم 8080
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
+
 
 def keep_alive():
-    """تشغيل الخادم في مسار (Thread) منفصل لكي لا يعطل البوت"""
-    t = Thread(target=run)
+    t = Thread(target=run, daemon=True)
     t.start()
