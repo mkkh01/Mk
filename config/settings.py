@@ -8,7 +8,7 @@ from typing import Optional
 from .env_loader import get_env, get_env_int, get_env_float
 
 # ── Hardcoded defaults (identical to old config.py) ─────────
-_DEFAULT_TELEGRAM_TOKEN = "8913262863:AAFgwkszxhOLpE4IX874HrOKUb1FZUZwYSo"
+_DEFAULT_TELEGRAM_TOKEN = "8896511361:AAEkgrgpgGZ-uIW_EzbQ3294os_E4ZrcEJ8"
 _DEFAULT_DATABASE_URL = "postgresql://postgres.lvvcbqqtjygqlxyhiabm:C,TWTpTrK+7#mp.@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
 _DEFAULT_ADMIN_ID = 1503808643
 _DEFAULT_BINANCE_WS = "wss://stream.binance.com:9443"
