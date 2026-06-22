@@ -69,6 +69,12 @@ _MIGRATIONS = {
         "timeframes": ("JSON", "'[]'::json"),
         "min_entry_size": ("FLOAT", "0.0"),
     },
+    "positions": {
+        "side": ("VARCHAR(10)", "'BUY'"),
+        "exit_price": ("FLOAT", None),
+        "close_reason": ("VARCHAR(50)", None),
+        "closed_at": ("TIMESTAMP", None),
+    },
 }
 
 
@@ -100,7 +106,10 @@ async def auto_migrate() -> tuple[bool, list[str]]:
 
                 for col_name, (col_type, default_val) in columns.items():
                     if col_name not in existing:
-                        sql = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {col_type} DEFAULT {default_val}"
+                        if default_val is not None:
+                            sql = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {col_type} DEFAULT {default_val}"
+                        else:
+                            sql = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {col_type}"
                         logger.info(f"[هجرة] إضافة عمود: {table}.{col_name} ({col_type})")
                         await conn.execute(text(sql))
                         added.append(f"{table}.{col_name}")
@@ -459,8 +468,16 @@ async def main():
     # ── حلقة التداول ───────────────────────────────────────
     async def trading_loop():
         """حلقة تداول دورية — تعالج كل العملات بكل أطرها الزمنية."""
-        from database.repositories import CoinRepository, get_session
+        from database.repositories import CoinRepository, TradeRepository, PositionRepository, get_session
         cycle = 0
+
+        async def notify_tg(text: str):
+            """إرسال إشعار للمستخدم عبر تيليجرام."""
+            try:
+                if telegram_engine and telegram_engine.application:
+                    await telegram_engine.send_message(telegram_id, text)
+            except Exception as e:
+                logger.debug(f"[إشعار] فشل الإرسال: {e}")
 
         while True:
             cycle += 1
@@ -483,8 +500,57 @@ async def main():
                 async for session in get_session():
                     coins = await CoinRepository.get_all_active(session, telegram_id)
 
+                    # ── مراقبة المراكز المفتوحة (TP/SL) ──
+                    open_positions = await PositionRepository.get_open(session, telegram_id)
+                    for pos in open_positions:
+                        try:
+                            analysis = await market_analyzer.analyze(pos.symbol, "1m")
+                            if not analysis:
+                                continue
+                            current_price = analysis.get("close", analysis.get("price", 0))
+                            if current_price <= 0:
+                                continue
+
+                            # فحص TP/SL
+                            if pos.side == "BUY" or pos.side == "LONG":
+                                hit_tp = pos.take_profit and current_price >= pos.take_profit
+                                hit_sl = pos.stop_loss and current_price <= pos.stop_loss
+                            else:  # SELL / SHORT
+                                hit_tp = pos.take_profit and current_price <= pos.take_profit
+                                hit_sl = pos.stop_loss and current_price >= pos.stop_loss
+
+                            if hit_tp or hit_sl:
+                                pnl = (current_price - pos.entry_price) / pos.entry_price * 100
+                                if pos.side in ("SELL", "SHORT"):
+                                    pnl = -pnl
+                                reason = "🎯 هدف" if hit_tp else "🛑 وقف خسارة"
+                                emoji = "🟢" if pnl > 0 else "🔴"
+
+                                await PositionRepository.close_position(
+                                    session, pos, exit_price=current_price, reason=reason
+                                )
+
+                                msg = (
+                                    f"{emoji} {reason}\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"💰 {pos.symbol}\n"
+                                    f"📊 السعر: {current_price:.6f}\n"
+                                    f"📈 الدخول: {pos.entry_price:.6f}\n"
+                                    f"💵 الربح/الخسارة: {pnl:+.2f}%\n"
+                                    f"📦 الكمية: {pos.quantity:.4f}\n"
+                                )
+                                logger.info(
+                                    f"[مركز] {pos.symbol} | {reason} | "
+                                    f"سعر={current_price:.6f} | PnL={pnl:+.2f}%"
+                                )
+                                await notify_tg(msg)
+                        except Exception as e:
+                            logger.debug(f"[مركز] {pos.symbol} خطأ فحص TP/SL: {e}")
+
                     if not coins:
-                        logger.info(f"[دورة #{cycle}] لا عملات نشطة — انتظار")
+                        if cycle % 10 == 0:  # كل 10 دورات فقط
+                            logger.info(f"[دورة #{cycle}] لا عملات نشطة — انتظار")
+                        await asyncio.sleep(1)
                         break
 
                     # ── فحص الأسعار ──
@@ -526,6 +592,24 @@ async def main():
                                         f"كمية: {execution.executed_quantity:.6f} | "
                                         f"سعر: {execution.executed_price:.6f}"
                                     )
+                                    # ── إشعار فوري بفتح الصفقة ──
+                                    tp = getattr(execution, 'take_profit', None)
+                                    sl = getattr(execution, 'stop_loss', None)
+                                    tp_str = f"{tp:.6f}" if tp else "—"
+                                    sl_str = f"{sl:.6f}" if sl else "—"
+                                    order_msg = (
+                                        f"🔔 **صفقة جديدة**\n"
+                                        f"━━━━━━━━━━━━━━\n"
+                                        f"💰 {coin.symbol}\n"
+                                        f"📊 {evidence.decision}\n"
+                                        f"💵 السعر: {execution.executed_price:.6f}\n"
+                                        f"📦 الكمية: {execution.executed_quantity:.4f}\n"
+                                        f"🎯 هدف: {tp_str}\n"
+                                        f"🛑 وقف: {sl_str}\n"
+                                        f"✅ ثقة: {evidence.final_score:.0f}%\n"
+                                        f"🧠 السبب: {evidence.reasoning[:100]}\n"
+                                    )
+                                    await notify_tg(order_msg)
                                 else:
                                     logger.info(
                                         f"[إشارة #{signals_found}] {coin.symbol} | "

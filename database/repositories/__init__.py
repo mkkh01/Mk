@@ -467,11 +467,22 @@ class PositionRepository:
         return result.scalars().first()
 
     @staticmethod
-    async def close_position(session: AsyncSession, position: Position):
-        """إغلاق مركز."""
+    async def close_position(session: AsyncSession, position: Position,
+                             exit_price: float = None, reason: str = None):
+        """إغلاق مركز مع سعر الخروج والسبب."""
+        from datetime import timezone
         position.status = "CLOSED"
+        position.closed_at = datetime.now(tz=timezone.utc)
+        if exit_price:
+            position.exit_price = exit_price
+        if reason:
+            position.close_reason = reason
         await session.commit()
-        logger.info(f"[مراكز] تم الإغلاق: {position.symbol}")
+        pnl_str = ""
+        if exit_price and position.entry_price:
+            pnl_pct = (exit_price - position.entry_price) / position.entry_price * 100
+            pnl_str = f" | PnL={pnl_pct:+.2f}%"
+        logger.info(f"[مراكز] تم الإغلاق: {position.symbol} السبب={reason}{pnl_str}")
 
     @staticmethod
     async def create(session: AsyncSession, identifier, symbol: str,

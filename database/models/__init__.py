@@ -195,14 +195,18 @@ class Position(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    side: Mapped[str] = mapped_column(String(10), default="BUY")  # BUY / SELL
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_price: Mapped[Optional[float]] = mapped_column(Float)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     stop_loss: Mapped[Optional[float]] = mapped_column(Float)
     take_profit: Mapped[Optional[float]] = mapped_column(Float)
     trailing_stop: Mapped[Optional[float]] = mapped_column(Float)
     risk_exposure: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(20), default="OPEN")
+    close_reason: Mapped[Optional[str]] = mapped_column(String(50))
     opened_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     user: Mapped["User"] = relationship(back_populates="positions")
 
