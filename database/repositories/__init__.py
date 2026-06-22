@@ -109,15 +109,14 @@ class UserRepository:
         تُرجع: str — UUID من users.id
         """
         tid = str(telegram_id)
-        logger.info(f"[مصادقة] جاري تحويل telegram_id={tid} إلى UUID")
 
         # ١. التحقق من الذاكرة المؤقتة
         cached = UserRepository._cache_get(tid)
         if cached:
-            logger.info(f"[مصادقة] موجود في الذاكرة المؤقتة: telegram_id={tid} → uuid={cached[:8]}...")
             return cached
 
         # ٢. الاستعلام من قاعدة البيانات
+        logger.info(f"[مصادقة] تحويل telegram_id={tid} → UUID")
         result = await session.execute(
             select(User).where(User.telegram_id == tid)
         )
@@ -125,7 +124,7 @@ class UserRepository:
 
         if user:
             UserRepository._cache_set(tid, user.id)
-            logger.info(f"[مصادقة] المستخدم موجود: telegram_id={tid} → uuid={user.id[:8]}...")
+            logger.info(f"[مصادقة] المستخدم موجود: uuid={user.id[:8]}...")
             return user.id
 
         # ٣. إنشاء مستخدم جديد
@@ -245,9 +244,9 @@ class CoinRepository:
         )
         timeframes = result.scalars().first()
         if timeframes is None:
-            logger.info(f"[عملات] لم يتم العثور على عملة نشطة: {symbol}")
+            logger.debug(f"[عملات] لم يتم العثور على عملة نشطة: {symbol}")
             return []
-        logger.info(f"[عملات] الأطر الزمنية النشطة لـ {symbol}: {timeframes}")
+        logger.debug(f"[عملات] الأطر الزمنية النشطة لـ {symbol}: {timeframes}")
         return timeframes
 
     @staticmethod

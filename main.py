@@ -461,12 +461,10 @@ async def main():
         """حلقة تداول دورية — تعالج كل العملات بكل أطرها الزمنية."""
         from database.repositories import CoinRepository, get_session
         cycle = 0
-        last_sync = _utcnow()
 
         while True:
             cycle += 1
             cycle_start = _utcnow()
-            logger.info(f"[الدورة #{cycle}] ═══ بدء معالجة ═══")
 
             try:
                 trading_allowed = (
@@ -476,64 +474,82 @@ async def main():
 
                 if not trading_allowed:
                     logger.warning(
-                        f"[الدورة #{cycle}] ⛔ التداول معلق "
+                        f"[دورة #{cycle}] ⛔ التداول معلق "
                         f"(الصحة: {health_monitor.system_state})"
                     )
-                else:
-                    async for session in get_session():
-                        coins = await CoinRepository.get_all_active(session, telegram_id)
-                        logger.info(f"[الدورة #{cycle}] معالجة {len(coins)} عملة...")
+                    await asyncio.sleep(30)
+                    continue
 
-                        for coin in coins:
-                            tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
+                async for session in get_session():
+                    coins = await CoinRepository.get_all_active(session, telegram_id)
 
-                            # لكل إطار زمني: تحليل
-                            for tf in tfs:
-                                try:
-                                    analysis = await market_analyzer.analyze(coin.symbol, tf)
-                                    if analysis:
-                                        await strategy_engine.run_strategies(coin.symbol, tf, analysis)
-                                except Exception as e:
-                                    logger.error(
-                                        f"[{coin.symbol}] [{tf}] ❌ خطأ في التحليل: {e}"
-                                    )
+                    if not coins:
+                        logger.info(f"[دورة #{cycle}] لا عملات نشطة — انتظار")
+                        break
 
-                            # تجميع الإشارات من كل الأطر → قرار تداول
+                    # ── فحص الأسعار ──
+                    price_lines = []
+                    signals_found = 0
+
+                    for coin in coins:
+                        tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
+
+                        # جمع السعر الحالي لكل إطار
+                        coin_prices = {}
+                        for tf in tfs:
                             try:
-                                result = await trading_service.process_symbol(
-                                    coin.symbol, telegram_id
-                                )
-                                if result:
-                                    evidence, risk_decision, execution = result
-                                    if execution:
-                                        logger.info(
-                                            f"[{coin.symbol}] ✅ صفقة منفذة | "
-                                            f"القرار: {evidence.decision} | "
-                                            f"الثقة: {evidence.final_score:.0f}% | "
-                                            f"الكمية: {execution.executed_quantity:.6f}"
-                                        )
-                                    else:
-                                        logger.info(
-                                            f"[{coin.symbol}] ⛔ صفقة مرفوضة | "
-                                            f"القرار: {evidence.decision} | "
-                                            f"السبب: {evidence.reasoning[:80]}"
-                                        )
+                                analysis = await market_analyzer.analyze(coin.symbol, tf)
+                                if analysis:
+                                    price = analysis.get("close", analysis.get("price", 0))
+                                    coin_prices[tf] = price
+                                    await strategy_engine.run_strategies(coin.symbol, tf, analysis)
                             except Exception as e:
-                                logger.error(f"[{coin.symbol}] ❌ خطأ في التداول: {e}")
+                                logger.debug(f"[{coin.symbol}] [{tf}] خطأ تحليل: {e}")
 
-                            await asyncio.sleep(1)
+                        # سطر سعر واحد لكل عملة
+                        if coin_prices:
+                            price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
+                            price_lines.append(f"  {coin.symbol:<10} {price_str}")
 
-                last_sync = _utcnow()
+                        # فحص إشارات التداول
+                        try:
+                            result = await trading_service.process_symbol(
+                                coin.symbol, telegram_id
+                            )
+                            if result:
+                                evidence, risk_decision, execution = result
+                                signals_found += 1
+                                if execution:
+                                    logger.info(
+                                        f"[صفقة #{signals_found}] {coin.symbol} | "
+                                        f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                        f"كمية: {execution.executed_quantity:.6f} | "
+                                        f"سعر: {execution.executed_price:.6f}"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[إشارة #{signals_found}] {coin.symbol} | "
+                                        f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                        f"مرفوضة: {evidence.reasoning[:60]}"
+                                    )
+                        except Exception as e:
+                            logger.debug(f"[{coin.symbol}] خطأ تداول: {e}")
+
+                        await asyncio.sleep(0.5)
+
+                    # ── تقرير الدورة ──
+                    duration = (_utcnow() - cycle_start).total_seconds()
+                    summary = (
+                        f"[دورة #{cycle}] {len(coins)} عملة | "
+                        f"إشارات: {signals_found} | "
+                        f"{duration:.1f}ث"
+                    )
+                    logger.info(summary)
+                    if price_lines:
+                        logger.info(f"[أسعار #{cycle}]\n" + "\n".join(price_lines))
 
             except Exception as e:
-                logger.error(f"[الدورة #{cycle}] ❌ خطأ: {e}", exc_info=True)
-
-            cycle_duration = (_utcnow() - cycle_start).total_seconds()
-            logger.info(
-                f"[الدورة #{cycle}] ✅ اكتملت | "
-                f"المدة: {cycle_duration:.1f}ث | "
-                f"آخر مزامنة: {last_sync.strftime('%H:%M:%S')}"
-            )
+                logger.error(f"[دورة #{cycle}] ❌ خطأ: {e}", exc_info=True)
 
             await asyncio.sleep(120)
 
