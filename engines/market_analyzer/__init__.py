@@ -65,56 +65,75 @@ class MarketAnalyzer(BaseEngine):
             f"({len(symbols)} عملة × {len(timeframes)} إطار)"
         )
 
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, headers={
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }) as client:
+            # محاولة عبر عدة endpoints إذا فشل الأول
+            base_urls = [
+                "https://api.binance.com",
+                "https://api1.binance.com",
+                "https://api2.binance.com",
+                "https://api3.binance.com",
+            ]
             for symbol in symbols:
                 for tf in sorted(timeframes):
-                    try:
-                        url = (
-                            f"https://api.binance.com/api/v3/klines"
-                            f"?symbol={symbol}&interval={tf}&limit=200"
-                        )
-                        resp = await client.get(url)
-                        if resp.status_code != 200:
-                            failed += 1
-                            self.logger.warning(
-                                f"[تسخين] ❌ {symbol} {tf}: HTTP {resp.status_code} — "
-                                f"تأكد من صحة الرمز والإطار الزمني"
-                            )
-                            continue
+                    fetched = False
+                    for base_url in base_urls:
+                        if fetched:
+                            break
+                        try:
+                            url = f"{base_url}/api/v3/klines?symbol={symbol}&interval={tf}&limit=200"
+                            resp = await client.get(url)
+                            if resp.status_code == 200:
+                                fetched = True
+                            elif resp.status_code == 418:
+                                continue  # جرب endpoint آخر
+                            else:
+                                failed += 1
+                                self.logger.warning(
+                                    f"[تسخين] ❌ {symbol} {tf}: HTTP {resp.status_code} من {base_url}"
+                                )
+                                break
+                        except Exception:
+                            continue  # جرب endpoint آخر
 
-                        klines = resp.json()
-                        if not isinstance(klines, list) or len(klines) == 0:
-                            failed += 1
-                            self.logger.warning(f"[تسخين] ❌ {symbol} {tf}: استجابة فارغة")
-                            continue
-
-                        # تحويل بيانات kline إلى candles
-                        candles = []
-                        for k in klines:
-                            candles.append({
-                                "t": k[0],
-                                "o": float(k[1]),
-                                "h": float(k[2]),
-                                "l": float(k[3]),
-                                "c": float(k[4]),
-                                "v": float(k[5]),
-                            })
-
-                        # تخزين
-                        if symbol not in self._candles:
-                            self._candles[symbol] = {}
-                        self._candles[symbol][tf] = candles
-                        loaded += 1
-
-                        self.logger.info(
-                            f"[تسخين] ✅ {symbol} {tf}: {len(candles)} شمعة "
-                            f"(أول={candles[0]['o']:.6f} آخر={candles[-1]['c']:.6f})"
-                        )
-                        await asyncio.sleep(0.1)
-
-                    except Exception as e:
+                    if not fetched:
                         failed += 1
-                        self.logger.error(f"[تسخين] ❌ {symbol} {tf}: {type(e).__name__}: {e}")
+                        self.logger.warning(
+                            f"[تسخين] ❌ {symbol} {tf}: فشلت كل المحاولات"
+                        )
+                        continue
+
+                    klines = resp.json()
+                    if not isinstance(klines, list) or len(klines) == 0:
+                        failed += 1
+                        self.logger.warning(f"[تسخين] ❌ {symbol} {tf}: استجابة فارغة")
+                        continue
+
+                    # تحويل بيانات kline إلى candles
+                    candles = []
+                    for k in klines:
+                        candles.append({
+                            "t": k[0],
+                            "o": float(k[1]),
+                            "h": float(k[2]),
+                            "l": float(k[3]),
+                            "c": float(k[4]),
+                            "v": float(k[5]),
+                        })
+
+                    # تخزين
+                    if symbol not in self._candles:
+                        self._candles[symbol] = {}
+                    self._candles[symbol][tf] = candles
+                    loaded += 1
+
+                    self.logger.info(
+                        f"[تسخين] ✅ {symbol} {tf}: {len(candles)} شمعة "
+                        f"(أول={candles[0]['o']:.6f} آخر={candles[-1]['c']:.6f})"
+                    )
+                    await asyncio.sleep(0.1)
 
         self.logger.info(
             f"[تسخين] اكتمل: {loaded} ناجح | {failed} فشل | {total_expected} متوقع"
