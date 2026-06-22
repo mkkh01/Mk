@@ -146,48 +146,45 @@ class TelegramEngine:
         if not self.application:
             await self.initialize()
 
-        logger.info("[بوت] انتظار 3 ثوانٍ لتجنب تضارب النشر...")
-        await asyncio.sleep(3)
+        logger.info("[بوت] انتظار 8 ثوانٍ لتجنب تضارب النشر...")
+        await asyncio.sleep(8)
 
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, 6):  # لحد 5 محاولات
             try:
-                logger.info(f"[بوت] بدء استطلاع البوت (محاولة {attempt}/{max_retries})...")
-                async with self.application:
-                    await self.application.initialize()
-                    await self.application.start()
-                    await self.application.updater.start_polling(
-                        drop_pending_updates=True,
-                        allowed_updates=["message", "callback_query"],
-                    )
-                    logger.info("[بوت] ✅ استطلاع البوت بدأ. في انتظار الرسائل.")
-
-                    try:
-                        while True:
-                            await asyncio.sleep(3600)
-                    except (KeyboardInterrupt, SystemExit):
-                        logger.info("[بوت] استلام إشارة إيقاف.")
-                        await self.application.updater.stop()
-                        await self.application.stop()
-                        await self.application.shutdown()
-                return  # نجاح — خروج من الحلقة
+                logger.info(f"[بوت] بدء استطلاع البوت (محاولة {attempt}/5)...")
+                # run_polling تدير حلقة الاستطلاع وإعادة المحاولة داخلياً
+                await self.application.run_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=["message", "callback_query"],
+                    poll_interval=2.0,
+                )
+                return  # نجاح — run_polling رجعت (إيقاف طبيعي)
 
             except Exception as e:
                 err_msg = str(e)
-                if "Conflict" in err_msg and "getUpdates" in err_msg:
-                    wait = 5 * attempt
+                if "Conflict" in err_msg:
+                    wait = min(10 * attempt, 60)  # 10, 20, 30, 40, 50 ثانية
                     logger.warning(
-                        f"[بوت] ⚠️ تضارب في جلسة الاستطلاع — "
-                        f"انتظار {wait} ثوانٍ... (محاولة {attempt}/{max_retries})"
+                        f"[بوت] ⚠️ تضارب استطلاع (محاولة {attempt}/5) — "
+                        f"انتظار {wait}ث..."
                     )
                     await asyncio.sleep(wait)
-                    # إعادة تهيئة التطبيق للمحاولة التالية
+                    # إعادة بناء التطبيق بالكامل
+                    try:
+                        await self.application.stop()
+                    except Exception:
+                        pass
+                    try:
+                        await self.application.shutdown()
+                    except Exception:
+                        pass
                     await self.initialize()
+                    continue
                 else:
-                    logger.critical(f"[بوت] ❌ فشل بدء البوت: {e}", exc_info=True)
+                    logger.critical(f"[بوت] ❌ فشل: {e}", exc_info=True)
                     raise
 
-        logger.critical("[بوت] ❌ فشل بدء البوت بعد كل المحاولات")
+        logger.critical("[بوت] ❌ فشل بعد 5 محاولات — التضارب مستمر")
 
     async def stop(self):
         """Stop bot gracefully."""
