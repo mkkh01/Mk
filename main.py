@@ -183,14 +183,12 @@ async def preflight_check_schema() -> tuple[bool, str]:
 async def preflight_check_exchange() -> tuple[bool, str]:
     """التحقق من الاتصال بـ Binance (REST API)."""
     try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://api.binance.com/api/v3/ping", timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status == 200:
-                    return True, "الاتصال بـ Binance ناجح"
-                return False, f"Binance رد بحالة: {resp.status}"
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://api.binance.com/api/v3/ping")
+            if resp.status_code == 200:
+                return True, "الاتصال بـ Binance ناجح"
+            return False, f"Binance رد بحالة: {resp.status_code}"
     except Exception as e:
         return False, f"فشل الاتصال بـ Binance: {e}"
 
@@ -198,16 +196,14 @@ async def preflight_check_exchange() -> tuple[bool, str]:
 async def preflight_check_telegram(token: str) -> tuple[bool, str]:
     """التحقق من صلاحية توكن تيليجرام."""
     try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"https://api.telegram.org/bot{token}/getMe", timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                data = await resp.json()
-                if data.get("ok"):
-                    bot_name = data["result"]["username"]
-                    return True, f"بوت تيليجرام: @{bot_name}"
-                return False, f"توكن تيليجرام غير صالح: {data.get('description', '')}"
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            data = resp.json()
+            if data.get("ok"):
+                bot_name = data["result"]["username"]
+                return True, f"بوت تيليجرام: @{bot_name}"
+            return False, f"توكن تيليجرام غير صالح: {data.get('description', '')}"
     except Exception as e:
         return False, f"فشل الاتصال بـ Telegram API: {e}"
 
