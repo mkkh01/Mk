@@ -352,8 +352,19 @@ class EvidenceEngine(BaseEngine):
         return 30.0
 
     def _score_risk_safety(self) -> float:
-        """تقييم سلامة المخاطر — محايد حالياً."""
-        return 70.0
+        """تقييم سلامة المخاطر — محسوب فعلياً من حالة النظام."""
+        score = 70.0  # أساس
+
+        # عقوبات من حالة المخاطر الداخلية
+        if hasattr(self, '_consecutive_losses'):
+            cl = getattr(self, '_consecutive_losses', 0)
+            score -= cl * 15
+
+        if hasattr(self, '_trading_blocked'):
+            if getattr(self, '_trading_blocked', False):
+                score = 0.0
+
+        return max(0.0, min(100.0, score))
 
     def _score_whale_flow(self, whale_events: list, analysis: MarketAnalysis) -> float:
         """تقييم تدفق الحيتان."""
@@ -473,17 +484,28 @@ class EvidenceEngine(BaseEngine):
         self, score: float, conflicts: list,
         analysis: MarketAnalysis, risk_approved: bool
     ) -> str:
-        """منطق القرار النهائي."""
+        """منطق القرار النهائي — لا افتراضات."""
         if not risk_approved:
             return "HOLD"
         if len(conflicts) >= 4:
             return "IGNORE"
+
+        direction = getattr(analysis, 'trend_direction', 'NONE')
+        momentum = getattr(analysis, 'momentum', 0)
+
         if score >= EVIDENCE_THRESHOLD:
-            if analysis.trend_direction == "DOWN" and analysis.momentum > 60:
+            if direction == "UP" and momentum > 40:
+                return "BUY"
+            if direction == "DOWN" and momentum > 40:
                 return "SELL"
-            return "BUY"
-        if score >= 65 and analysis.trend_direction == "DOWN":
-            return "SELL"
+            return "HOLD"  # لا اتجاه واضح → لا قرار
+
+        if score >= 65:
+            if direction == "DOWN":
+                return "SELL"
+            if direction == "UP":
+                return "BUY"
+
         if score >= 50:
             return "HOLD"
         return "IGNORE"

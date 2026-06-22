@@ -136,7 +136,8 @@ class RiskEngine(BaseEngine):
 
         # ── فحص شروط المنع أولاً ──
         blocked, reason = self._check_blocking_conditions(symbol)
-        if blocked and evidence.decision != "SELL":
+        if blocked:
+            # لا استثناءات — حتى SELL تُمنع في حالة BLOCKED
             self.logger.warning(f"[حماية] {symbol} — ممنوع: {reason}")
             return RiskDecision(
                 trade_allowed=False,
@@ -308,11 +309,11 @@ class RiskEngine(BaseEngine):
         self, volatility: float, position_size: float, capital: float
     ) -> str:
         """تحديد مستوى المخاطرة بناءً على عدة عوامل."""
-        exposure_pct = (position_size * 0) / max(capital, 1)  # مبسط
+        exposure_pct = (position_size * 100) / max(capital, 1) if capital > 0 and position_size > 0 else 0
 
-        if volatility > 80 or self._consecutive_losses >= 3:
+        if volatility > 80 or self._consecutive_losses >= 3 or exposure_pct > 20:
             return "HIGH"
-        if volatility > 60 or self._consecutive_losses >= 1:
+        if volatility > 60 or self._consecutive_losses >= 1 or exposure_pct > 10:
             return "MEDIUM"
         return "LOW"
 

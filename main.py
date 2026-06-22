@@ -24,6 +24,7 @@ logger = logging.getLogger("main")
 
 # ── Core ────────────────────────────────────────────────────
 from core.events import EventBus
+from core.trading_kernel import TradingKernel
 
 # ── Config ──────────────────────────────────────────────────
 from config.settings import get_settings
@@ -66,14 +67,26 @@ from keep_alive import keep_alive
 class TradingState:
     """حالة النظام المركزية — مصدر وحيد للحقيقة. Deterministic + Idempotent.
 
-    آلة الحالات (State Machine):
-        INIT ──▶ CONNECTING_WS ──▶ LOADING_HISTORY ──▶ WARMING_UP ──▶ RUNNING
+    آلة الحالات (State Machine — Production):
+        INIT ──▶ CONNECTING_WS ──▶ LOADING_HISTORY ──▶ WARMING_UP
+        ──▶ READY_TO_TRADE ──▶ TRADING_ACTIVE
+
+    مراحل السلامة:
+        DEGRADED — نظام منحط (يعمل ببيانات جزئية — لا تداول)
+        BLOCKED  — إيقاف صارم (لا تداول تحت أي ظرف)
 
     الانتقالات المسموحة:
-        INIT           → CONNECTING_WS  (بدء تهيئة المحركات)
-        CONNECTING_WS  → LOADING_HISTORY (بعد تهيئة المحركات — تحميل تاريخي)
-        LOADING_HISTORY → WARMING_UP     (بعد اكتمال/فشل التسخين)
-        WARMING_UP     → RUNNING         (WS مستقر + ticks كافية)
+        INIT            → CONNECTING_WS
+        CONNECTING_WS   → LOADING_HISTORY
+        LOADING_HISTORY → WARMING_UP
+        WARMING_UP      → READY_TO_TRADE   (بيانات + استراتيجيات + WS جاهزة)
+        READY_TO_TRADE  → TRADING_ACTIVE   (أول إشارة قابلة للتنفيذ)
+        أي مرحلة        → DEGRADED         (تدهور الحالة)
+        أي مرحلة        → BLOCKED          (إيقاف طارئ)
+
+    RULE: READY_TO_TRADE ≠ TRADING_ACTIVE
+    RULE: التداول مسموح فقط في TRADING_ACTIVE
+    RULE: BLOCKED لا يسمح بأي صفقة — لا استثناءات
 
     خصائص الضمان (Production Hardening):
         - Idempotent: أي transition لنفس المرحلة = NO-OP
@@ -87,21 +100,27 @@ class TradingState:
     CONNECTING_WS = "CONNECTING_WS"
     LOADING_HISTORY = "LOADING_HISTORY"
     WARMING_UP = "WARMING_UP"
-    RUNNING = "RUNNING"
+    READY_TO_TRADE = "READY_TO_TRADE"      # جاهز لكن لم ينفذ بعد
+    TRADING_ACTIVE = "TRADING_ACTIVE"      # تداول نشط
+    DEGRADED = "DEGRADED"                  # منحط — لا تداول
+    BLOCKED = "BLOCKED"                     # إيقاف صارم
     ERROR = "ERROR"
 
     # الانتقالات المسموحة
     _VALID_TRANSITIONS: dict[str, set[str]] = {
         "INIT": {"CONNECTING_WS", "ERROR"},
-        "CONNECTING_WS": {"LOADING_HISTORY", "WARMING_UP", "ERROR"},
-        "LOADING_HISTORY": {"WARMING_UP", "ERROR"},
-        "WARMING_UP": {"RUNNING", "ERROR"},
-        "RUNNING": {"ERROR"},
+        "CONNECTING_WS": {"LOADING_HISTORY", "ERROR"},
+        "LOADING_HISTORY": {"WARMING_UP", "BLOCKED", "ERROR"},
+        "WARMING_UP": {"READY_TO_TRADE", "DEGRADED", "BLOCKED", "ERROR"},
+        "READY_TO_TRADE": {"TRADING_ACTIVE", "DEGRADED", "BLOCKED", "ERROR"},
+        "TRADING_ACTIVE": {"DEGRADED", "BLOCKED", "ERROR"},
+        "DEGRADED": {"WARMING_UP"},       # استرداد من الانحطاط
+        "BLOCKED": set(),                    # لا خروج من BLOCKED
         "ERROR": {"WARMING_UP"},
     }
 
     # المراحل التي لا يمكن إعادة دخولها بعد الخروج
-    _ONCE_ONLY_PHASES: set[str] = {"INIT", "CONNECTING_WS", "LOADING_HISTORY", "RUNNING"}
+    _ONCE_ONLY_PHASES: set[str] = {"INIT", "CONNECTING_WS", "LOADING_HISTORY", "BLOCKED"}
 
     def __init__(self):
         self.phase: str = self.INIT
@@ -141,7 +160,10 @@ class TradingState:
             "CONNECTING_WS": 0,
             "LOADING_HISTORY": 10,
             "WARMING_UP": 300,
-            "RUNNING": 0,
+            "READY_TO_TRADE": 600,
+            "TRADING_ACTIVE": 0,
+            "DEGRADED": 120,
+            "BLOCKED": 0,
         }
 
     # ═══════════════════════════════════════════════════════
@@ -194,7 +216,10 @@ class TradingState:
             self.CONNECTING_WS: "🔌 الاتصال بـ WebSocket",
             self.LOADING_HISTORY: "📥 تحميل البيانات التاريخية",
             self.WARMING_UP: "🔥 تسخين — بناء المخازن",
-            self.RUNNING: "✅ مباشر — تحليل + إشارات + تنفيذ",
+            self.READY_TO_TRADE: "🟢 جاهز للتداول",
+            self.TRADING_ACTIVE: "💹 تداول نشط",
+            self.DEGRADED: "🟠 منحط — لا تداول",
+            self.BLOCKED: "🔴 إيقاف صارم",
             self.ERROR: "🔴 خطأ",
         }
         logger.info("═" * 50)
@@ -217,34 +242,29 @@ class TradingState:
 
     def _check_pre_transition_invariants(self, old: str, new: str) -> None:
         """ثوابت يجب أن تتحقق قبل الانتقال."""
-        if new == self.RUNNING:
-            assert self.ws_connected, (
-                f"[ثابت] RUNNING يتطلب ws_connected=True"
-            )
+        if new == self.READY_TO_TRADE:
+            assert self.ws_connected, "READY_TO_TRADE يتطلب ws_connected=True"
             assert self.ws_tick_count >= self.MIN_WS_TICKS, (
-                f"[ثابت] RUNNING يتطلب ticks≥{self.MIN_WS_TICKS}، الحالي={self.ws_tick_count}"
+                f"READY_TO_TRADE يتطلب ticks≥{self.MIN_WS_TICKS}، الحالي={self.ws_tick_count}"
             )
             stable_duration = _utcnow().timestamp() - self.ws_stable_since
             assert stable_duration >= self.MIN_WS_STABLE_SEC or self.ws_reconnect_count == 0, (
-                f"[ثابت] RUNNING يتطلب WS مستقر {self.MIN_WS_STABLE_SEC}ث، "
-                f"الحالي={stable_duration:.1f}ث | reconnects={self.ws_reconnect_count}"
+                f"READY_TO_TRADE يتطلب WS مستقر {self.MIN_WS_STABLE_SEC}ث"
+            )
+        if new == self.TRADING_ACTIVE:
+            assert old == self.READY_TO_TRADE, (
+                f"TRADING_ACTIVE لا يُدخل إلا من READY_TO_TRADE، الحالي={old}"
             )
 
     def _check_post_transition_invariants(self, phase: str) -> None:
         """ثوابت يجب أن تتحقق بعد الانتقال."""
-        if phase == self.RUNNING:
-            assert self.trading_allowed, (
-                f"[ثابت] RUNNING يجب أن يكون trading_allowed=True"
-            )
-            assert self.analysis_allowed, (
-                f"[ثابت] RUNNING يجب أن يكون analysis_allowed=True"
-            )
-        elif phase == self.WARMING_UP:
-            assert self.analysis_allowed, (
-                f"[ثابت] WARMING_UP يجب أن يكون analysis_allowed=True"
-            )
+        if phase == self.TRADING_ACTIVE:
+            assert self.trading_allowed
+            assert self.analysis_allowed
+        elif phase == self.READY_TO_TRADE:
+            assert self.analysis_allowed
             assert not self.trading_allowed, (
-                f"[ثابت] WARMING_UP لا يجب أن يسمح بالتداول"
+                f"READY_TO_TRADE لا يجب أن يسمح بالتداول"
             )
 
     # ═══════════════════════════════════════════════════════
@@ -297,11 +317,17 @@ class TradingState:
 
     @property
     def trading_allowed(self) -> bool:
-        return self.phase == self.RUNNING
+        """التداول مسموح فقط في TRADING_ACTIVE."""
+        return self.phase == self.TRADING_ACTIVE
+
+    @property
+    def ready_to_trade(self) -> bool:
+        """النظام جاهز للتداول (لكن لم يبدأ بعد)."""
+        return self.phase == self.READY_TO_TRADE
 
     @property
     def analysis_allowed(self) -> bool:
-        return self.phase in (self.WARMING_UP, self.RUNNING)
+        return self.phase in (self.WARMING_UP, self.READY_TO_TRADE, self.TRADING_ACTIVE)
 
     @property
     def health(self) -> str:
@@ -607,7 +633,8 @@ async def main():
     )
     portfolio_service = PortfolioService(portfolio_engine, reporting_engine, learning_engine, health_monitor)
     risk_service = RiskService(risk_engine)
-    logger.info("[النظام] ✅ جميع الخدمات بدأت")
+    trading_kernel = TradingKernel()
+    logger.info("[النظام] ✅ جميع الخدمات + نواة التداول بدأت")
 
     # ── 9. مزامنة العملات ──────────────────────────────────
     set_system_status("مزامنة_العملات")
@@ -684,10 +711,10 @@ async def main():
                     state.ws_tick_count = engine_ticks
                     state.ws_last_seen_at = _utcnow().timestamp()
 
-                # الانتقال: WARMING_UP → RUNNING
+                # الانتقال: WARMING_UP → READY_TO_TRADE
                 if state.phase == TradingState.WARMING_UP:
                     if state.ws_ready_for_running:
-                        state.transition(TradingState.RUNNING)
+                        state.transition(TradingState.READY_TO_TRADE)
                     elif cycle % 5 == 0:
                         stable_sec = (_utcnow().timestamp() - state.ws_stable_since) if state.ws_stable_since > 0 else 0
                         logger.info(
@@ -717,12 +744,12 @@ async def main():
                 # 🛡️ كشف الحالة العالقة
                 state.check_stuck(cycle)
 
-                # 🛡️ تأكيد: RUNNING لا يجب أن يتراجع
-                if state.phase == TradingState.RUNNING:
+                # 🛡️ تأكيد: TRADING_ACTIVE لا يجب أن يتراجع
+                if state.phase == TradingState.TRADING_ACTIVE:
                     if not state.ws_connected:
                         logger.error(
-                            f"[آلة_الحالات] ⚠️ RUNNING لكن WS منفصل! "
-                            f"reconnects={state.ws_reconnect_count} | ticks={state.ws_tick_count}"
+                            f"[آلة_الحالات] ⚠️ TRADING_ACTIVE لكن WS منفصل! "
+                            f"reconnects={state.ws_reconnect_count}"
                         )
                     assert state.trading_allowed, (
                         f"[تأكيد] RUNNING لكن trading_allowed=False! دورة #{cycle}"
@@ -877,6 +904,9 @@ async def main():
                                             logger.info(
                                                 f"[DATABASE] {coin.symbol}: ✅ تم حفظ الصفقة"
                                             )
+                                            # الانتقال: READY_TO_TRADE → TRADING_ACTIVE (أول صفقة)
+                                            if state.phase == TradingState.READY_TO_TRADE:
+                                                state.transition(TradingState.TRADING_ACTIVE)
                                             tp = getattr(execution, 'take_profit', None)
                                             sl = getattr(execution, 'stop_loss', None)
                                             try:
@@ -928,7 +958,8 @@ async def main():
                     # ── المرحلة 6: تقرير الدورة ──
                     duration = (_utcnow() - cycle_start).total_seconds()
                     phase_icon = {"INIT": "🟡", "CONNECTING_WS": "🔌", "LOADING_HISTORY": "📥",
-                                  "WARMING_UP": "🔥", "RUNNING": "✅", "ERROR": "🔴"}.get(state.phase, "❓")
+                                  "WARMING_UP": "🔥", "READY_TO_TRADE": "🟢", "TRADING_ACTIVE": "💹",
+                                  "DEGRADED": "🟠", "BLOCKED": "🔴", "ERROR": "🔴"}.get(state.phase, "❓")
                     data_status = f"تحليلات: {state.analysis_ok}" if state.analysis_ok > 0 else "⏳ بلا بيانات"
                     summary = (
                         f"[{phase_icon} {state.phase}] دورة #{cycle} | "

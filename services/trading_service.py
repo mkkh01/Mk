@@ -289,6 +289,7 @@ class TradingService:
                 risk_decision, symbol=symbol, entry_price=entry_price,
                 strategy=strategy_name, telegram_id=telegram_id,
                 entry_reason=evidence.reasoning,
+                side=evidence.decision,  # ← BUY/SELL من الأدلة
             )
         except Exception as e:
             logger.error(f"[{symbol}] ❌ خطأ في التنفيذ: {e}", exc_info=True)

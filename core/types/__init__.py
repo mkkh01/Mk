@@ -107,6 +107,9 @@ class ExecutionResult:
     executed_quantity: float = 0.0
     slippage: float = 0.0
     fees: float = 0.0
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
+    side: str = "BUY"
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 

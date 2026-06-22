@@ -86,9 +86,10 @@ class ExecutionEngine(BaseEngine):
     #  التنفيذ (محاكاة فقط)
     # ═════════════════════════════════════════════════════════
 
-    async def execute(self, risk: RiskEvent, symbol: str = "",
+    async def execute(self, risk, symbol: str = "",
                       entry_price: float = 0.0, strategy: str = "غير معروف",
-                      telegram_id: int = 0, entry_reason: str = "") -> ExecutionResult:
+                      telegram_id: int = 0, entry_reason: str = "",
+                      side: str = "BUY") -> ExecutionResult:
         """
         تنفيذ صفقة بشكل محاكي (بدون اتصال بمنصة حقيقية).
         يسجل الصفقة عبر Repository layer الذي يتولى تحويل telegram_id → UUID.
@@ -103,6 +104,12 @@ class ExecutionEngine(BaseEngine):
 
         tid = telegram_id or self._telegram_id
 
+        # حساب Stop Loss و Take Profit
+        sl_dist = getattr(risk, 'stop_loss_distance', 0) or executed_price * 0.02
+        tp_dist = sl_dist * (getattr(risk, 'take_profit_ratio', 0) or 2.0)
+        sl_price = executed_price - sl_dist
+        tp_price = executed_price + tp_dist
+
         result = ExecutionResult(
             order_id=order_id,
             symbol=symbol,
@@ -111,6 +118,9 @@ class ExecutionEngine(BaseEngine):
             executed_quantity=risk.position_size,
             slippage=round(slippage, 8),
             fees=round(fees, 4),
+            stop_loss=round(sl_price, 8),
+            take_profit=round(tp_price, 8),
+            side=side,
         )
 
         # التسجيل عبر Repository (يتولى تحويل UUID)
@@ -126,7 +136,7 @@ class ExecutionEngine(BaseEngine):
                 trade = await TradeRepository.add(
                     session, tid,
                     symbol=symbol,
-                    side="BUY",
+                    side=side,  # ← من معامل الدالة، ليس hardcoded
                     entry_price=executed_price,
                     quantity=risk.position_size,
                     strategy_used=strategy,
@@ -137,9 +147,7 @@ class ExecutionEngine(BaseEngine):
                     fees=fees,
                 )
 
-                # إنشاء المركز عبر PositionRepository
-                sl_dist = risk.stop_loss_distance or executed_price * 0.02
-                tp_dist = sl_dist * (risk.take_profit_ratio or 2.0)
+                # إنشاء المركز عبر PositionRepository (باستخدام sl_dist, tp_dist المحسوبة أعلاه)
                 position = await PositionRepository.create(
                     session, tid,
                     symbol=symbol,
