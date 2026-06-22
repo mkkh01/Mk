@@ -452,6 +452,17 @@ async def main():
     _system_state["engines"]["market_data"] = "يعمل" if symbols else "ينتظر"
     _system_state["preflight"]["coins_loaded"] = len(symbols)
 
+    # تسخين الشموع من REST API قبل بدء التداول
+    logger.info("[النظام] تسخين الشموع التاريخية...")
+    all_timeframes = set()
+    for coin in coins:
+        tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
+        for tf in tfs:
+            all_timeframes.add(tf)
+    if symbols and all_timeframes:
+        await market_analyzer.warmup_candles(symbols, all_timeframes)
+        logger.info("[النظام] ✅ تسخين الشموع اكتمل — المحلل جاهز فوراً")
+
     # ── 10. بوت تيليجرام + حلقة التداول ────────────────────
     set_system_status("بدء_البوت")
     logger.info("[النظام] [10/10] بدء بوت تيليجرام...")

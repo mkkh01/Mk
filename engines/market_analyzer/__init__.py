@@ -54,6 +54,58 @@ class MarketAnalyzer(BaseEngine):
         await self.event_bus.subscribe("CandleUpdateEvent", self._on_candle_update)
         self.logger.info("[محلل السوق] ✅ تم تهيئة محلل السوق.")
 
+    async def warmup_candles(self, symbols: list[str], timeframes: set[str]):
+        """تحميل شموع تاريخية من Binance REST API لتهيئة المحلل."""
+        import httpx
+        self.logger.info(f"[محلل السوق] 🔥 تسخين الشموع لـ {len(symbols)} عملة × {len(timeframes)} إطار...")
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            for symbol in symbols:
+                for tf in sorted(timeframes):
+                    try:
+                        url = (
+                            f"https://api.binance.com/api/v3/klines"
+                            f"?symbol={symbol}&interval={tf}&limit=100"
+                        )
+                        resp = await client.get(url)
+                        if resp.status_code != 200:
+                            self.logger.warning(f"[تسخين] {symbol} {tf}: HTTP {resp.status_code}")
+                            continue
+
+                        klines = resp.json()
+                        if not isinstance(klines, list) or len(klines) == 0:
+                            self.logger.warning(f"[تسخين] {symbol} {tf}: لا توجد بيانات")
+                            continue
+
+                        # تحويل بيانات kline إلى candles
+                        candles = []
+                        for k in klines:
+                            candles.append({
+                                "t": k[0],  # timestamp
+                                "o": float(k[1]),
+                                "h": float(k[2]),
+                                "l": float(k[3]),
+                                "c": float(k[4]),
+                                "v": float(k[5]),
+                            })
+
+                        # تخزين في الهيكل
+                        if symbol not in self._candles:
+                            self._candles[symbol] = {}
+                        self._candles[symbol][tf] = candles
+
+                        self.logger.info(
+                            f"[تسخين] ✅ {symbol} {tf}: {len(candles)} شمعة "
+                            f"(من {candles[0]['o']} إلى {candles[-1]['c']})"
+                        )
+                        await asyncio.sleep(0.1)  # تجنب rate limiting
+
+                    except Exception as e:
+                        self.logger.error(f"[تسخين] {symbol} {tf}: {e}")
+
+        total = sum(len(tf_dict) for tf_dict in self._candles.values())
+        self.logger.info(f"[محلل السوق] ✅ تم تسخين {total} إطار زمني")
+
     async def start(self) -> None:
         self._running = True
         asyncio.create_task(self._analysis_loop())
