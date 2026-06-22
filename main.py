@@ -548,20 +548,25 @@ async def main():
 
                     # ── المرحلة 3: التحليل ──
                     for coin in state.coins:
+                        # STEP 1
                         logger.info(
-                            f"[SCAN] 🔍 بدء فحص {coin.symbol} — "
-                            f"أطر: {coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]}"
+                            f"[STEP 1] {coin.symbol}: بدء المسار — "
+                            f"أطر: {coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]} | "
+                            f"مرحلة={state.phase} | مسموح_بالتداول={state.trading_allowed}"
                         )
                         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
                         coin_prices = {}
                         coin_had_analysis = False
 
+                        # STEP 2
+                        logger.info(f"[STEP 2] {coin.symbol}: استدعاء المحلل لكل إطار...")
                         for tf in tfs:
                             try:
                                 analysis = await market_analyzer.analyze(coin.symbol, tf)
+                                # STEP 3
                                 if analysis and getattr(analysis, 'current_price', 0) > 0:
                                     logger.info(
-                                        f"[ANALYSIS] {coin.symbol} {tf}: ✅ "
+                                        f"[STEP 3] {coin.symbol} {tf}: ✅ محلل أرجع تحليل — "
                                         f"نظام={analysis.regime} | اتجاه={analysis.trend_direction} | "
                                         f"زخم={analysis.momentum:.0f} | تقلب={analysis.volatility:.0f} | "
                                         f"سيولة={analysis.liquidity_score:.0f} | ثقة={analysis.confidence:.0f}"
@@ -569,67 +574,100 @@ async def main():
                                     coin_prices[tf] = analysis.current_price
                                     coin_had_analysis = True
                                     state.analysis_ok += 1
+
+                                    # STEP 4
+                                    logger.info(
+                                        f"[STEP 4] {coin.symbol} {tf}: استدعاء محرك الاستراتيجيات..."
+                                    )
                                     await strategy_engine.run_strategies(coin.symbol, tf, analysis)
+                                    logger.info(
+                                        f"[STEP 5] {coin.symbol} {tf}: محرك الاستراتيجيات انتهى"
+                                    )
                                 else:
                                     state.analysis_miss += 1
                                     reason = "لا تحليل" if not analysis else "سعر=0"
                                     candle_count = len(market_analyzer._candles.get(coin.symbol, {}).get(tf, []))
                                     logger.info(
-                                        f"[ANALYSIS] {coin.symbol} {tf}: ❌ {reason} | "
-                                        f"شموع={candle_count}/20"
+                                        f"[STEP 3-EARLY_EXIT] {coin.symbol} {tf}: ❌ {reason} | "
+                                        f"شموع={candle_count}/20 | سيتابع للإطار التالي"
                                     )
                             except Exception as e:
                                 state.analysis_miss += 1
-                                logger.debug(f"[{coin.symbol}] [{tf}] خطأ: {e}")
+                                logger.info(f"[STEP 3-ERROR] {coin.symbol} {tf}: استثناء={e}")
 
-                        if coin_prices:
-                            price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
-                            state.price_lines.append(f"  {coin.symbol:<10} {price_str}")
+                        # STEP 6
+                        if not coin_had_analysis:
+                            logger.info(
+                                f"[STEP 6-EARLY_EXIT] {coin.symbol}: ❌ لا تحليلات ناجحة "
+                                f"من أي إطار — تخطي التداول لهذه العملة (continue)"
+                            )
+                        else:
+                            if coin_prices:
+                                price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
+                                state.price_lines.append(f"  {coin.symbol:<10} {price_str}")
 
-                        # ── المرحلة 4: التنفيذ — فقط في RUNNING ──
-                        if state.trading_allowed:
-                            try:
-                                result = await trading_service.process_symbol(coin.symbol, telegram_id)
-                                if result:
-                                    evidence, risk_decision, execution = result
-                                    state.signals_found += 1
-                                    if execution:
+                            # STEP 7
+                            if not state.trading_allowed:
+                                logger.info(
+                                    f"[STEP 7-EARLY_EXIT] {coin.symbol}: ❌ التداول غير مسموح — "
+                                    f"السبب: المرحلة={state.phase} (يحتاج RUNNING) | "
+                                    f"الشرط: state.trading_allowed=False"
+                                )
+                            else:
+                                # STEP 8
+                                logger.info(
+                                    f"[STEP 8] {coin.symbol}: استدعاء trading_service.process_symbol()..."
+                                )
+                                try:
+                                    result = await trading_service.process_symbol(coin.symbol, telegram_id)
+                                    # STEP 9
+                                    if result:
+                                        evidence, risk_decision, execution = result
+                                        state.signals_found += 1
                                         logger.info(
-                                            f"[EXECUTION] {coin.symbol}: ✅ تم إرسال الأمر للتنفيذ | "
-                                            f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
-                                            f"كمية: {execution.executed_quantity:.6f} | "
-                                            f"سعر: {execution.executed_price:.6f}"
+                                            f"[STEP 9] {coin.symbol}: ✅ trading_service أرجع نتيجة — "
+                                            f"قرار={evidence.decision} | نفذ={'نعم' if execution else 'لا'}"
                                         )
-                                        logger.info(
-                                            f"[DATABASE] {coin.symbol}: ✅ تم حفظ الصفقة"
-                                        )
-                                        tp = getattr(execution, 'take_profit', None)
-                                        sl = getattr(execution, 'stop_loss', None)
-                                        try:
-                                            await notify_tg(
-                                                f"🔔 **صفقة جديدة**\n━━━━━━━━━━━━━━\n"
-                                                f"💰 {coin.symbol}\n📊 {evidence.decision}\n"
-                                                f"💵 السعر: {execution.executed_price:.6f}\n"
-                                                f"📦 الكمية: {execution.executed_quantity:.4f}\n"
-                                                f"🎯 هدف: {tp:.6f if tp else '—'}\n"
-                                                f"🛑 وقف: {sl:.6f if sl else '—'}\n"
-                                                f"✅ ثقة: {evidence.final_score:.0f}%\n"
-                                                f"🧠 {evidence.reasoning[:100]}"
+                                        if execution:
+                                            logger.info(
+                                                f"[EXECUTION] {coin.symbol}: ✅ تم إرسال الأمر للتنفيذ | "
+                                                f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                                f"كمية: {execution.executed_quantity:.6f} | "
+                                                f"سعر: {execution.executed_price:.6f}"
                                             )
-                                            logger.info(f"[TELEGRAM] {coin.symbol}: ✅ تم إرسال رسالة تيليجرام")
-                                        except Exception as e:
-                                            logger.error(f"[TELEGRAM] {coin.symbol}: ❌ خطأ في إرسال رسالة تيليجرام: {e}")
+                                            logger.info(
+                                                f"[DATABASE] {coin.symbol}: ✅ تم حفظ الصفقة"
+                                            )
+                                            tp = getattr(execution, 'take_profit', None)
+                                            sl = getattr(execution, 'stop_loss', None)
+                                            try:
+                                                await notify_tg(
+                                                    f"🔔 **صفقة جديدة**\n━━━━━━━━━━━━━━\n"
+                                                    f"💰 {coin.symbol}\n📊 {evidence.decision}\n"
+                                                    f"💵 السعر: {execution.executed_price:.6f}\n"
+                                                    f"📦 الكمية: {execution.executed_quantity:.4f}\n"
+                                                    f"🎯 هدف: {tp:.6f if tp else '—'}\n"
+                                                    f"🛑 وقف: {sl:.6f if sl else '—'}\n"
+                                                    f"✅ ثقة: {evidence.final_score:.0f}%\n"
+                                                    f"🧠 {evidence.reasoning[:100]}"
+                                                )
+                                                logger.info(f"[TELEGRAM] {coin.symbol}: ✅ تم إرسال رسالة تيليجرام")
+                                            except Exception as e:
+                                                logger.error(f"[TELEGRAM] {coin.symbol}: ❌ خطأ في إرسال رسالة تيليجرام: {e}")
+                                        else:
+                                            logger.info(
+                                                f"[SIGNAL] {coin.symbol}: ❌ مرفوضة — "
+                                                f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                                f"السبب: {evidence.reasoning[:80]}"
+                                            )
                                     else:
+                                        # STEP 9-EARLY_EXIT
                                         logger.info(
-                                            f"[SIGNAL] {coin.symbol}: ❌ مرفوضة — "
-                                            f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
-                                            f"السبب: {evidence.reasoning[:80]}"
+                                            f"[STEP 9-EARLY_EXIT] {coin.symbol}: ❌ trading_service "
+                                            f"أرجع None — لا إشارات (انظر سجلات trading_service للتفاصيل)"
                                         )
-                                else:
-                                    # process_symbol returned None — no signals generated
-                                    pass  # already logged inside process_symbol
-                            except Exception as e:
-                                logger.debug(f"[{coin.symbol}] خطأ تداول: {e}")
+                                except Exception as e:
+                                    logger.info(f"[STEP 9-ERROR] {coin.symbol}: استثناء={e}")
 
                         await asyncio.sleep(0.5)
 

@@ -59,22 +59,44 @@ class TradingService:
         all_signals: list = []
         all_analyses: dict[str, MarketAnalysis] = self.analysis_service.get_all_analyses(symbol)
 
+        logger.info(f"[TS-STEP 1] {symbol}: process_symbol() بدأ | تحليلات={len(all_analyses)} إطار")
+
         if not all_analyses:
-            logger.info(f"[SCAN] {symbol}: ⏭️ لا تحليلات — تخطي")
+            logger.info(
+                f"[TS-EARLY_EXIT] {symbol}: لا تحليلات في analysis_service — "
+                f"location=trading_service.process_symbol:line-68 | reason=all_analyses فارغة"
+            )
             return None
 
+        logger.info(f"[TS-STEP 2] {symbol}: تجميع الإشارات من كل إطار...")
         for timeframe, analysis in all_analyses.items():
             if analysis is None:
+                logger.info(
+                    f"[TS-STEP 2-SKIP] {symbol} {timeframe}: تحليل=None — تخطي هذا الإطار"
+                )
                 continue
             signals = self.analysis_service._signals.get(symbol, {}).get(timeframe, [])
             if not signals:
                 try:
+                    logger.info(
+                        f"[TS-STEP 3] {symbol} {timeframe}: استدعاء strategies.run_strategies()..."
+                    )
                     signals = await self.strategies.run_strategies(symbol, analysis)
                     if signals:
+                        logger.info(
+                            f"[TS-STEP 4] {symbol} {timeframe}: ✅ strategies أرجع {len(signals)} إشارة — "
+                            f"{(', '.join(set(s.strategy_name for s in signals)))}"
+                        )
                         self.analysis_service._signals.setdefault(symbol, {}).setdefault(timeframe, [])
                         self.analysis_service._signals[symbol][timeframe] = signals
+                    else:
+                        logger.info(
+                            f"[TS-STEP 4] {symbol} {timeframe}: strategies أرجع [] — لا إشارات"
+                        )
                 except Exception as e:
-                    logger.error(f"[{symbol}] [{timeframe}] ❌ خطأ في الاستراتيجيات: {e}")
+                    logger.info(
+                        f"[TS-STEP 4-ERROR] {symbol} {timeframe}: استثناء={e}"
+                    )
                     continue
             if signals:
                 all_signals.extend(signals)
@@ -85,10 +107,13 @@ class TradingService:
 
         if not all_signals:
             logger.info(
-                f"[SIGNAL] {symbol}: ❌ لا إشارات من أي إطار — "
-                f"السبب: الاستراتيجيات لم تُنتج إشارات (strategy returned None)"
+                f"[TS-EARLY_EXIT] {symbol}: لا إشارات من أي إطار | "
+                f"location=trading_service.process_symbol:line-111 | "
+                f"reason=all_signals فارغة بعد تجميع كل الأطر (strategy returned None)"
             )
             return None
+
+        logger.info(f"[TS-STEP 5] {symbol}: تجميع الأدلة — {len(all_signals)} إشارة من {len(all_analyses)} إطار")
 
         # b+c. تجميع الإشارات وتقييم الأدلة
         primary_analysis: Optional[MarketAnalysis] = None
@@ -100,15 +125,26 @@ class TradingService:
             primary_analysis = next(iter(all_analyses.values()))
 
         if primary_analysis is None:
-            logger.warning(f"[{symbol}] ⚠️ لا يوجد تحليل أساسي متاح — تخطي")
+            logger.info(
+                f"[TS-EARLY_EXIT] {symbol}: لا تحليل أساسي | "
+                f"location=trading_service.process_symbol:line-128 | "
+                f"reason=primary_analysis=None"
+            )
             return None
 
         whale_events = []
 
         try:
+            logger.info(
+                f"[TS-STEP 6] {symbol}: استدعاء evidence.evaluate()..."
+            )
             evidence = await self.evidence.evaluate(primary_analysis, all_signals, whale_events)
+            logger.info(
+                f"[TS-STEP 7] {symbol}: evidence.evaluate() انتهى — "
+                f"قرار={evidence.decision} | ثقة={evidence.final_score:.0f}"
+            )
         except Exception as e:
-            logger.error(f"[{symbol}] ❌ خطأ في تقييم الأدلة: {e}")
+            logger.info(f"[TS-STEP 7-ERROR] {symbol}: evidence.evaluate() استثناء={e}")
             return None
 
         self._signals_processed += 1
@@ -184,14 +220,23 @@ class TradingService:
             f"نسبة المخاطرة: {risk_per_trade}%"
         )
 
+        logger.info(
+            f"[TS-STEP 8] {symbol}: استدعاء risk_engine.evaluate() — "
+            f"رأس مال={capital_allocated:.2f} | سعر={entry_price:.6f}"
+        )
+
         risk_decision: Optional[RiskDecision] = None
         try:
             risk_decision = await self.risk_engine.evaluate(
                 evidence, entry_price=entry_price,
                 capital=capital_allocated, risk_percentage=risk_per_trade,
             )
+            logger.info(
+                f"[TS-STEP 9] {symbol}: risk_engine.evaluate() انتهى — "
+                f"مسموح={risk_decision.trade_allowed} | مستوى={risk_decision.risk_level}"
+            )
         except Exception as e:
-            logger.error(f"[{symbol}] ❌ خطأ في تقييم المخاطر: {e}")
+            logger.info(f"[TS-STEP 9-ERROR] {symbol}: risk_engine.evaluate() استثناء={e}")
             return (evidence, None, None)
 
         if not risk_decision.trade_allowed:
