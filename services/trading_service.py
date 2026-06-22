@@ -206,9 +206,26 @@ class TradingService:
             )
             return (evidence, risk_decision, None)
 
+        logger.info(
+            f"[RISK] {symbol}: ✅ موافقة | "
+            f"مستوى الخطر: {risk_decision.risk_level} | "
+            f"حجم المركز: {risk_decision.position_size:.6f} | "
+            f"وقف الخسارة: {risk_decision.stop_loss:.6f if risk_decision.stop_loss else '—'} | "
+            f"جني أرباح ×{risk_decision.take_profit_ratio}"
+        )
+
         # e. التنفيذ
         strategy_name = all_signals[0].strategy_name if all_signals else "غير معروف"
         position_size = risk_decision.position_size
+
+        logger.info(
+            f"[SIGNAL] {symbol}: ✅ إشارة {evidence.decision} | "
+            f"الثقة: {evidence.final_score:.0f}% | "
+            f"الاستراتيجية: {strategy_name} | "
+            f"سبب الدخول: {evidence.reasoning[:120] if evidence.reasoning else '—'} | "
+            f"رأس المال: {capital_allocated:.2f} | "
+            f"نسبة المخاطرة: {risk_per_trade}%"
+        )
 
         if position_size <= 0:
             logger.warning(f"[{symbol}] ⚠️ حجم المركز = 0 — تخطي التنفيذ")
