@@ -557,7 +557,25 @@ async def main():
                 # الانتقال: WARMING_UP → RUNNING
                 if state.phase == TradingState.WARMING_UP:
                     if state.ws_connected and state.ws_tick_count >= state.MIN_WS_TICKS:
+                        # 🛡️ تأكيدات (Assertions) قبل الانتقال لـ RUNNING
+                        assert state.ws_connected, (
+                            f"[تأكيد] محاولة RUNNING بدون WebSocket! ticks={state.ws_tick_count}"
+                        )
+                        assert state.ws_tick_count >= state.MIN_WS_TICKS, (
+                            f"[تأكيد] محاولة RUNNING بـ {state.ws_tick_count} tick فقط! "
+                            f"الحد الأدنى={state.MIN_WS_TICKS}"
+                        )
+                        assert state.phase == TradingState.WARMING_UP, (
+                            f"[تأكيد] انتقال RUNNING من {state.phase} وليس من WARMING_UP!"
+                        )
                         state.transition(TradingState.RUNNING)
+                        # تأكيد بعد الانتقال
+                        assert state.trading_allowed, (
+                            f"[تأكيد] RUNNING لكن trading_allowed=False!"
+                        )
+                        assert state.analysis_allowed, (
+                            f"[تأكيد] RUNNING لكن analysis_allowed=False!"
+                        )
                     elif cycle % 3 == 0:
                         logger.info(
                             f"[تسخين] 🔥 WS ticks={state.ws_tick_count}/{state.MIN_WS_TICKS} — "
@@ -583,6 +601,15 @@ async def main():
 
                 # 🛡️ كشف الحالة العالقة
                 state.check_stuck(cycle)
+
+                # 🛡️ تأكيد: RUNNING لا يجب أن يتراجع
+                if state.phase == TradingState.RUNNING:
+                    assert state.ws_connected, (
+                        f"[تأكيد] RUNNING لكن ws_connected=False! دورة #{cycle}"
+                    )
+                    assert state.trading_allowed, (
+                        f"[تأكيد] RUNNING لكن trading_allowed=False! دورة #{cycle}"
+                    )
 
                 # ── المرحلة 1: فحص السماح بالتداول ──
                 trading_allowed = (
