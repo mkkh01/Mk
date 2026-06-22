@@ -208,16 +208,16 @@ async def main():
     await health_monitor.start()
     logger.info("[ENGINE] ✅ Health Monitor started.")
 
-    # ── Set user IDs ────────────────────────────────────────
-    user_id_str = str(settings.admin_id)
-    execution_engine._admin_id = settings.admin_id
-    portfolio_engine.user_id = user_id_str
-    learning_engine.user_id = user_id_str
-    logger.info(f"[SYSTEM] User ID set: {user_id_str}")
+    # ── Set user identifiers ────────────────────────────────
+    telegram_id = settings.admin_id  # int
+    execution_engine._admin_telegram_id = telegram_id
+    portfolio_engine._telegram_id = telegram_id
+    learning_engine.user_id = str(telegram_id)  # learning engine passes through to repos
+    logger.info(f"[SYSTEM] Admin Telegram ID: {telegram_id}")
 
     # ── Sync symbols from database ──────────────────────────
     logger.info("[SYNC] Loading active trading symbols from database...")
-    symbols, coins = await analysis_service.sync_symbols_from_db(user_id_str)
+    symbols, coins = await analysis_service.sync_symbols_from_db(str(telegram_id))
     logger.info(f"[SYNC] Loaded {len(symbols)} active symbols.")
     for coin in coins:
         logger.info(f"[SYMBOL] {coin.symbol} | TF={coin.timeframe} | Capital={coin.capital_allocated}")
@@ -235,11 +235,11 @@ async def main():
                     logger.debug(f"[TRADE CYCLE #{cycle}] Trading blocked (health or risk).")
                 else:
                     async for session in get_session():
-                        coins = await CoinRepository.get_all_active(session, user_id_str)
+                        coins = await CoinRepository.get_all_active(session, telegram_id)
                         logger.debug(f"[TRADE CYCLE #{cycle}] Processing {len(coins)} symbols...")
                         for coin in coins:
                             try:
-                                result = await trading_service.process_symbol(coin.symbol, user_id_str)
+                                result = await trading_service.process_symbol(coin.symbol, str(telegram_id))
                                 if result:
                                     evidence, risk_decision, execution = result
                                     if execution:

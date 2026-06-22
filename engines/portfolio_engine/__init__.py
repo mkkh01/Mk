@@ -2,6 +2,8 @@
 Portfolio Engine — simulates portfolio behavior without real trades.
 Tracks virtual capital, positions, and performance.
 No real exchange connection.
+
+All DB writes go through Repository layer (handles UUID resolution).
 """
 import asyncio
 import logging
@@ -17,7 +19,6 @@ from core.types import PortfolioSnapshot
 from database.repositories import (
     TradeRepository, PositionRepository, PortfolioRepository, get_session
 )
-from database.models import PortfolioSnapshot as DBPortfolioSnapshot
 
 logger = logging.getLogger("portfolio_engine")
 
@@ -39,18 +40,18 @@ class PortfolioEngine(BaseEngine):
         self.total_trades: int = 0
         self.wins: int = 0
         self.losses: int = 0
-        self.user_id: str = ""
+        self._telegram_id: int = 0  # Telegram ID (int), NOT UUID
 
     async def initialize(self) -> None:
         await self.event_bus.subscribe("ExecutionEvent", self._on_execution)
         await self.event_bus.subscribe("MarketTickEvent", self._on_price_update)
-        self.logger.info(f"Portfolio Engine initialized. Balance: {self.balance}")
+        self.logger.info(f"[PORTFOLIO] Initialized. Balance: {self.initial_balance}")
 
     async def start(self) -> None:
         self._running = True
         asyncio.create_task(self._snapshot_loop())
         asyncio.create_task(self._heartbeat_loop())
-        self.logger.info("Portfolio Engine started.")
+        self.logger.info("[PORTFOLIO] Started.")
 
     async def stop(self) -> None:
         self._running = False
@@ -60,16 +61,16 @@ class PortfolioEngine(BaseEngine):
         if event.status == "FILLED":
             self.open_positions_count += 1
             self.total_trades += 1
-            # Deduct fees from balance
             self.balance -= event.fees
-            self.logger.info(f"Position opened: {event.symbol} @ {event.entry_price}")
+            self.logger.info(f"[PORTFOLIO] Position opened: {event.symbol} @ {event.entry_price}")
 
     async def _on_price_update(self, event: MarketTickEvent):
         """Update unrealized PnL based on live prices."""
-        # Recalculate equity
         try:
             async for session in get_session():
-                open_trades = await TradeRepository.get_open_trades_for_user(session, self.user_id)
+                open_trades = await TradeRepository.get_open_trades_for_user(
+                    session, self._telegram_id
+                )
                 unrealized = 0.0
                 for trade in open_trades:
                     price = event.price if trade.symbol == event.symbol else trade.entry_price
@@ -82,8 +83,8 @@ class PortfolioEngine(BaseEngine):
 
                 if self.equity > self.peak_equity:
                     self.peak_equity = self.equity
-        except Exception as e:
-            pass  # Non-critical, skip if DB not available
+        except Exception:
+            pass  # Non-critical
 
     def record_closed_trade(self, won: bool, pnl: float):
         """Update portfolio after a trade closes."""
@@ -134,21 +135,23 @@ class PortfolioEngine(BaseEngine):
         }
 
     async def _snapshot_loop(self):
-        """Periodically save portfolio snapshots to DB."""
+        """Periodically save portfolio snapshots via Repository."""
         while self._running:
             try:
                 snapshot = self.get_snapshot()
-                async for session in get_session():
-                    db_snapshot = DBPortfolioSnapshot(
-                        user_id=self.user_id,
-                        total_balance=snapshot.balance,
-                        available_balance=snapshot.balance,
-                        unrealized_pnl=self.unrealized_pnl,
-                        realized_pnl=self.realized_pnl,
-                        exposure=self.open_positions_count,
-                    )
-                    session.add(db_snapshot)
-                    await session.commit()
+
+                if self._telegram_id:
+                    async for session in get_session():
+                        await PortfolioRepository.save_snapshot(
+                            session, self._telegram_id,
+                            total_balance=snapshot.balance,
+                            available_balance=snapshot.balance,
+                            unrealized_pnl=self.unrealized_pnl,
+                            realized_pnl=self.realized_pnl,
+                            exposure=self.open_positions_count,
+                        )
+                else:
+                    self.logger.debug("[PORTFOLIO] Skipping snapshot — no telegram_id set.")
 
                 # Publish portfolio event
                 await self.event_bus.publish(PortfolioEvent(
@@ -161,9 +164,9 @@ class PortfolioEngine(BaseEngine):
                     status=snapshot.status,
                 ))
             except Exception as e:
-                self.logger.debug(f"Snapshot error (non-critical): {e}")
+                self.logger.debug(f"[PORTFOLIO] Snapshot error (non-critical): {e}")
 
-            await asyncio.sleep(30)  # Every 30 seconds
+            await asyncio.sleep(30)
 
     async def _heartbeat_loop(self):
         while self._running:

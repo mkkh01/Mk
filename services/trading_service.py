@@ -80,11 +80,12 @@ class TradingService:
         if not risk_decision.trade_allowed:
             return (evidence, risk_decision, None)
 
-        # 6. Execute
+        # 6. Execute — pass telegram_id as int (repository resolves to UUID)
         strategy_name = signals[0].strategy_name if signals else "unknown"
+        tid = int(user_id) if user_id else 0
         execution = await self.execution.execute_simulated(
             risk_decision, symbol=symbol, entry_price=price,
-            strategy=strategy_name, user_id=user_id,
+            strategy=strategy_name, telegram_id=tid,
             entry_reason=evidence.reasoning,
         )
 

@@ -247,12 +247,11 @@ class Handlers:
             return ADD_RISK
 
     async def process_add_tf(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """State ADD_TF → END. Saves coin to database."""
+        """State ADD_TF → END. Saves coin via CoinRepository (handles UUID resolution)."""
         query = update.callback_query
         await query.answer()
         data = query.data
-        uid = query.from_user.id
-        user_id = str(uid)
+        uid = query.from_user.id  # Telegram ID (int)
 
         tf = data.replace("tf_", "")
         symbol = context.user_data.get("new_coin_symbol", "UNKNOWN")
@@ -266,16 +265,19 @@ class Handlers:
 
         try:
             async for session in get_session():
-                coin = Coin(
-                    user_id=user_id,
+                # resolve_user_uuid creates the user automatically if needed
+                user_uuid = await UserRepository.resolve_user_uuid(session, uid)
+                logger.info(f"[CONV] User UUID resolved: telegram_id={uid} → {user_uuid[:8]}...")
+
+                # Use CoinRepository.add() — handles UUID resolution and duplicates
+                coin = await CoinRepository.add(
+                    session, uid,  # uid is telegram_id (int) — resolved internally
                     symbol=symbol,
                     capital_allocated=capital,
                     risk_per_trade=risk,
                     timeframe=tf,
                 )
-                session.add(coin)
-                await session.commit()
-                logger.info(f"[CONV] ✅ Coin saved to DB: {symbol} tf={tf} capital={capital}")
+                logger.info(f"[CONV] ✅ Coin saved to DB: {symbol} tf={tf} capital={capital} coin_id={coin.id[:8]}...")
 
         except Exception as e:
             logger.critical(
