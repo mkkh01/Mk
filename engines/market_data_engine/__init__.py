@@ -121,8 +121,15 @@ class MarketDataEngine(BaseEngine):
 
         if not self._symbols:
             self.logger.debug("[بيانات السوق] لا توجد عملات للمتابعة، انتظار...")
-            await asyncio.sleep(60)
-            return
+            for _ in range(10):  # 10 × 2 = 20 ثانية كحد أقصى
+                if self._symbols or not self._running:
+                    break
+                if self._needs_reconnect:
+                    self.logger.info("[بيانات السوق] 🔄 وردت عملات أثناء الانتظار، إعادة المحاولة...")
+                    return  # العودة لـ _run_websocket_loop لإعادة المحاولة فوراً
+                await asyncio.sleep(2)
+            if not self._symbols:
+                return
 
         streams = []
         for symbol in self._symbols:

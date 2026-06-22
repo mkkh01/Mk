@@ -589,8 +589,8 @@ async def main():
     state.transition(TradingState.CONNECTING_WS)
     market_data_engine = MarketDataEngine(event_bus)
     await market_data_engine.initialize()
-    await market_data_engine.start()
-    logger.info("[محرك] ✅ بيانات السوق بدأ")
+    # لا نبدأ المحرك الآن — نزامن العملات أولاً
+    logger.info("[محرك] ✅ بيانات السوق جاهز (بانتظار العملات)")
 
     market_analyzer = MarketAnalyzer(event_bus)
     await market_analyzer.initialize()
@@ -640,6 +640,10 @@ async def main():
     set_system_status("مزامنة_العملات")
     symbols, coins = await analysis_service.sync_symbols_from_db(str(telegram_id))
     logger.info(f"[مزامنة] ✅ تم تحميل {len(symbols)} عملة")
+
+    # NOW بدأ WebSocket — بعد معرفة الرموز
+    await market_data_engine.start()
+    logger.info("[محرك] ✅ بيانات السوق بدأ (بالعملات)")
 
     for coin in coins:
         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
