@@ -12,6 +12,7 @@ _DEFAULT_TELEGRAM_TOKEN = "8896511361:AAEkgrgpgGZ-uIW_EzbQ3294os_E4ZrcEJ8"
 _DEFAULT_DATABASE_URL = "postgresql://postgres.lvvcbqqtjygqlxyhiabm:C,TWTpTrK+7#mp.@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
 _DEFAULT_ADMIN_ID = 1503808643
 _DEFAULT_BINANCE_WS = "wss://stream.binance.com:9443"
+_DEFAULT_BINANCE_REST_PROXY = ""  # يُترك فارغاً — يُملأ من BINANCE_REST_PROXY في .env
 _DEFAULT_CAPITAL = 10.0
 _DEFAULT_TRADE_FEE = 0.001
 _DEFAULT_MAX_RISK = 0.02
@@ -39,6 +40,7 @@ class Settings:
     admin_id: int = 0
     database: DatabaseSettings = field(default_factory=lambda: DatabaseSettings())
     binance_ws_url: str = ""
+    binance_rest_proxy: str = ""  # Cloudflare Worker proxy لـ Binance REST API
     default_capital: float = 0.0
     trade_fee: float = 0.0
     max_risk_per_trade: float = 0.0
@@ -52,6 +54,7 @@ class Settings:
             admin_id=get_env_int("ADMIN_ID", _DEFAULT_ADMIN_ID),
             database=DatabaseSettings(hardcoded_url=_DEFAULT_DATABASE_URL),
             binance_ws_url=get_env("BINANCE_WS_URL", _DEFAULT_BINANCE_WS),
+            binance_rest_proxy=get_env("BINANCE_REST_PROXY", _DEFAULT_BINANCE_REST_PROXY),
             default_capital=get_env_float("DEFAULT_CAPITAL", _DEFAULT_CAPITAL),
             trade_fee=get_env_float("TRADE_FEE", _DEFAULT_TRADE_FEE),
             max_risk_per_trade=get_env_float("MAX_RISK_PER_TRADE", _DEFAULT_MAX_RISK),

@@ -65,17 +65,24 @@ class MarketAnalyzer(BaseEngine):
             f"({len(symbols)} عملة × {len(timeframes)} إطار)"
         )
 
+        # استخدام الـ proxy إذا تم تعيينه (للبيئات المحظورة مثل Render)
+        from config.settings import get_settings
+        rest_proxy = get_settings().binance_rest_proxy
+
         async with httpx.AsyncClient(timeout=15, headers={
             "Accept": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         }) as client:
-            # محاولة عبر عدة endpoints إذا فشل الأول
-            base_urls = [
-                "https://api.binance.com",
-                "https://api1.binance.com",
-                "https://api2.binance.com",
-                "https://api3.binance.com",
-            ]
+            if rest_proxy:
+                base_urls = [rest_proxy]
+                self.logger.info(f"[تسخين] استخدام وكيل: {rest_proxy}")
+            else:
+                base_urls = [
+                    "https://api.binance.com",
+                    "https://api1.binance.com",
+                    "https://api2.binance.com",
+                    "https://api3.binance.com",
+                ]
             for symbol in symbols:
                 for tf in sorted(timeframes):
                     fetched = False
