@@ -431,9 +431,13 @@ async def main():
         for tf in tfs:
             all_timeframes.add(tf)
     if symbols and all_timeframes:
-        await market_analyzer.warmup_candles(symbols, all_timeframes)
-        state.history_loaded = True
-        logger.info("[النظام] ✅ تسخين الشموع اكتمل")
+        warmup_loaded = await market_analyzer.warmup_candles(symbols, all_timeframes)
+        if warmup_loaded > 0:
+            state.history_loaded = True
+            logger.info(f"[النظام] ✅ تسخين الشموع اكتمل — {warmup_loaded} إطار زمني")
+        else:
+            state.add_error("التسخين", f"فشل تحميل {len(symbols) * len(all_timeframes)} إطار زمني")
+            logger.critical("[النظام] ❌ فشل تسخين الشموع — لا توجد بيانات تاريخية")
     else:
         logger.warning("[النظام] ⚠️ لا عملات للتسخين")
 

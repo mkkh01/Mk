@@ -54,10 +54,16 @@ class MarketAnalyzer(BaseEngine):
         await self.event_bus.subscribe("CandleUpdateEvent", self._on_candle_update)
         self.logger.info("[محلل السوق] ✅ تم تهيئة محلل السوق.")
 
-    async def warmup_candles(self, symbols: list[str], timeframes: set[str]):
-        """تحميل شموع تاريخية من Binance REST API لتهيئة المحلل."""
+    async def warmup_candles(self, symbols: list[str], timeframes: set[str]) -> int:
+        """تحميل شموع تاريخية من Binance REST API. تُرجع عدد الأطر الزمنية المحمّلة بنجاح."""
         import httpx
-        self.logger.info(f"[محلل السوق] 🔥 تسخين الشموع لـ {len(symbols)} عملة × {len(timeframes)} إطار...")
+        loaded = 0
+        failed = 0
+        total_expected = len(symbols) * len(timeframes)
+        self.logger.info(
+            f"[تسخين] 🔥 بدء تحميل {total_expected} إطار زمني "
+            f"({len(symbols)} عملة × {len(timeframes)} إطار)"
+        )
 
         async with httpx.AsyncClient(timeout=15) as client:
             for symbol in symbols:
@@ -69,19 +75,24 @@ class MarketAnalyzer(BaseEngine):
                         )
                         resp = await client.get(url)
                         if resp.status_code != 200:
-                            self.logger.warning(f"[تسخين] {symbol} {tf}: HTTP {resp.status_code}")
+                            failed += 1
+                            self.logger.warning(
+                                f"[تسخين] ❌ {symbol} {tf}: HTTP {resp.status_code} — "
+                                f"تأكد من صحة الرمز والإطار الزمني"
+                            )
                             continue
 
                         klines = resp.json()
                         if not isinstance(klines, list) or len(klines) == 0:
-                            self.logger.warning(f"[تسخين] {symbol} {tf}: لا توجد بيانات")
+                            failed += 1
+                            self.logger.warning(f"[تسخين] ❌ {symbol} {tf}: استجابة فارغة")
                             continue
 
                         # تحويل بيانات kline إلى candles
                         candles = []
                         for k in klines:
                             candles.append({
-                                "t": k[0],  # timestamp
+                                "t": k[0],
                                 "o": float(k[1]),
                                 "h": float(k[2]),
                                 "l": float(k[3]),
@@ -89,22 +100,26 @@ class MarketAnalyzer(BaseEngine):
                                 "v": float(k[5]),
                             })
 
-                        # تخزين في الهيكل
+                        # تخزين
                         if symbol not in self._candles:
                             self._candles[symbol] = {}
                         self._candles[symbol][tf] = candles
+                        loaded += 1
 
                         self.logger.info(
                             f"[تسخين] ✅ {symbol} {tf}: {len(candles)} شمعة "
-                            f"(من {candles[0]['o']} إلى {candles[-1]['c']})"
+                            f"(أول={candles[0]['o']:.6f} آخر={candles[-1]['c']:.6f})"
                         )
-                        await asyncio.sleep(0.1)  # تجنب rate limiting
+                        await asyncio.sleep(0.1)
 
                     except Exception as e:
-                        self.logger.error(f"[تسخين] {symbol} {tf}: {e}")
+                        failed += 1
+                        self.logger.error(f"[تسخين] ❌ {symbol} {tf}: {type(e).__name__}: {e}")
 
-        total = sum(len(tf_dict) for tf_dict in self._candles.values())
-        self.logger.info(f"[محلل السوق] ✅ تم تسخين {total} إطار زمني")
+        self.logger.info(
+            f"[تسخين] اكتمل: {loaded} ناجح | {failed} فشل | {total_expected} متوقع"
+        )
+        return loaded
 
     async def start(self) -> None:
         self._running = True
