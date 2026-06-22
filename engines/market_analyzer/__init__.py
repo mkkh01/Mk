@@ -160,6 +160,14 @@ class MarketAnalyzer(BaseEngine):
             if len(bucket) > MAX_CANDLES_HISTORY:
                 bucket.pop(0)
 
+            # تسجيل تشخيصي — كل 50 شمعة لكل إطار
+            count = len(bucket)
+            if count % 50 == 0 or count == 1:
+                self.logger.info(
+                    f"[محلل السوق] 📈 {symbol} {timeframe}: "
+                    f"{count} شمعة | آخر سعر={event.close:.6f}"
+                )
+
     # ═══════════════════════════════════════════════════════════
     # حلقة التحليل الدورية
     # ═══════════════════════════════════════════════════════════
@@ -207,7 +215,7 @@ class MarketAnalyzer(BaseEngine):
         candles = self._candles.get(symbol, {}).get(timeframe, [])
 
         if len(candles) < MIN_CANDLES_FOR_ANALYSIS:
-            self.logger.debug(
+            self.logger.info(
                 f"[تحليل] ⏳ {symbol} {timeframe}: "
                 f"{len(candles)}/{MIN_CANDLES_FOR_ANALYSIS} شمعة — غير كافٍ للتحليل"
             )

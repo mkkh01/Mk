@@ -215,12 +215,25 @@ class MarketDataEngine(BaseEngine):
         is_closed = k.get("x", False)
         kline_start = k.get("t", 0)
 
-        # نشر الحدث
+        # نشر الحدث عبر Event Bus مع timestamp الشمعة الحقيقي
+        from datetime import timezone as tz
+        candle_ts = datetime.fromtimestamp(kline_start / 1000, tz=tz.utc)
         await self.event_bus.publish(CandleUpdateEvent(
             symbol=symbol, timeframe=interval,
             open=open_p, high=high_p, low=low_p, close=close_p,
             volume=volume_v, is_closed=is_closed,
+            timestamp=candle_ts,
         ))
+
+        # تسجيل تشخيصي — مرة كل 10 شموع
+        if not hasattr(self, '_kline_count'):
+            self._kline_count = 0
+        self._kline_count += 1
+        if self._kline_count % 10 == 0:
+            self.logger.info(
+                f"[بيانات السوق] 📊 شمعة #{self._kline_count}: "
+                f"{symbol} {interval} س={close_p:.6f} | مغلقة={'نعم' if is_closed else 'لا'}"
+            )
 
         # تخزين الشمعة المكتملة فقط في الهيكل
         if not is_closed:
