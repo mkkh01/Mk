@@ -38,17 +38,35 @@ def get_risk_management_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
-def get_timeframe_menu():
-    keyboard = [
-        [
-            InlineKeyboardButton("5m", callback_data="tf_5m"),
-            InlineKeyboardButton("15m", callback_data="tf_15m"),
-            InlineKeyboardButton("1h", callback_data="tf_1h"),
-        ],
-        [
-            InlineKeyboardButton("4h", callback_data="tf_4h"),
-            InlineKeyboardButton("1d", callback_data="tf_1d"),
-        ],
-        [InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")],
+def get_timeframe_menu(selected_timeframes=None):
+    """
+    Multi-select timeframe menu with checkbox-style emulated UI.
+    
+    Args:
+        selected_timeframes: set of selected timeframe strings (e.g. {'1m', '4h'})
+    
+    Returns:
+        InlineKeyboardMarkup with toggle buttons and a done button.
+    """
+    if selected_timeframes is None:
+        selected_timeframes = set()
+
+    tfs = [
+        ("1m", "1m"), ("5m", "5m"), ("15m", "15m"),
+        ("1h", "1h"), ("4h", "4h"), ("1d", "1d"),
     ]
-    return InlineKeyboardMarkup(keyboard)
+    buttons = []
+    row = []
+    for tf, display in tfs:
+        checked = "✅" if tf in selected_timeframes else "☑️"
+        row.append(InlineKeyboardButton(
+            f"{checked} {display}",
+            callback_data=f'tf_toggle_{tf}'
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+
+    buttons.append([InlineKeyboardButton("✅ تم - حفظ", callback_data='tf_done')])
+    buttons.append([InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")])
+    return InlineKeyboardMarkup(buttons)

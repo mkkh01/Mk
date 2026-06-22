@@ -22,7 +22,7 @@ from config.constants import ADMIN_ID
 logger = logging.getLogger("telegram.handlers")
 
 # ── Conversation States ─────────────────────────────────────
-ADD_SYMBOL, ADD_CAPITAL, ADD_RISK, ADD_TF = range(4)
+ADD_SYMBOL, ADD_CAPITAL, ADD_RISK, ADD_TIMEFRAMES = range(4)
 
 
 class Handlers:
@@ -36,13 +36,13 @@ class Handlers:
         self.trading_service = trading_service
         self.portfolio_service = portfolio_service
         self.risk_service = risk_service
-        logger.info(f"[HANDLERS] Initialized (admin={admin_id})")
+        logger.info(f"[معالجات] تم التهيئة (admin={admin_id})")
 
     async def _is_admin(self, update: Update) -> bool:
         uid = update.effective_user.id if update.effective_user else 0
         is_admin = uid == self.admin_id
         if not is_admin:
-            logger.warning(f"[AUTH] Unauthorized access attempt from user {uid}")
+            logger.warning(f"[صلاحية] محاولة وصول غير مصرح من المستخدم {uid}")
         return is_admin
 
     def _log_conversation(self, step: str, update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -53,23 +53,23 @@ class Handlers:
         ud = dict(context.user_data)
         ud.pop("__state__", None)
         logger.info(
-            f"[CONV] [{step}] user={uid} state={state} "
+            f"[محادثة] [{step}] user={uid} state={state} "
             f"data={json.dumps(ud, default=str, ensure_ascii=False)} {extra}"
         )
 
     # ── Start / Cancel ──────────────────────────────────────
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[START] /start from user={update.effective_user.id}")
+        logger.info(f"[بدء] /start من المستخدم={update.effective_user.id}")
         if not await self._is_admin(update):
             return
         user_id = str(update.effective_user.id)
         try:
             async for session in get_session():
                 user = await UserRepository.get_or_create(session, int(user_id))
-                logger.info(f"[START] User record ensured: {user.telegram_id}")
+                logger.info(f"[بدء] تم التأكد من سجل المستخدم: {user.telegram_id}")
         except Exception as e:
-            logger.error(f"[START] DB error: {e}", exc_info=True)
+            logger.error(f"[بدء] خطأ في قاعدة البيانات: {e}", exc_info=True)
             await update.message.reply_text("⚠️ خطأ في الاتصال بقاعدة البيانات. حاول لاحقاً.")
             return
 
@@ -81,11 +81,11 @@ class Handlers:
             reply_markup=get_main_menu(),
             parse_mode="Markdown",
         )
-        logger.info("[START] Main menu sent.")
+        logger.info("[بدء] تم إرسال القائمة الرئيسية.")
 
     async def cancel_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Cancel the current conversation."""
-        logger.info(f"[CONV] /cancel from user={update.effective_user.id}")
+        logger.info(f"[محادثة] /cancel من المستخدم={update.effective_user.id}")
         context.user_data.clear()
         from bots.telegram.keyboards import get_main_menu
         await update.message.reply_text(
@@ -104,7 +104,7 @@ class Handlers:
         text = update.message.text
         uid = update.effective_user.id
         action = context.user_data.get("action")
-        logger.info(f"[MSG] user={uid} text={repr(text)} action={action}")
+        logger.info(f"[رسالة] user={uid} text={repr(text)} action={action}")
 
         if action:
             await self._process_action(update, context)
@@ -129,38 +129,38 @@ class Handlers:
 
         handler = routes.get(text)
         if handler:
-            logger.info(f"[MSG] Routed to: {handler.__name__}")
+            logger.info(f"[رسالة] تم التوجيه إلى: {handler.__name__}")
             try:
                 await handler(update, context)
             except Exception as e:
-                logger.error(f"[MSG] Handler error ({handler.__name__}): {e}", exc_info=True)
+                logger.error(f"[رسالة] خطأ في المعالج ({handler.__name__}): {e}", exc_info=True)
                 await update.message.reply_text("⚠️ حدث خطأ. حاول مرة أخرى.")
         else:
-            logger.debug(f"[MSG] No route for: {repr(text)}")
+            logger.debug(f"[رسالة] لا مسار لـ: {repr(text)}")
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Global CallbackQueryHandler — for NON-conversation callbacks only."""
         query = update.callback_query
         data = query.data
         uid = query.from_user.id
-        logger.info(f"[CALLBACK] user={uid} data={repr(data)}")
+        logger.info(f"[استدعاء] user={uid} data={repr(data)}")
 
         await query.answer()
 
         # Do NOT handle tf_* callbacks here — ConversationHandler handles those
         if data.startswith("tf_"):
-            logger.debug(f"[CALLBACK] Skipping tf_* in global handler (belongs to conversation)")
+            logger.debug(f"[استدعاء] تخطي tf_* في المعالج العام (يتبع المحادثة)")
             return
 
         try:
             if data == "main_menu":
                 from bots.telegram.keyboards import get_main_menu
                 await query.edit_message_text("🏠 القائمة الرئيسية", reply_markup=get_main_menu())
-                logger.info("[CALLBACK] Main menu shown.")
+                logger.info("[استدعاء] تم عرض القائمة الرئيسية.")
             elif data == "edit_base_capital":
                 await query.edit_message_text("💵 أرسل رأس المال الأساسي الجديد:")
                 context.user_data["action"] = "edit_base_capital"
-                logger.info("[CALLBACK] Edit base capital initiated.")
+                logger.info("[استدعاء] بدء تعديل رأس المال الأساسي.")
             elif data.startswith("set_risk_"):
                 risk_val = float(data.replace("set_risk_", ""))
                 async for session in get_session():
@@ -168,12 +168,12 @@ class Handlers:
                     if user:
                         user.risk_per_trade = risk_val
                         await session.commit()
-                        logger.info(f"[CALLBACK] Risk set to {risk_val}%")
+                        logger.info(f"[استدعاء] تم تعيين المخاطرة إلى {risk_val}%")
                 await query.edit_message_text(f"✅ تم تعيين نسبة المخاطرة إلى {risk_val}%")
             else:
-                logger.debug(f"[CALLBACK] Unhandled data: {repr(data)}")
+                logger.debug(f"[استدعاء] بيانات غير معالجة: {repr(data)}")
         except Exception as e:
-            logger.error(f"[CALLBACK] Error: {e}", exc_info=True)
+            logger.error(f"[استدعاء] خطأ: {e}", exc_info=True)
             await query.edit_message_text("⚠️ حدث خطأ.")
 
     # ── Conversation Handlers (Add Coin Flow) ───────────────
@@ -181,15 +181,15 @@ class Handlers:
     async def start_add_coin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Entry point: user clicked '➕ إضافة عملة'. Enters ADD_SYMBOL state."""
         uid = update.effective_user.id if update.effective_user else "?"
-        logger.info(f"[CONV] ENTRY: start_add_coin user={uid}")
+        logger.info(f"[محادثة] دخول: start_add_coin user={uid}")
 
         if not await self._is_admin(update):
-            logger.warning(f"[CONV] ENTRY BLOCKED: non-admin user={uid}")
+            logger.warning(f"[محادثة] دخول ممنوع: مستخدم غير مصرح={uid}")
             return ConversationHandler.END
 
         context.user_data["__state__"] = "ADD_SYMBOL"
         await update.message.reply_text("✍️ أرسل رمز العملة (مثال: BTCUSDT):")
-        logger.info(f"[CONV] → STATE: ADD_SYMBOL user={uid}")
+        logger.info(f"[محادثة] → الحالة: ADD_SYMBOL user={uid}")
         return ADD_SYMBOL
 
     async def process_add_symbol(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,9 +199,9 @@ class Handlers:
         context.user_data["new_coin_symbol"] = symbol
         self._log_conversation("process_add_symbol", update, context, f"symbol={symbol}")
 
-        await update.message.reply_text("💰 أدخل رأس المال المخصص:")
+        await update.message.reply_text("💰 أدخل رأس المال المخصص (USDT):")
         context.user_data["__state__"] = "ADD_CAPITAL"
-        logger.info(f"[CONV] → STATE: ADD_CAPITAL user={uid}")
+        logger.info(f"[محادثة] → الحالة: ADD_CAPITAL user={uid}")
         return ADD_CAPITAL
 
     async def process_add_capital(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -209,79 +209,128 @@ class Handlers:
         uid = update.effective_user.id
         try:
             capital = float(update.message.text)
+            if capital <= 0:
+                raise ValueError("رأس المال يجب أن يكون أكبر من صفر")
             context.user_data["new_coin_capital"] = capital
             self._log_conversation("process_add_capital", update, context, f"capital={capital}")
 
-            await update.message.reply_text("⚠️ أدخل نسبة المخاطرة (مثال: 1):")
+            await update.message.reply_text("⚠️ أدخل نسبة المخاطرة (مثال: 1.5):")
             context.user_data["__state__"] = "ADD_RISK"
-            logger.info(f"[CONV] → STATE: ADD_RISK user={uid}")
+            logger.info(f"[محادثة] → الحالة: ADD_RISK user={uid}")
             return ADD_RISK
         except ValueError:
-            logger.warning(f"[CONV] Invalid capital value: {repr(update.message.text)}")
-            await update.message.reply_text("❌ خطأ: يرجى إدخال قيمة عددية صحيحة (مثال: 100).")
+            logger.warning(f"[محادثة] قيمة رأس مال غير صالحة: {repr(update.message.text)}")
+            await update.message.reply_text(
+                "❌ خطأ: يرجى إدخال قيمة عددية صحيحة أكبر من صفر (مثال: 100)."
+            )
             return ADD_CAPITAL
 
     async def process_add_risk(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """State ADD_RISK → ADD_TF. Stores risk %, sends timeframe keyboard."""
+        """State ADD_RISK → ADD_TIMEFRAMES. Stores risk %, sends multi-select timeframe keyboard."""
         uid = update.effective_user.id
         try:
             risk = float(update.message.text)
+            if risk <= 0 or risk > 100:
+                raise ValueError("نسبة المخاطرة يجب أن تكون بين 0 و 100")
             context.user_data["new_coin_risk"] = risk
             self._log_conversation("process_add_risk", update, context, f"risk={risk}%")
 
+            # Initialize selected timeframes set
+            context.user_data["selected_timeframes"] = set()
+
             from bots.telegram.keyboards import get_timeframe_menu
             await update.message.reply_text(
-                "⏱ اختر الإطار الزمني:",
-                reply_markup=get_timeframe_menu(),
+                "⏱ اختر الأطر الزمنية (يمكنك اختيار أكثر من واحد):",
+                reply_markup=get_timeframe_menu(selected_timeframes=set()),
             )
-            context.user_data["__state__"] = "ADD_TF"
-            logger.info(f"[CONV] → STATE: ADD_TF user={uid} (timeframe keyboard sent)")
-            return ADD_TF
+            context.user_data["__state__"] = "ADD_TIMEFRAMES"
+            logger.info(f"[محادثة] → الحالة: ADD_TIMEFRAMES user={uid} (قائمة الأطر الزمنية المتعددة)")
+            return ADD_TIMEFRAMES
         except ValueError:
-            logger.warning(f"[CONV] Invalid risk value: {repr(update.message.text)}")
-            await update.message.reply_text("❌ خطأ: يرجى إدخال قيمة عددية صحيحة (مثال: 1).")
+            logger.warning(f"[محادثة] قيمة مخاطرة غير صالحة: {repr(update.message.text)}")
+            await update.message.reply_text(
+                "❌ خطأ: يرجى إدخال قيمة عددية بين 0 و 100 (مثال: 1.5)."
+            )
             return ADD_RISK
         except Exception as e:
-            logger.error(f"[CONV] Unexpected error in process_add_risk: {e}", exc_info=True)
+            logger.error(f"[محادثة] خطأ غير متوقع في process_add_risk: {e}", exc_info=True)
             await update.message.reply_text("⚠️ حدث خطأ. أعد المحاولة.")
             return ADD_RISK
 
-    async def process_add_tf(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """State ADD_TF → END. Saves coin via CoinRepository (handles UUID resolution)."""
+    async def process_add_tf_toggle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Toggle a timeframe selection and rebuild the keyboard."""
         query = update.callback_query
         await query.answer()
         data = query.data
-        uid = query.from_user.id  # Telegram ID (int)
+        uid = query.from_user.id
 
-        tf = data.replace("tf_", "")
+        # Parse which timeframe was toggled
+        tf = data.replace("tf_toggle_", "")
+        selected = context.user_data.get("selected_timeframes", set())
+
+        if tf in selected:
+            selected.discard(tf)
+            logger.info(f"[محادثة] إلغاء تحديد الإطار الزمني: {tf} user={uid}")
+        else:
+            selected.add(tf)
+            logger.info(f"[محادثة] تحديد الإطار الزمني: {tf} user={uid}")
+
+        context.user_data["selected_timeframes"] = selected
+
+        from bots.telegram.keyboards import get_timeframe_menu
+        await query.edit_message_text(
+            f"⏱ اختر الأطر الزمنية (يمكنك اختيار أكثر من واحد):\n\n"
+            f"المختار حالياً: {', '.join(sorted(selected)) if selected else 'لا شيء'}",
+            reply_markup=get_timeframe_menu(selected_timeframes=selected),
+        )
+        return ADD_TIMEFRAMES
+
+    async def process_add_tf_done(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Save coin with all selected timeframes."""
+        query = update.callback_query
+        await query.answer()
+        uid = query.from_user.id
+
+        selected = context.user_data.get("selected_timeframes", set())
         symbol = context.user_data.get("new_coin_symbol", "UNKNOWN")
         capital = context.user_data.get("new_coin_capital", 0)
         risk = context.user_data.get("new_coin_risk", 0)
 
+        if not selected:
+            logger.warning(f"[محادثة] محاولة حفظ بدون أطر زمنية user={uid} symbol={symbol}")
+            await query.answer("⚠️ اختر إطاراً زمنياً واحداً على الأقل!", show_alert=True)
+            return ADD_TIMEFRAMES
+
+        # Join timeframes as comma-separated string
+        tfs_str = ",".join(sorted(selected))
+
         logger.info(
-            f"[CONV] process_add_tf user={uid} data={repr(data)} "
-            f"symbol={symbol} capital={capital} risk={risk} tf={tf}"
+            f"[محادثة] process_add_tf_done user={uid} "
+            f"symbol={symbol} capital={capital} risk={risk} tfs={tfs_str}"
         )
 
         try:
             async for session in get_session():
-                # resolve_user_uuid creates the user automatically if needed
                 user_uuid = await UserRepository.resolve_user_uuid(session, uid)
-                logger.info(f"[CONV] User UUID resolved: telegram_id={uid} → {user_uuid[:8]}...")
+                logger.info(
+                    f"[محادثة] تم تحديد UUID المستخدم: telegram_id={uid} → {user_uuid[:8]}..."
+                )
 
-                # Use CoinRepository.add() — handles UUID resolution and duplicates
                 coin = await CoinRepository.add(
-                    session, uid,  # uid is telegram_id (int) — resolved internally
+                    session, uid,
                     symbol=symbol,
                     capital_allocated=capital,
                     risk_per_trade=risk,
-                    timeframe=tf,
+                    timeframe=tfs_str,
                 )
-                logger.info(f"[CONV] ✅ Coin saved to DB: {symbol} tf={tf} capital={capital} coin_id={coin.id[:8]}...")
+                logger.info(
+                    f"[محادثة] ✅ تم حفظ العملة: {symbol} tfs={tfs_str} "
+                    f"capital={capital} coin_id={coin.id[:8]}..."
+                )
 
         except Exception as e:
             logger.critical(
-                f"[CONV] ❌ DB save failed for {symbol}: {e}",
+                f"[محادثة] ❌ فشل حفظ {symbol} في قاعدة البيانات: {e}",
                 exc_info=True,
             )
             await query.edit_message_text(
@@ -291,20 +340,21 @@ class Handlers:
             context.user_data.clear()
             return ConversationHandler.END
 
+        tfs_display = ", ".join(sorted(selected))
         await query.edit_message_text(
             f"✅ تمت إضافة {symbol} بنجاح!\n"
-            f"💰 رأس المال: {capital}\n"
+            f"💰 رأس المال: {capital} USDT\n"
             f"⚠️ المخاطرة: {risk}%\n"
-            f"⏱ الإطار الزمني: {tf}",
+            f"⏱ الأطر الزمنية: {tfs_display}",
         )
-        logger.info(f"[CONV] ✅ END: {symbol} added successfully.")
+        logger.info(f"[محادثة] ✅ انتهى: تمت إضافة {symbol} بنجاح.")
         context.user_data.clear()
         return ConversationHandler.END
 
     # ── Command Handlers ────────────────────────────────────
 
     async def cmd_live_prices(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] live_prices user={update.effective_user.id}")
+        logger.info(f"[أمر] الأسعار_المباشرة user={update.effective_user.id}")
         cache = "/tmp/live_prices.json"
         if not os.path.exists(cache):
             await update.message.reply_text("⏳ جاري الاتصال بالرادار... حاول بعد لحظات.")
@@ -322,10 +372,10 @@ class Handlers:
         for s, d in list(prices.items())[:15]:
             msg += f"🪙 {s}: `{d['price']}`\n"
         await update.message.reply_text(msg, parse_mode="Markdown")
-        logger.info(f"[CMD] live_prices: {len(prices)} symbols shown.")
+        logger.info(f"[أمر] الأسعار_المباشرة: تم عرض {len(prices)} رمز.")
 
     async def cmd_delete_coin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] delete_coin user={update.effective_user.id}")
+        logger.info(f"[أمر] حذف_عملة user={update.effective_user.id}")
         user_id = str(update.effective_user.id)
         try:
             async for session in get_session():
@@ -338,13 +388,13 @@ class Handlers:
                     msg += f"- `{c.symbol}`\n"
                 await update.message.reply_text(msg, parse_mode="Markdown")
                 context.user_data["action"] = "delete_coin"
-                logger.info(f"[CMD] delete_coin: {len(coins)} coins listed.")
+                logger.info(f"[أمر] حذف_عملة: عرض {len(coins)} عملة.")
         except Exception as e:
-            logger.error(f"[CMD] delete_coin error: {e}", exc_info=True)
+            logger.error(f"[أمر] خطأ في حذف_عملة: {e}", exc_info=True)
             await update.message.reply_text("⚠️ خطأ في جلب قائمة العملات.")
 
     async def cmd_edit_coin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] edit_coin user={update.effective_user.id}")
+        logger.info(f"[أمر] تعديل_عملة user={update.effective_user.id}")
         user_id = str(update.effective_user.id)
         try:
             async for session in get_session():
@@ -354,19 +404,26 @@ class Handlers:
                     return
                 msg = "⚙️ أرسل رمز العملة للتعديل:\n"
                 for c in coins:
-                    msg += f"- `{c.symbol}` (رأس مال: {c.capital_allocated}, إطار: {c.timeframe})\n"
+                    msg += (
+                        f"- `{c.symbol}` "
+                        f"(رأس مال: {c.capital_allocated}, "
+                        f"إطار: {c.timeframe}, "
+                        f"مخاطرة: {c.risk_per_trade}%)\n"
+                    )
                 await update.message.reply_text(msg, parse_mode="Markdown")
                 context.user_data["action"] = "edit_coin_start"
-                logger.info(f"[CMD] edit_coin: {len(coins)} coins listed.")
+                logger.info(f"[أمر] تعديل_عملة: عرض {len(coins)} عملة.")
         except Exception as e:
-            logger.error(f"[CMD] edit_coin error: {e}", exc_info=True)
+            logger.error(f"[أمر] خطأ في تعديل_عملة: {e}", exc_info=True)
             await update.message.reply_text("⚠️ خطأ في جلب قائمة العملات.")
 
     async def cmd_capital_mgmt(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] capital_mgmt user={update.effective_user.id}")
+        logger.info(f"[أمر] إدارة_رأس_المال user={update.effective_user.id}")
         try:
             async for session in get_session():
-                user = await UserRepository.get_by_telegram_id(session, int(update.effective_user.id))
+                user = await UserRepository.get_by_telegram_id(
+                    session, int(update.effective_user.id)
+                )
                 if user:
                     msg = (
                         f"💰 *إدارة رأس المال*\n\n"
@@ -376,16 +433,18 @@ class Handlers:
                     )
                     from bots.telegram.keyboards import get_capital_management_menu
                     await update.message.reply_text(
-                        msg, reply_markup=get_capital_management_menu(), parse_mode="Markdown"
+                        msg,
+                        reply_markup=get_capital_management_menu(),
+                        parse_mode="Markdown",
                     )
                     return
             await update.message.reply_text("❌ لم يتم العثور على بيانات المستخدم.")
         except Exception as e:
-            logger.error(f"[CMD] capital_mgmt error: {e}", exc_info=True)
+            logger.error(f"[أمر] خطأ في إدارة_رأس_المال: {e}", exc_info=True)
             await update.message.reply_text("⚠️ خطأ في جلب بيانات رأس المال.")
 
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] stats user={update.effective_user.id}")
+        logger.info(f"[أمر] إحصائيات user={update.effective_user.id}")
         user_id = str(update.effective_user.id)
         if self.portfolio_service:
             try:
@@ -393,7 +452,7 @@ class Handlers:
                 await update.message.reply_text(report, parse_mode="Markdown")
                 return
             except Exception as e:
-                logger.error(f"[CMD] stats via portfolio_service: {e}")
+                logger.error(f"[أمر] إحصائيات عبر portfolio_service: {e}")
         # Fallback
         try:
             from database.repositories import TradeRepository
@@ -413,11 +472,11 @@ class Handlers:
                 )
                 await update.message.reply_text(msg, parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"[CMD] stats error: {e}", exc_info=True)
+            logger.error(f"[أمر] خطأ في الإحصائيات: {e}", exc_info=True)
             await update.message.reply_text("⚠️ خطأ في جلب الإحصائيات.")
 
     async def cmd_trade_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] trade_history user={update.effective_user.id}")
+        logger.info(f"[أمر] سجل_الصفقات user={update.effective_user.id}")
         user_id = str(update.effective_user.id)
         if self.portfolio_service:
             try:
@@ -425,7 +484,7 @@ class Handlers:
                 await update.message.reply_text(report, parse_mode="Markdown")
                 return
             except Exception as e:
-                logger.error(f"[CMD] trade_history via service: {e}")
+                logger.error(f"[أمر] سجل_الصفقات عبر الخدمة: {e}")
         try:
             from database.repositories import TradeRepository
             async for session in get_session():
@@ -439,11 +498,11 @@ class Handlers:
                     msg += f"{icon} {t.symbol} | `{t.pnl:.2f}`\n"
                 await update.message.reply_text(msg, parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"[CMD] trade_history error: {e}", exc_info=True)
+            logger.error(f"[أمر] خطأ في سجل_الصفقات: {e}", exc_info=True)
             await update.message.reply_text("⚠️ خطأ في جلب سجل الصفقات.")
 
     async def cmd_performance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] performance user={update.effective_user.id}")
+        logger.info(f"[أمر] أداء user={update.effective_user.id}")
         user_id = str(update.effective_user.id)
         if self.portfolio_service:
             try:
@@ -451,14 +510,16 @@ class Handlers:
                 await update.message.reply_text(report, parse_mode="Markdown")
                 return
             except Exception as e:
-                logger.error(f"[CMD] performance error: {e}")
+                logger.error(f"[أمر] خطأ في الأداء: {e}")
         await update.message.reply_text("📊 استخدم 📊 الإحصائيات للحصول على التفاصيل.")
 
     async def cmd_ai_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] ai_report user={update.effective_user.id}")
+        logger.info(f"[أمر] تقرير_الذكاء user={update.effective_user.id}")
         if self.portfolio_service:
             try:
-                status = await self.portfolio_service.get_full_status(str(update.effective_user.id))
+                status = await self.portfolio_service.get_full_status(
+                    str(update.effective_user.id)
+                )
                 recs = status.get("recommendations", [])
                 strat = status.get("strategy_performance", {})
                 msg = "🧠 *تقرير النظام*\n━━━━━━━━━━━━━━\n"
@@ -469,39 +530,106 @@ class Handlers:
                 if strat:
                     msg += "\n📊 *أداء الاستراتيجيات:*\n"
                     for name, perf in list(strat.items())[:5]:
-                        msg += f"• {name}: {perf.get('win_rate', 0)}% WR | {perf.get('total_trades', 0)} trades\n"
+                        msg += (
+                            f"• {name}: {perf.get('win_rate', 0)}% WR "
+                            f"| {perf.get('total_trades', 0)} trades\n"
+                        )
                 if not recs and not strat:
                     msg += "\nلا توجد بيانات كافية بعد."
                 await update.message.reply_text(msg, parse_mode="Markdown")
                 return
             except Exception as e:
-                logger.error(f"[CMD] ai_report error: {e}", exc_info=True)
+                logger.error(f"[أمر] خطأ في تقرير_الذكاء: {e}", exc_info=True)
         await update.message.reply_text("🧠 لا توجد بيانات تعلم كافية بعد.")
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] status user={update.effective_user.id}")
+        """تقرير حالة النظام — تقرير ديناميكي شامل."""
+        logger.info(f"[أمر] حالة_النظام user={update.effective_user.id}")
+
+        # Default values when no service available
+        portfolio_value = 0.0
+        equity = 0.0
+        open_positions = 0
+        today_trades = 0
+        last_market_sync = "غير متوفر"
+        last_cycle_duration = "غير متوفر"
+        signals_processed = 0
+        signals_rejected = 0
+        rejection_reasons = []
+        health = {}
+
         if self.portfolio_service:
             try:
-                status = await self.portfolio_service.get_full_status(str(update.effective_user.id))
+                status = await self.portfolio_service.get_full_status(
+                    str(update.effective_user.id)
+                )
                 portfolio = status.get("portfolio", {})
                 health = status.get("health", {})
-                msg = (
-                    f"📡 *حالة النظام*\n━━━━━━━━━━━━━━\n"
-                    f"💼 المحفظة: `{portfolio.get('balance', 0):.2f} USDT`\n"
-                    f"📊 Equity: `{portfolio.get('equity', 0):.2f}`\n"
-                    f"🔓 مفتوحة: {portfolio.get('open_positions', 0)}\n"
-                    f"✅ نسبة الربح: {portfolio.get('win_rate', 0):.1f}%\n"
-                    f"📉 السحب: {portfolio.get('drawdown', 0):.2f}%\n"
-                    f"⚙️ الحالة: {health.get('system_state', 'UNKNOWN')}"
-                )
-                await update.message.reply_text(msg, parse_mode="Markdown")
-                return
+                market = status.get("market", {})
+                signals = status.get("signals", {})
+
+                portfolio_value = portfolio.get("balance", portfolio.get("total_value", 0))
+                equity = portfolio.get("equity", portfolio.get("current_equity", 0))
+                open_positions = portfolio.get("open_positions", portfolio.get("open_trades", 0))
+                today_trades = portfolio.get("today_trades", portfolio.get("daily_trades", 0))
+                last_market_sync = market.get("last_sync", market.get("last_update", "غير متوفر"))
+                last_cycle_duration = market.get("cycle_duration", market.get("last_cycle_ms", "غير متوفر"))
+                signals_processed = signals.get("processed", 0)
+                signals_rejected = signals.get("rejected", 0)
+                rejection_reasons = signals.get("rejection_reasons", [])
+
             except Exception as e:
-                logger.error(f"[CMD] status error: {e}", exc_info=True)
-        await update.message.reply_text("📡 النظام يعمل. استخدم /start للمزيد.")
+                logger.error(f"[أمر] حالة_النظام خطأ في جلب البيانات: {e}", exc_info=True)
+
+        # ── Build health status ──
+        def health_icon(ok: bool) -> str:
+            return "🟢" if ok else "🔴"
+
+        db_ok = health.get("database", health.get("db", True))
+        api_ok = health.get("api", health.get("exchange_api", True))
+        bot_ok = health.get("bot", health.get("telegram_bot", True))
+        scheduler_ok = health.get("scheduler", health.get("scheduler_running", True))
+        strategies_ok = health.get("strategies", health.get("strategy_engine", True))
+        market_data_ok = health.get("market_data", health.get("data_feed", True))
+
+        # ── Format rejection reasons ──
+        reasons_text = ""
+        if rejection_reasons:
+            reasons_text = "\n📋 *أسباب الرفض:*\n"
+            # Group by reason
+            from collections import Counter
+            counts = Counter(rejection_reasons)
+            for reason, count in counts.most_common(5):
+                reasons_text += f"  • {reason}: {count}\n"
+
+        msg = (
+            f"📡 *حالة النظام*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"💼 *المحفظة*\n"
+            f"  💰 قيمة المحفظة: `{portfolio_value:,.2f} USDT`\n"
+            f"  📊 Equity: `{equity:,.2f} USDT`\n"
+            f"  🔓 صفقات مفتوحة: {open_positions}\n"
+            f"  📅 صفقات اليوم: {today_trades}\n\n"
+            f"🔄 *السوق*\n"
+            f"  🕐 آخر مزامنة: {last_market_sync}\n"
+            f"  ⏱ مدة آخر دورة: {last_cycle_duration}\n\n"
+            f"📶 *الإشارات*\n"
+            f"  ✅ معالجة: {signals_processed}\n"
+            f"  ❌ مرفوضة: {signals_rejected}"
+            f"{reasons_text}\n"
+            f"🏥 *صحة الخدمات*\n"
+            f"  {health_icon(db_ok)} قاعدة البيانات\n"
+            f"  {health_icon(api_ok)} API\n"
+            f"  {health_icon(bot_ok)} البوت\n"
+            f"  {health_icon(scheduler_ok)} المجدول\n"
+            f"  {health_icon(strategies_ok)} الاستراتيجيات\n"
+            f"  {health_icon(market_data_ok)} بيانات السوق"
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        logger.info(f"[أمر] حالة_النظام: تم عرض التقرير الكامل.")
 
     async def cmd_emergency_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.warning(f"[CMD] EMERGENCY STOP user={update.effective_user.id}")
+        logger.warning(f"[أمر] إيقاف_طوارئ user={update.effective_user.id}")
         if self.risk_service:
             self.risk_service.emergency_stop("Manual from Telegram")
         try:
@@ -511,11 +639,11 @@ class Handlers:
                 if user:
                     await UserRepository.update_status(session, user, False, True)
         except Exception as e:
-            logger.error(f"[CMD] emergency_stop DB error: {e}")
-        await update.message.reply_text("🛑 *EMERGENCY STOP ACTIVATED!*", parse_mode="Markdown")
+            logger.error(f"[أمر] خطأ في إيقاف_الطوارئ DB: {e}")
+        await update.message.reply_text("🛑 *تم تفعيل إيقاف الطوارئ!*", parse_mode="Markdown")
 
     async def cmd_start_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] START TRADING user={update.effective_user.id}")
+        logger.info(f"[أمر] تشغيل_التداول user={update.effective_user.id}")
         if self.risk_service:
             self.risk_service.resume_trading()
         try:
@@ -525,11 +653,11 @@ class Handlers:
                 if user:
                     await UserRepository.update_status(session, user, True)
         except Exception as e:
-            logger.error(f"[CMD] start_trading DB error: {e}")
+            logger.error(f"[أمر] خطأ في تشغيل_التداول DB: {e}")
         await update.message.reply_text("▶️ نظام التداول يعمل الآن.")
 
     async def cmd_stop_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        logger.info(f"[CMD] STOP TRADING user={update.effective_user.id}")
+        logger.info(f"[أمر] إيقاف_التداول user={update.effective_user.id}")
         if self.risk_service:
             self.risk_service.emergency_stop("Manual stop")
         try:
@@ -539,7 +667,7 @@ class Handlers:
                 if user:
                     await UserRepository.update_status(session, user, False)
         except Exception as e:
-            logger.error(f"[CMD] stop_trading DB error: {e}")
+            logger.error(f"[أمر] خطأ في إيقاف_التداول DB: {e}")
         await update.message.reply_text("⏸ نظام التداول متوقف.")
 
     # ── Action Processing (edit/delete flows) ───────────────
@@ -548,7 +676,7 @@ class Handlers:
         action = context.user_data.get("action")
         text = update.message.text.strip().upper()
         uid = update.effective_user.id
-        logger.info(f"[ACTION] user={uid} action={action} text={repr(text)}")
+        logger.info(f"[إجراء] user={uid} action={action} text={repr(text)}")
 
         try:
             if action == "delete_coin":
@@ -556,26 +684,43 @@ class Handlers:
                 async for session in get_session():
                     await CoinRepository.delete_by_symbol(session, user_id, text)
                 await update.message.reply_text(f"✅ تم حذف {text}.")
-                context.user_data.pop("action")
-                logger.info(f"[ACTION] Coin deleted: {text}")
+                context.user_data.pop("action", None)
+                logger.info(f"[إجراء] تم حذف العملة: {text}")
 
             elif action == "edit_coin_start":
                 context.user_data["edit_target"] = text
-                await update.message.reply_text(f"💰 أدخل رأس المال الجديد لـ {text}:")
+                await update.message.reply_text(
+                    f"📝 *تعديل {text}*\n\n"
+                    f"💰 أدخل رأس المال الجديد (USDT):\n"
+                    f"أو أرسل: `skip` للاحتفاظ بالقيمة الحالية",
+                    parse_mode="Markdown",
+                )
                 context.user_data["action"] = "edit_coin_capital"
-                logger.info(f"[ACTION] Edit coin started: {text}")
+                logger.info(f"[إجراء] بدء تعديل العملة: {text}")
 
             elif action == "edit_coin_capital":
-                cap = float(text)
                 symbol = context.user_data["edit_target"]
                 user_id = str(uid)
+                if text.upper() == "SKIP":
+                    cap = None
+                else:
+                    cap = float(text)
+
                 async for session in get_session():
                     coin = await CoinRepository.get_by_symbol(session, user_id, symbol)
                     if coin:
-                        await CoinRepository.update(session, coin, capital_allocated=cap)
-                await update.message.reply_text(f"✅ تم تحديث رأس مال {symbol} إلى {cap}.")
+                        if cap is not None:
+                            await CoinRepository.update(
+                                session, coin, capital_allocated=cap
+                            )
+                        update_msg = f"✅ تم تحديث {symbol}."
+                        if cap is not None:
+                            update_msg += f"\n💰 رأس المال: {cap} USDT"
+                        else:
+                            update_msg += "\n💰 تم الاحتفاظ برأس المال الحالي."
+                await update.message.reply_text(update_msg)
                 context.user_data.clear()
-                logger.info(f"[ACTION] Coin capital updated: {symbol} → {cap}")
+                logger.info(f"[إجراء] تم تحديث رأس مال العملة: {symbol}")
 
             elif action == "edit_base_capital":
                 cap = float(text)
@@ -587,14 +732,14 @@ class Handlers:
                         await session.commit()
                 await update.message.reply_text(f"✅ تم تحديث رأس المال الأساسي إلى {cap}.")
                 context.user_data.clear()
-                logger.info(f"[ACTION] Base capital updated to {cap}")
+                logger.info(f"[إجراء] تم تحديث رأس المال الأساسي إلى {cap}")
 
             else:
-                logger.warning(f"[ACTION] Unknown action: {action}")
+                logger.warning(f"[إجراء] إجراء غير معروف: {action}")
                 await update.message.reply_text("⚠️ أمر غير معروف.")
                 context.user_data.clear()
         except ValueError:
             await update.message.reply_text("❌ أدخل قيمة عددية صحيحة.")
         except Exception as e:
-            logger.error(f"[ACTION] Error in {action}: {e}", exc_info=True)
+            logger.error(f"[إجراء] خطأ في {action}: {e}", exc_info=True)
             await update.message.reply_text("⚠️ حدث خطأ. حاول مرة أخرى.")

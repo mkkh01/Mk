@@ -1,6 +1,9 @@
 """
-Logging Engine — centralized logging for all events.
-Every event is logged with timestamp, module, severity, context.
+محرك السجلات — تسجيل مركزي لجميع الأحداث.
+كل حدث يُسجل مع الطابع الزمني والوحدة والمستوى والسياق.
+
+V4.0 — جميع الرسائل والإخراج بالعربية.
+المستويات: معلومات | تحذير | خطأ | حرج
 """
 import logging
 import traceback
@@ -10,31 +13,93 @@ from core.events import LogEvent, LogLevel
 from database.repositories import LogRepository, get_session
 from database.models import SystemLog
 
+# ── تعيين المستويات: الإنجليزية LogLevel → العربية ──────────
+_LEVEL_TO_ARABIC = {
+    LogLevel.DEBUG: "معلومات",
+    LogLevel.INFO: "معلومات",
+    LogLevel.WARNING: "تحذير",
+    LogLevel.ERROR: "خطأ",
+    LogLevel.CRITICAL: "حرج",
+}
+
+# ── تعيين المستويات العربية → دوال logger بايثون ────────────
+_ARABIC_TO_PYTHON_LEVEL = {
+    "معلومات": "info",
+    "تحذير": "warning",
+    "خطأ": "error",
+    "حرج": "critical",
+}
+
+# ── وسوم السجلات ────────────────────────────────────────────
+_LEVEL_TAGS = {
+    "معلومات": "[سجلات]",
+    "تحذير": "[تحذير]",
+    "خطأ": "[خطأ]",
+    "حرج": "[حرج]",
+}
+
 
 class LoggingEngine(BaseEngine):
-    """Centralized logging. Every event that passes through is persisted."""
+    """محرك تسجيل مركزي. كل حدث يمر يُحفظ في قاعدة البيانات والطرفية."""
 
     def __init__(self):
-        super().__init__("logging_engine")
+        super().__init__("محرك_السجلات")
         self._queue: list = []
 
     async def initialize(self) -> None:
-        self.logger.info("Logging Engine initialized.")
+        self.logger.info("[سجلات] تم تهيئة محرك السجلات بنجاح.")
 
     async def start(self) -> None:
         self._running = True
+        self.logger.info("[سجلات] بدأ محرك السجلات في العمل.")
 
     async def stop(self) -> None:
         self._running = False
-        # Flush remaining logs
         if self._queue:
             await self._flush()
+        self.logger.info("[سجلات] توقف محرك السجلات.")
 
-    async def log(self, level: LogLevel, module: str, message: str,
+    # ─────────────────────────────────────────────────────────
+    #  تحويل المستوى إلى العربية
+    # ─────────────────────────────────────────────────────────
+
+    def _resolve_level(self, level) -> str:
+        """
+        يحول أي صيغة مستوى إلى العربية.
+        يقبل: LogLevel enum، نص إنجليزي (INFO/WARNING/...)، أو نص عربي مباشر.
+        """
+        if isinstance(level, LogLevel):
+            return _LEVEL_TO_ARABIC.get(level, "معلومات")
+        if level in ("معلومات", "تحذير", "خطأ", "حرج"):
+            return level
+        # محاولة تحويل النص الإنجليزي (حالة نادرة للتوافق الخلفي)
+        eng_map = {
+            "DEBUG": "معلومات", "INFO": "معلومات",
+            "WARNING": "تحذير", "ERROR": "خطأ", "CRITICAL": "حرج",
+        }
+        return eng_map.get(str(level).upper(), "معلومات")
+
+    # ─────────────────────────────────────────────────────────
+    #  واجهة التسجيل الرئيسية
+    # ─────────────────────────────────────────────────────────
+
+    async def log(self, level, module: str, message: str,
                   context: dict = None, exception: Exception = None):
-        """Main logging entry point."""
+        """
+        نقطة الدخول الرئيسية للتسجيل.
+        يُسجل في قاعدة البيانات + الطرفية.
+
+        Args:
+            level: LogLevel enum أو نص عربي (معلومات/تحذير/خطأ/حرج)
+            module: اسم الوحدة المُنتجة للسجل
+            message: نص الرسالة بالعربية
+            context: قاموس سياق اختياري
+            exception: استثناء اختياري لتضمين تتبع المكدس
+        """
+        arabic_level = self._resolve_level(level)
+
         entry = {
-            "level": level.value,
+            "level": arabic_level,
             "module": module,
             "message": message,
             "context": context or {},
@@ -42,19 +107,35 @@ class LoggingEngine(BaseEngine):
         }
         self._queue.append(entry)
 
-        # Also write to Python logger for console
-        log_func = getattr(self.logger, level.value.lower(), self.logger.info)
-        log_func(f"[{module}] {message}")
+        # ── إخراج الطرفية ──
+        python_level = _ARABIC_TO_PYTHON_LEVEL.get(arabic_level, "info")
+        log_func = getattr(self.logger, python_level, self.logger.info)
+        tag = _LEVEL_TAGS.get(arabic_level, "[سجلات]")
+        log_func(f"{tag} [{module}] {message}")
 
     async def log_event(self, event: LogEvent):
-        """Log a structured LogEvent."""
+        """
+        تسجيل حدث منظم من نوع LogEvent.
+
+        Args:
+            event: نسخة من LogEvent تحتوي على المستوى والوحدة والرسالة والسياق
+        """
         await self.log(
-            event.level, event.module, event.message,
-            event.context,
+            level=event.level,
+            module=event.module,
+            message=event.message,
+            context=event.context,
         )
 
+    # ─────────────────────────────────────────────────────────
+    #  حفظ السجلات في قاعدة البيانات
+    # ─────────────────────────────────────────────────────────
+
     async def _flush(self):
-        """Persist queued logs to database."""
+        """حفظ السجلات المؤقتة من الطابور إلى قاعدة البيانات."""
+        count = len(self._queue)
+        if count == 0:
+            return
         try:
             async for session in get_session():
                 for entry in self._queue:
@@ -66,11 +147,25 @@ class LoggingEngine(BaseEngine):
                     )
                     session.add(log_entry)
                 await session.commit()
-            self._queue.clear()
+            self.logger.info(f"[سجلات] تم حفظ {count} سجل في قاعدة البيانات.")
         except Exception as e:
-            self.logger.error(f"Failed to flush logs: {e}")
+            self.logger.error(f"[خطأ] فشل حفظ السجلات في قاعدة البيانات: {e}")
+        finally:
+            self._queue.clear()
+
+    # ─────────────────────────────────────────────────────────
+    #  استعلام السجلات
+    # ─────────────────────────────────────────────────────────
 
     async def query_recent(self, limit: int = 50) -> list:
-        """Retrieve recent logs."""
+        """
+        استرجاع أحدث السجلات من قاعدة البيانات.
+
+        Args:
+            limit: الحد الأقصى لعدد السجلات المُسترجعة (افتراضي: 50)
+
+        Returns:
+            قائمة بأحدث سجلات SystemLog
+        """
         async for session in get_session():
             return await LogRepository.get_recent(session, limit)

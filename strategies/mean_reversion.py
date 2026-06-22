@@ -1,13 +1,16 @@
 """
-Mean Reversion Strategy — trades price returning to mean.
-Best in RANGING markets. Avoids strong TRENDING.
+استراتيجية الارتداد نحو المتوسط — Mean Reversion
+تتداول عودة السعر إلى المتوسط في الأسواق المتذبذبة.
+الأفضل في الأسواق ذات النطاق المحدد. تتجنب الاتجاهات القوية.
+الأطر المدعومة: 5 دقائق، 15 دقيقة
 """
 from strategies import BaseStrategy, StrategySignal
 from core.types import MarketAnalysis
 
 
 class MeanReversionStrategy(BaseStrategy):
-    name = "mean_reversion"
+    name = "ارتداد_المتوسط"
+    supported_timeframes = ["5m", "15m"]
 
     async def evaluate(self, analysis: MarketAnalysis) -> StrategySignal:
         signal = StrategySignal(
@@ -19,52 +22,67 @@ class MeanReversionStrategy(BaseStrategy):
             reasoning="",
         )
 
-        # Best in ranging markets
+        # الأفضل في الأسواق المتذبذبة
         if analysis.regime not in ("RANGING",):
-            signal.reasoning = f"Regime {analysis.regime} — mean reversion unreliable in trending"
+            signal.reasoning = (
+                f"السوق في حالة {analysis.regime} — "
+                f"استراتيجية الارتداد لا تعمل بشكل موثوق في الأسواق ذات الاتجاه"
+            )
             signal.confidence = 10.0
             return signal
 
-        # Avoid extreme volatility
+        # تجنب التقلب الشديد
         if analysis.volatility > 80:
-            signal.reasoning = f"Volatility too high ({analysis.volatility})"
+            signal.reasoning = f"تقلب مرتفع جداً ({analysis.volatility:.0f}%) — المخاطرة عالية"
             signal.confidence = 5.0
             return signal
 
         score = 0.0
 
-        # Ranging regime (35%)
+        # نظام النطاق المحدد (35%)
+        ranging_component = 35
         score += 35
 
-        # Low momentum — reversion candidate (25%)
+        # زخم منخفض — مرشح للارتداد (25%)
+        momentum_component = 0
         if analysis.momentum < 40:
+            momentum_component = 25
             score += 25
         elif analysis.momentum < 55:
+            momentum_component = 15
             score += 15
 
-        # Noise level — clean range preferred (20%)
+        # مستوى الضوضاء — نطاق نظيف مفضل (20%)
+        noise_component = 0
         if analysis.noise_level < 40:
+            noise_component = 20
             score += 20
         elif analysis.noise_level < 60:
+            noise_component = 10
             score += 10
 
-        # Liquidity (20%)
+        # السيولة (20%)
+        liquidity_component = 0
         if analysis.liquidity_score > 50:
+            liquidity_component = 20
             score += 20
 
         signal.confidence = min(100, score)
         signal.score_breakdown = {
-            "ranging_regime": 35,
-            "low_momentum": 25 if analysis.momentum < 40 else 15,
-            "low_noise": 20 if analysis.noise_level < 40 else 10,
-            "liquidity": 20 if analysis.liquidity_score > 50 else 0,
+            "نظام_النطاق": ranging_component,
+            "زخم_منخفض": momentum_component,
+            "ضوضاء_منخفضة": noise_component,
+            "السيولة": liquidity_component,
         }
 
         if signal.confidence >= 65:
             signal.action = "BUY"
-            signal.reasoning = f"Mean reversion setup — range-bound, momentum low ({analysis.momentum:.0f})"
+            signal.reasoning = (
+                f"إعداد ارتداد نحو المتوسط — السوق في نطاق، "
+                f"زخم منخفض ({analysis.momentum:.0f}%)، ضوضاء {analysis.noise_level:.0f}%"
+            )
         else:
             signal.action = "HOLD"
-            signal.reasoning = f"Reversion confidence insufficient ({signal.confidence:.0f})"
+            signal.reasoning = f"ثقة الارتداد غير كافية ({signal.confidence:.0f}%) — انتظار ظروف أفضل"
 
         return signal

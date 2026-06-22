@@ -1,9 +1,9 @@
 """
-Execution Engine — the ONLY component allowed to place, modify, or close orders.
-Does NOT analyze the market or decide trades — only executes pre-approved decisions.
-In simulation mode: simulates execution without real exchange interaction.
+محرك التنفيذ — المكوّن الوحيد المسموح له بفتح، تعديل، أو إغلاق الصفقات.
+لا يحلل السوق ولا يتخذ قرارات التداول — فقط ينفذ القرارات المعتمدة.
+Simulation mode فقط. لا اتصال بمنصة تداول حقيقية.
 
-All DB writes go through Repository layer (handles UUID resolution).
+جميع عمليات قاعدة البيانات تمر عبر Repository layer (يتولى تحويل telegram_id → UUID).
 """
 import asyncio
 import logging
@@ -15,7 +15,7 @@ from core.events import (
     RiskEvent, ExecutionEvent, EvidenceEvent, EventBus,
     HealthEvent, HealthStatus, AlertEvent, AlertLevel
 )
-from core.types import RiskDecision, ExecutionResult
+from core.types import ExecutionResult
 from core.errors import ExecutionError
 from database.repositories import (
     TradeRepository, PositionRepository, UserRepository, get_session
@@ -26,51 +26,82 @@ from config.constants import TRADE_FEE
 logger = logging.getLogger("execution_engine")
 
 
-class ExecutionEngine(BaseEngine):
-    """Executes approved trades. Simulation mode by default."""
+# ═══════════════════════════════════════════════════════════════
+#  حالة المحرك
+# ═══════════════════════════════════════════════════════════════
 
-    def __init__(self, event_bus: EventBus, simulation_mode: bool = True):
+class ExecutionState:
+    """حالات محرك التنفيذ (بالعربية — للعرض الداخلي فقط)."""
+    خامل = "خامل"
+    نشط = "نشط"
+    متوقف = "متوقف"
+
+
+class ExecutionEngine(BaseEngine):
+    """ينفذ الصفقات المعتمدة. Simulation mode فقط. لا يوجد وضع حقيقي."""
+
+    def __init__(self, event_bus: EventBus):
         super().__init__("execution_engine")
         self.event_bus = event_bus
-        self.simulation_mode = simulation_mode
+        # لا يوجد simulation_mode متغير — دائماً محاكاة
         self._pending_orders: dict[str, dict] = {}
         self._execution_count: int = 0
-        self._admin_telegram_id: int = 1503808643  # Telegram ID (set by main)
+        self._errors_count: int = 0
+        self._telegram_id: int = 0
+        self._state: str = ExecutionState.خامل
+        # سجل تنفيذي للتدقيق
+        self._execution_log: list[dict] = []
+
+    # ═════════════════════════════════════════════════════════
+    #  دورة الحياة
+    # ═════════════════════════════════════════════════════════
 
     async def initialize(self) -> None:
         await self.event_bus.subscribe("RiskEvent", self._on_risk_approval)
-        self.logger.info(f"[EXEC] Initialized (sim={self.simulation_mode}).")
+        self._state = ExecutionState.خامل
+        self.logger.info("[تنفيذ] تم التهيئة — وضع المحاكاة فقط.")
 
     async def start(self) -> None:
         self._running = True
+        self._state = ExecutionState.نشط
         asyncio.create_task(self._heartbeat_loop())
-        self.logger.info("[EXEC] Started.")
+        self.logger.info("[تنفيذ] بدأ العمل.")
 
     async def stop(self) -> None:
         self._running = False
+        self._state = ExecutionState.متوقف
+        self.logger.info("[تنفيذ] توقف.")
+
+    # ═════════════════════════════════════════════════════════
+    #  معالجة الأحداث
+    # ═════════════════════════════════════════════════════════
 
     async def _on_risk_approval(self, event: RiskEvent):
-        """Execute trade when Risk Engine approves."""
+        """استقبال موافقة محرك المخاطر وتنفيذ الصفقة."""
         if not self._running or not event.trade_allowed:
             return
-        await self.execute_simulated(event)
+        await self.execute(event)
 
-    async def execute_simulated(self, risk: RiskEvent, symbol: str = "",
-                                 entry_price: float = 0.0, strategy: str = "unknown",
-                                 telegram_id: int = 0, entry_reason: str = "") -> ExecutionResult:
+    # ═════════════════════════════════════════════════════════
+    #  التنفيذ (محاكاة فقط)
+    # ═════════════════════════════════════════════════════════
+
+    async def execute(self, risk: RiskEvent, symbol: str = "",
+                      entry_price: float = 0.0, strategy: str = "غير معروف",
+                      telegram_id: int = 0, entry_reason: str = "") -> ExecutionResult:
         """
-        Simulate trade execution (no real exchange).
-        Records trade via Repository layer (handles user UUID resolution).
+        تنفيذ صفقة بشكل محاكي (بدون اتصال بمنصة حقيقية).
+        يسجل الصفقة عبر Repository layer الذي يتولى تحويل telegram_id → UUID.
 
-        Args:
-            telegram_id: The user's Telegram ID (int). Repository resolves to UUID.
+        المعاملات:
+            telegram_id: معرف تليجرام الخاص بالمستخدم (int). الـ Repository يحوله لـ UUID.
         """
         order_id = str(uuid.uuid4())[:8]
         slippage = entry_price * 0.001 if entry_price > 0 else 0.0
         executed_price = entry_price + slippage
         fees = executed_price * risk.position_size * TRADE_FEE
 
-        tid = telegram_id or self._admin_telegram_id
+        tid = telegram_id or self._telegram_id
 
         result = ExecutionResult(
             order_id=order_id,
@@ -82,15 +113,16 @@ class ExecutionEngine(BaseEngine):
             fees=round(fees, 4),
         )
 
-        # Persist via Repository (handles UUID resolution)
+        # التسجيل عبر Repository (يتولى تحويل UUID)
         try:
             async for session in get_session():
+                # تحويل telegram_id → UUID عبر UserRepository
                 user_uuid = await UserRepository.resolve_user_uuid(session, tid)
                 self.logger.info(
-                    f"[EXEC] Resolved: telegram_id={tid} → uuid={user_uuid[:8]}..."
+                    f"[تنفيذ] تحويل الهوية: telegram_id={tid} → uuid={user_uuid[:8]}..."
                 )
 
-                # Create trade via repository
+                # إنشاء الصفقة عبر TradeRepository
                 trade = await TradeRepository.add(
                     session, tid,
                     symbol=symbol,
@@ -105,7 +137,7 @@ class ExecutionEngine(BaseEngine):
                     fees=fees,
                 )
 
-                # Create position via repository
+                # إنشاء المركز عبر PositionRepository
                 sl_dist = risk.stop_loss_distance or executed_price * 0.02
                 tp_dist = sl_dist * (risk.take_profit_ratio or 2.0)
                 position = await PositionRepository.create(
@@ -119,16 +151,30 @@ class ExecutionEngine(BaseEngine):
                 )
 
                 self.logger.info(
-                    f"[EXEC] ✅ {symbol}: trade_id={trade.id[:8]}... "
-                    f"position_id={position.id[:8]}..."
+                    f"[تنفيذ] ✅ تم فتح الصفقة: {symbol}"
+                )
+                self.logger.info(
+                    f"[أمر] رقم الصفقة={trade.id[:8]} | المركز={position.id[:8]} | "
+                    f"الكمية={risk.position_size:.6f} | السعر={executed_price:.6f}"
                 )
 
         except Exception as e:
-            self.logger.error(f"[EXEC] Database error in execution: {e}", exc_info=True)
+            self._errors_count += 1
+            self.logger.error(f"[تنفيذ] ❌ خطأ في قاعدة البيانات أثناء التنفيذ: {e}", exc_info=True)
 
         self._execution_count += 1
 
-        # Publish execution event
+        # تسجيل في السجل التنفيذي
+        self._execution_log.append({
+            "order_id": order_id,
+            "symbol": symbol,
+            "entry_price": executed_price,
+            "quantity": risk.position_size,
+            "fee": fees,
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
+        # نشر حدث التنفيذ
         await self.event_bus.publish(ExecutionEvent(
             order_id=order_id, symbol=symbol,
             status="FILLED", entry_price=executed_price,
@@ -137,15 +183,19 @@ class ExecutionEngine(BaseEngine):
         ))
 
         self.logger.info(
-            f"[EXEC] {symbol} | Qty={risk.position_size:.6f} | "
-            f"Price={executed_price:.6f} | Slippage={slippage:.6f}"
+            f"[تنفيذ] {symbol} | الكمية={risk.position_size:.6f} | "
+            f"السعر={executed_price:.6f} | الانزلاق={slippage:.6f} | الرسوم={fees:.4f}"
         )
 
         return result
 
+    # ═════════════════════════════════════════════════════════
+    #  إغلاق المركز
+    # ═════════════════════════════════════════════════════════
+
     async def close_position(self, symbol: str, exit_price: float,
                               telegram_id: int, won: bool, exit_reason: str = ""):
-        """Close a simulated position. Uses repository layer."""
+        """إغلاق مركز في وضع المحاكاة. يستخدم Repository layer."""
         try:
             async for session in get_session():
                 position = await PositionRepository.get_by_symbol(session, telegram_id, symbol)
@@ -153,22 +203,45 @@ class ExecutionEngine(BaseEngine):
 
                 if position:
                     await PositionRepository.close_position(session, position)
-                    self.logger.info(f"[EXEC] Position closed: {symbol}")
+                    self.logger.info(f"[إغلاق] تم إغلاق المركز: {symbol}")
 
+                closed_count = 0
                 for trade in trades:
                     status = "WON" if won else "LOST"
                     await TradeRepository.close_trade(session, trade, exit_price, status, exit_reason)
-                    self.logger.info(f"[EXEC] Trade closed: {trade.symbol} {status}")
+                    closed_count += 1
+                    self.logger.info(
+                        f"[إغلاق] صفقة مغلقة: {trade.symbol} | النتيجة={status} | "
+                        f"سعر الخروج={exit_price}"
+                    )
+
+                if closed_count == 0:
+                    self.logger.warning(f"[إغلاق] لا توجد صفقات مفتوحة للإغلاق: {symbol}")
 
         except Exception as e:
-            self.logger.error(f"[EXEC] Error closing position for {symbol}: {e}", exc_info=True)
+            self.logger.error(f"[إغلاق] خطأ أثناء إغلاق المركز {symbol}: {e}", exc_info=True)
+
+    # ═════════════════════════════════════════════════════════
+    #  مقاييس وتقارير
+    # ═════════════════════════════════════════════════════════
 
     def get_metrics(self) -> dict:
         return {
             "execution_count": self._execution_count,
+            "errors_count": self._errors_count,
             "pending_orders": len(self._pending_orders),
-            "simulation_mode": self.simulation_mode,
+            "state": self._state,
         }
+
+    def get_state(self) -> str:
+        """الحالة الديناميكية الحالية للمحرك."""
+        if not self._running:
+            return ExecutionState.متوقف
+        return self._state
+
+    # ═════════════════════════════════════════════════════════
+    #  نبض القلب
+    # ═════════════════════════════════════════════════════════
 
     async def _heartbeat_loop(self):
         while self._running:

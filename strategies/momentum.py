@@ -1,13 +1,16 @@
 """
-Momentum Strategy — trades strong directional momentum with volume.
-Best in TRENDING or VOLATILE regimes with high momentum.
+استراتيجية الزخم — Momentum
+تتداول الزخم الاتجاهي القوي مع تأكيد الحجم.
+الأفضل في الأسواق ذات الاتجاه أو المتقلبة مع زخم مرتفع.
+الأطر المدعومة: 1 دقيقة، 5 دقائق، 15 دقيقة، 1 ساعة
 """
 from strategies import BaseStrategy, StrategySignal
 from core.types import MarketAnalysis
 
 
 class MomentumStrategy(BaseStrategy):
-    name = "momentum"
+    name = "الزخم"
+    supported_timeframes = ["1m", "5m", "15m", "1h"]
 
     async def evaluate(self, analysis: MarketAnalysis) -> StrategySignal:
         signal = StrategySignal(
@@ -19,61 +22,89 @@ class MomentumStrategy(BaseStrategy):
             reasoning="",
         )
 
-        # Need momentum above threshold
+        # الزخم أقل من الحد الأدنى — لا نتداول
         if analysis.momentum < 60:
-            signal.reasoning = f"Momentum too low ({analysis.momentum})"
+            signal.reasoning = f"زخم منخفض ({analysis.momentum:.0f}%) — لا توجد قوة دافعة كافية"
             signal.confidence = 10.0
             return signal
 
-        # Avoid choppy markets
+        # تجنب الأسواق العشوائية
         if analysis.regime == "CHOPPY":
-            signal.reasoning = "Choppy market — momentum unreliable"
+            signal.reasoning = "السوق عشوائي — الزخم غير موثوق في هذه الحالة"
             signal.confidence = 5.0
             return signal
 
         score = 0.0
 
-        # Momentum strength (40%)
-        score += min(40, analysis.momentum * 0.4)
+        # قوة الزخم (40%)
+        momentum_component = min(40, analysis.momentum * 0.4)
+        score += momentum_component
 
-        # Trend alignment (25%)
+        # توافق الاتجاه (25%)
+        trend_component = 0
         if analysis.trend_direction in ("UP", "DOWN") and analysis.trend_strength > 50:
+            trend_component = 25
             score += 25
         elif analysis.trend_direction in ("UP", "DOWN"):
+            trend_component = 15
             score += 15
 
-        # Volume/liquidity (20%)
+        # الحجم / السيولة (20%)
+        volume_component = 0
         if analysis.liquidity_score > 50:
+            volume_component = 20
             score += 20
         elif analysis.liquidity_score > 30:
+            volume_component = 10
             score += 10
 
-        # Low noise (15%)
+        # ضوضاء منخفضة (15%)
+        noise_component = 0
         if analysis.noise_level < 50:
+            noise_component = 15
             score += 15
         elif analysis.noise_level < 70:
+            noise_component = 8
             score += 8
 
         signal.confidence = min(100, score)
         signal.score_breakdown = {
-            "momentum": min(40, analysis.momentum * 0.4),
-            "trend_align": 25 if analysis.trend_strength > 50 else 15,
-            "volume": 20 if analysis.liquidity_score > 50 else 10,
-            "low_noise": 15 if analysis.noise_level < 50 else 8,
+            "قوة_الزخم": round(momentum_component, 1),
+            "توافق_الاتجاه": trend_component,
+            "الحجم": volume_component,
+            "ضوضاء_منخفضة": noise_component,
         }
 
         if signal.confidence >= 75:
             if analysis.trend_direction == "UP":
                 signal.action = "BUY"
-                signal.reasoning = f"Strong bullish momentum ({analysis.momentum:.0f}) with trend confirmation"
+                signal.reasoning = (
+                    f"زخم صاعد قوي ({analysis.momentum:.0f}%) — "
+                    f"تأكيد من الاتجاه، سيولة {analysis.liquidity_score:.0f}%"
+                )
             elif analysis.trend_direction == "DOWN":
                 signal.action = "SELL"
-                signal.reasoning = f"Strong bearish momentum ({analysis.momentum:.0f}) with trend confirmation"
+                signal.reasoning = (
+                    f"زخم هابط قوي ({analysis.momentum:.0f}%) — "
+                    f"تأكيد من الاتجاه، سيولة {analysis.liquidity_score:.0f}%"
+                )
+            else:
+                signal.action = "HOLD"
+                signal.reasoning = f"زخم قوي ({analysis.momentum:.0f}%) لكن بدون اتجاه واضح"
         elif signal.confidence >= 65 and analysis.trend_direction == "UP":
             signal.action = "BUY"
-            signal.reasoning = f"Moderate bullish momentum ({analysis.momentum:.0f})"
+            signal.reasoning = (
+                f"زخم صاعد متوسط ({analysis.momentum:.0f}%) — "
+                f"اتجاه صاعد يدعم الصفقة"
+            )
+        elif signal.confidence >= 65 and analysis.trend_direction == "DOWN":
+            signal.action = "SELL"
+            signal.reasoning = (
+                f"زخم هابط متوسط ({analysis.momentum:.0f}%) — "
+                f"اتجاه هابط يدعم الصفقة"
+            )
         else:
             signal.action = "HOLD"
-            signal.reasoning = f"Momentum confidence insufficient ({signal.confidence:.0f})"
+            signal.reasoning = f"ثقة الزخم غير كافية ({signal.confidence:.0f}%) — انتظار زخم أقوى"
 
         return signal

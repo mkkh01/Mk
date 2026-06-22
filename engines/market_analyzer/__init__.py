@@ -1,12 +1,20 @@
 """
-Market Analyzer Engine — transforms raw market data into structured market intelligence.
-Does NOT trade, generate orders, or execute. Only answers:
-"What is the market doing right now?"
+محلل السوق — يحول بيانات السوق الخام إلى معلومات سوقية منظمة.
+لا يتداول، لا يولد أوامر، لا ينفذ. مهمته الوحيدة الإجابة على سؤال:
+"ماذا يفعل السوق الآن؟"
+
+الهيكل:
+  _analyses["BTCUSDT"]["1m"] = MarketAnalysis(...)
+  _analyses["BTCUSDT"]["5m"] = MarketAnalysis(...)
+  _analyses["BTCUSDT"]["15m"] = MarketAnalysis(...)
+
+عزل تام بين الأطر الزمنية — كل إطار له تحليله المستقل.
+المؤشرات تُحسب من شموع الإطار الزمني نفسه فقط، بدون تلويث.
 """
 import asyncio
-import json
-import os
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime
+from typing import Optional, Dict, List
 import numpy as np
 
 from core.base import BaseEngine
@@ -16,103 +24,174 @@ from core.events import (
 from core.types import MarketAnalysis, MarketRegime, TrendDirection
 from config.constants import ANALYSIS_INTERVAL_SEC
 
+logger = logging.getLogger("market_analyzer")
+
+MAX_CANDLES_HISTORY = 300
+MIN_CANDLES_FOR_ANALYSIS = 50
+
 
 class MarketAnalyzer(BaseEngine):
-    """Analyzes market conditions. Produces structured analysis objects."""
+    """يحلل أوضاع السوق لكل عملة لكل إطار زمني بشكل مستقل تماماً."""
 
     def __init__(self, event_bus: EventBus):
         super().__init__("market_analyzer")
         self.event_bus = event_bus
-        self._analyses: dict[str, MarketAnalysis] = {}
-        self._symbols: list[str] = []
-        self._last_analysis: dict[str, datetime] = {}
-        self._historical_cache: dict[str, list] = {}  # symbol → ohlcv
-        self._htf_cache: dict[str, list] = {}
+
+        # _analyses[coin_symbol][timeframe] = MarketAnalysis — تحليل مستقل لكل إطار
+        self._analyses: Dict[str, Dict[str, MarketAnalysis]] = {}
+
+        # _candles[coin_symbol][timeframe] = [candle, ...] — شموع خاصة بالمحلل
+        self._candles: Dict[str, Dict[str, list]] = {}
+
+        self._symbols: List[str] = []
+        self._last_analysis: Dict[str, Dict[str, datetime]] = {}
+
+    # ═══════════════════════════════════════════════════════════
+    # دورة الحياة
+    # ═══════════════════════════════════════════════════════════
 
     async def initialize(self) -> None:
         await self.event_bus.subscribe("CandleUpdateEvent", self._on_candle_update)
-        self.logger.info("Market Analyzer initialized.")
+        self.logger.info("[محلل السوق] ✅ تم تهيئة محلل السوق.")
 
     async def start(self) -> None:
         self._running = True
         asyncio.create_task(self._analysis_loop())
         asyncio.create_task(self._heartbeat_loop())
-        self.logger.info("Market Analyzer started.")
+        self.logger.info("[محلل السوق] ✅ بدأ محلل السوق.")
 
     async def stop(self) -> None:
         self._running = False
+        self.logger.info("[محلل السوق] ⏹️ توقف محلل السوق.")
 
-    def update_symbols(self, symbols: list[str]):
-        self._symbols = symbols
+    # ═══════════════════════════════════════════════════════════
+    # تحديث الاشتراكات
+    # ═══════════════════════════════════════════════════════════
+
+    def update_symbols(self, symbols: List[str]) -> None:
+        """تحديث قائمة العملات المتتبعة."""
+        self._symbols = list(symbols)
+        self.logger.info(f"[محلل السوق] 🔄 تحديث العملات: {len(self._symbols)} عملة")
+
+    # ═══════════════════════════════════════════════════════════
+    # استقبال الشموع — تخزين مستقل لكل إطار زمني
+    # ═══════════════════════════════════════════════════════════
 
     async def _on_candle_update(self, event: CandleUpdateEvent):
-        """Update cached kline data on each candle event."""
-        key = f"{event.symbol}_{event.timeframe}"
-        cache_key = event.symbol
-        if cache_key not in self._historical_cache:
-            self._historical_cache[cache_key] = []
+        """استقبال حدث الشمعة وتخزينها في الإطار الزمني الصحيح — بدون تلويث."""
+        symbol = event.symbol
+        timeframe = event.timeframe
+
+        # إنشاء الحاويات إذا لزم الأمر
+        if symbol not in self._candles:
+            self._candles[symbol] = {}
+        if timeframe not in self._candles[symbol]:
+            self._candles[symbol][timeframe] = []
 
         candle = {
-            "timestamp": event.timestamp.timestamp() * 1000,
-            "open": event.open, "high": event.high,
-            "low": event.low, "close": event.close,
-            "volume": event.volume,
+            "t": event.timestamp.timestamp() * 1000,
+            "o": event.open,
+            "h": event.high,
+            "l": event.low,
+            "c": event.close,
+            "v": event.volume,
         }
 
-        hist = self._historical_cache[cache_key]
+        bucket = self._candles[symbol][timeframe]
+
         if event.is_closed:
-            hist.append(candle)
-            if len(hist) > 300:
-                hist.pop(0)
+            # تجنب التكرار
+            if bucket and bucket[-1]["t"] == candle["t"]:
+                bucket[-1] = candle
+                return
+            bucket.append(candle)
+            if len(bucket) > MAX_CANDLES_HISTORY:
+                bucket.pop(0)
+
+    # ═══════════════════════════════════════════════════════════
+    # حلقة التحليل الدورية
+    # ═══════════════════════════════════════════════════════════
 
     async def _analysis_loop(self):
-        """Periodic analysis of all tracked symbols."""
+        """تحليل دوري لجميع العملات بكل أطرها الزمنية."""
         while self._running:
             try:
                 for symbol in self._symbols:
-                    await self.analyze(symbol)
+                    await self.analyze_all_timeframes(symbol)
                     await asyncio.sleep(1)
                 await asyncio.sleep(ANALYSIS_INTERVAL_SEC)
             except Exception as e:
-                self.logger.error(f"Analysis loop error: {e}", exc_info=True)
+                self.logger.error(f"[محلل السوق] ❌ خطأ في حلقة التحليل: {e}", exc_info=True)
                 await asyncio.sleep(5)
 
-    async def analyze(self, symbol: str) -> Optional[MarketAnalysis]:
-        """Run full analysis pipeline for a symbol."""
-        hist = self._historical_cache.get(symbol, [])
-        if len(hist) < 50:
+    # ═══════════════════════════════════════════════════════════
+    # التحليل — لكل إطار زمني بشكل مستقل
+    # ═══════════════════════════════════════════════════════════
+
+    async def analyze_all_timeframes(self, symbol: str) -> Dict[str, MarketAnalysis]:
+        """
+        تشغيل التحليل لجميع الأطر الزمنية المتاحة للعملة.
+        يرجع قاموساً: {timeframe: MarketAnalysis, ...}
+        """
+        results = {}
+        symbol_candles = self._candles.get(symbol, {})
+
+        if not symbol_candles:
+            self.logger.debug(f"[محلل السوق] لا توجد شموع لـ {symbol} بعد.")
+            return results
+
+        for timeframe in list(symbol_candles.keys()):
+            analysis = await self.analyze(symbol, timeframe)
+            if analysis:
+                results[timeframe] = analysis
+
+        return results
+
+    async def analyze(self, symbol: str, timeframe: str) -> Optional[MarketAnalysis]:
+        """
+        تحليل سوقي كامل لعملة + إطار زمني محدد.
+        كل المؤشرات تُحسب من شموع هذا الإطار فقط — بدون تلويث من أطر أخرى.
+        """
+        candles = self._candles.get(symbol, {}).get(timeframe, [])
+
+        if len(candles) < MIN_CANDLES_FOR_ANALYSIS:
+            self.logger.debug(
+                f"[تحليل] ⏳ {symbol} {timeframe}: "
+                f"{len(candles)}/{MIN_CANDLES_FOR_ANALYSIS} شمعة — غير كافٍ للتحليل"
+            )
             return None
 
-        closes = [c["close"] for c in hist]
-        highs = [c["high"] for c in hist]
-        lows = [c["low"] for c in hist]
-        volumes = [c["volume"] for c in hist]
+        # استخراج البيانات كمصفوفات numpy — من هذا الإطار فقط
+        closes = np.array([c["c"] for c in candles], dtype=np.float64)
+        highs = np.array([c["h"] for c in candles], dtype=np.float64)
+        lows = np.array([c["l"] for c in candles], dtype=np.float64)
+        volumes = np.array([c["v"] for c in candles], dtype=np.float64)
 
-        # 1. Trend Analysis
+        # 1. تحليل الاتجاه
         trend_direction, trend_strength = self._analyze_trend(closes)
 
-        # 2. Momentum Analysis
+        # 2. تحليل الزخم
         momentum = self._analyze_momentum(closes, volumes)
 
-        # 3. Volatility Analysis
+        # 3. تحليل التقلب
         volatility = self._analyze_volatility(highs, lows, closes)
 
-        # 4. Liquidity Score
+        # 4. تحليل السيولة
         liquidity = self._analyze_liquidity(volumes)
 
-        # 5. Market Structure
+        # 5. تحليل هيكل السوق
         structure = self._analyze_structure(highs, lows, closes)
 
-        # 6. Regime Detection
+        # 6. تصنيف النظام السوقي
         regime = self._detect_regime(trend_direction, trend_strength, momentum, volatility, liquidity)
 
-        # 7. Breakout Validation
+        # 7. تحقق الاختراق
         breakout = self._validate_breakout(highs, lows, closes, volumes)
 
-        # 8. Noise Level
+        # 8. مستوى الضوضاء
         noise = self._calculate_noise(highs, lows, closes)
 
-        # 9. Confidence
+        # 9. درجة الثقة
         confidence = self._calculate_confidence(trend_strength, momentum, volatility, liquidity, noise)
 
         analysis = MarketAnalysis(
@@ -129,10 +208,23 @@ class MarketAnalyzer(BaseEngine):
             confidence=confidence,
         )
 
-        self._analyses[symbol] = analysis
-        self._last_analysis[symbol] = datetime.utcnow()
+        # تخزين التحليل في الهيكل المستقل
+        if symbol not in self._analyses:
+            self._analyses[symbol] = {}
+        self._analyses[symbol][timeframe] = analysis
 
-        # Publish event
+        if symbol not in self._last_analysis:
+            self._last_analysis[symbol] = {}
+        self._last_analysis[symbol][timeframe] = datetime.utcnow()
+
+        self.logger.info(
+            f"[تحليل] 📊 {symbol} {timeframe}: "
+            f"نظام={regime} | اتجاه={trend_direction}({trend_strength:.0f}) | "
+            f"زخم={momentum:.1f} | تقلب={volatility:.1f} | "
+            f"سيولة={liquidity:.1f} | ضوضاء={noise:.1f} | ثقة={confidence:.1f}"
+        )
+
+        # نشر الحدث
         await self.event_bus.publish(AnalysisEvent(
             symbol=symbol, regime=regime, trend_direction=trend_direction,
             trend_strength=trend_strength, momentum=momentum,
@@ -143,153 +235,254 @@ class MarketAnalyzer(BaseEngine):
 
         return analysis
 
-    # ── Analysis Sub-modules ────────────────────────────────
+    # ═══════════════════════════════════════════════════════════
+    # وحدات التحليل الفرعية — كلها تستخدم numpy
+    # ═══════════════════════════════════════════════════════════
 
-    def _analyze_trend(self, closes: list) -> tuple[str, float]:
-        """EMA-based trend detection."""
+    def _analyze_trend(self, closes: np.ndarray) -> tuple:
+        """تحليل الاتجاه باستخدام EMA متعدد الفترات."""
         if len(closes) < 50:
             return "NONE", 0.0
 
-        arr = np.array(closes)
-        ema20 = self._ema(arr, 20)
-        ema50 = self._ema(arr, 50)
-        current = arr[-1]
+        ema_fast = self._ema(closes, 20)
+        ema_slow = self._ema(closes, 50)
+        current = float(closes[-1])
 
-        if current > ema20 > ema50:
-            return "UP", min(100, (current - ema50) / current * 100 * 10)
-        elif current < ema20 < ema50:
-            return "DOWN", min(100, (ema50 - current) / current * 100 * 10)
-        elif current > ema50:
-            return "UP", min(60, (current - ema50) / current * 100 * 5)
-        elif current < ema50:
-            return "DOWN", min(60, (ema50 - current) / current * 100 * 5)
+        if current > ema_fast > ema_slow:
+            strength = min(100.0, (current - ema_slow) / current * 1000.0)
+            return "UP", round(strength, 1)
+        elif current < ema_fast < ema_slow:
+            strength = min(100.0, (ema_slow - current) / current * 1000.0)
+            return "DOWN", round(strength, 1)
+        elif current > ema_slow:
+            strength = min(60.0, (current - ema_slow) / current * 500.0)
+            return "UP", round(strength, 1)
+        elif current < ema_slow:
+            strength = min(60.0, (ema_slow - current) / current * 500.0)
+            return "DOWN", round(strength, 1)
         return "NONE", 0.0
 
-    def _analyze_momentum(self, closes: list, volumes: list) -> float:
-        """Price velocity with volume confirmation."""
+    def _analyze_momentum(self, closes: np.ndarray, volumes: np.ndarray) -> float:
+        """سرعة السعر مع تأكيد الحجم."""
         if len(closes) < 10:
             return 50.0
-        arr = np.array(closes)
-        momentum = (arr[-1] - arr[-10]) / arr[-10] * 100
-        vol_ratio = np.mean(volumes[-5:]) / max(1e-10, np.mean(volumes[-20:]))
-        score = min(100, abs(momentum) * 10 * min(vol_ratio, 2))
-        return round(score, 1)
 
-    def _analyze_volatility(self, highs: list, lows: list, closes: list) -> float:
-        """ATR-based volatility measurement."""
+        # RSI سريع 14 فترة
+        delta = np.diff(closes)
+        gain = np.where(delta > 0, delta, 0.0)
+        loss = np.where(delta < 0, -delta, 0.0)
+        avg_gain = float(np.mean(gain[-14:]))
+        avg_loss = float(np.mean(loss[-14:]))
+
+        if avg_loss == 0:
+            rsi = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi = 100.0 - (100.0 / (1.0 + rs))
+
+        # تأكيد الحجم
+        vol_ratio = float(np.mean(volumes[-5:]) / max(1e-10, np.mean(volumes[-20:])))
+        vol_factor = min(vol_ratio, 2.0)
+
+        # نتيجة الزخم
+        momentum_raw = abs(rsi - 50.0) * 2.0 * vol_factor
+        return round(min(100.0, max(0.0, momentum_raw)), 1)
+
+    def _analyze_volatility(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray) -> float:
+        """قياس التقلب باستخدام ATR."""
         if len(closes) < 14:
             return 50.0
-        h, l, c = np.array(highs), np.array(lows), np.array(closes)
-        tr = np.maximum(h[1:] - l[1:],
-                        np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-        atr = float(np.mean(tr[-14:]))
-        atr_pct = (atr / max(c[-1], 1e-10)) * 100
 
-        if atr_pct < 0.5: return 10.0
-        if atr_pct < 1.0: return 30.0
-        if atr_pct < 2.0: return 60.0
-        if atr_pct < 3.0: return 80.0
+        prev_closes = np.roll(closes, 1)
+        prev_closes[0] = closes[0]
+
+        tr = np.maximum(
+            highs - lows,
+            np.maximum(
+                np.abs(highs - prev_closes),
+                np.abs(lows - prev_closes)
+            )
+        )
+
+        atr = float(np.mean(tr[-14:]))
+        current_price = float(closes[-1])
+        if current_price <= 0:
+            return 50.0
+
+        atr_pct = (atr / current_price) * 100.0
+
+        if atr_pct < 0.3:
+            return 10.0
+        if atr_pct < 0.7:
+            return 25.0
+        if atr_pct < 1.2:
+            return 45.0
+        if atr_pct < 2.0:
+            return 65.0
+        if atr_pct < 3.0:
+            return 82.0
         return 95.0
 
-    def _analyze_liquidity(self, volumes: list) -> float:
-        """Volume consistency score."""
+    def _analyze_liquidity(self, volumes: np.ndarray) -> float:
+        """درجة اتساق السيولة."""
         if len(volumes) < 20:
             return 50.0
-        avg_vol = np.mean(volumes[-20:])
-        curr_vol = volumes[-1]
-        consistency = 1.0 - min(1.0, np.std(volumes[-20:]) / max(avg_vol, 1e-10))
-        ratio = min(curr_vol / max(avg_vol, 1e-10), 2.0)
-        return round(max(0, min(100, consistency * 60 + ratio * 20)), 1)
 
-    def _analyze_structure(self, highs: list, lows: list, closes: list) -> dict:
-        """Higher High / Higher Low structure detection."""
+        avg_vol = float(np.mean(volumes[-20:]))
+        if avg_vol <= 0:
+            return 20.0
+
+        curr_vol = float(volumes[-1])
+        std_vol = float(np.std(volumes[-20:]))
+
+        # درجة الاتساق
+        consistency = 1.0 - min(1.0, std_vol / avg_vol)
+
+        # نسبة الحجم الحالي للمتوسط
+        ratio = min(curr_vol / avg_vol, 2.0)
+
+        score = consistency * 60.0 + ratio * 20.0
+        return round(max(0.0, min(100.0, score)), 1)
+
+    def _analyze_structure(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray) -> dict:
+        """تحليل هيكل السوق — قمم وقيعان أعلى/أدنى."""
         if len(highs) < 20:
             return {"higher_highs": False, "higher_lows": False, "break_of_structure": False}
 
-        h_arr = np.array(highs[-20:])
-        l_arr = np.array(lows[-20:])
-        c_arr = np.array(closes[-5:])
+        mid = len(highs) // 2
 
-        # Simple structure: compare first half to second half
-        mid = 10
-        hh = h_arr[mid:].max() > h_arr[:mid].max()
-        hl = l_arr[mid:].min() > l_arr[:mid].min()
-        bos = c_arr[-1] < l_arr[:mid].min() or c_arr[-1] > h_arr[:mid].max()
+        # نصف أول مقابل نصف ثاني
+        first_half_h = highs[:mid]
+        second_half_h = highs[mid:]
+        first_half_l = lows[:mid]
+        second_half_l = lows[mid:]
+
+        hh = bool(np.max(second_half_h) > np.max(first_half_h))
+        hl = bool(np.min(second_half_l) > np.min(first_half_l))
+
+        # كسر الهيكل
+        bos = bool(
+            closes[-1] < np.min(first_half_l) or
+            closes[-1] > np.max(first_half_h)
+        )
 
         return {
-            "higher_highs": bool(hh),
-            "higher_lows": bool(hl),
-            "break_of_structure": bool(bos),
+            "higher_highs": hh,
+            "higher_lows": hl,
+            "break_of_structure": bos,
         }
 
     def _detect_regime(self, trend_dir: str, trend_str: float, momentum: float,
                        volatility: float, liquidity: float) -> str:
-        """Classify market regime."""
-        if volatility > 85:
+        """تصنيف النظام السوقي."""
+        if volatility > 85.0:
             return "VOLATILE"
-        if liquidity < 30:
+        if liquidity < 30.0:
             return "LOW_LIQUIDITY"
-        if trend_str > 70 and trend_dir in ("UP", "DOWN"):
+        if trend_str > 70.0 and trend_dir in ("UP", "DOWN"):
             return "TRENDING"
-        if momentum > 70:
+        if momentum > 70.0:
             return "TRENDING"
-        if 30 < volatility < 70:
+        if 25.0 < volatility < 70.0:
             return "RANGING"
         return "CHOPPY"
 
-    def _validate_breakout(self, highs: list, lows: list, closes: list,
-                           volumes: list) -> str:
-        """Validate breakout signals."""
+    def _validate_breakout(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
+                           volumes: np.ndarray) -> str:
+        """التحقق من صحة الاختراق."""
         if len(closes) < 20:
             return "NONE"
-        h_arr = np.array(highs[-20:])
-        c_arr = np.array(closes)
-        v_arr = np.array(volumes)
-        resistance = h_arr[:-1].max()
-        if c_arr[-1] > resistance and v_arr[-1] > np.mean(v_arr[-10:]) * 1.5:
+
+        resistance = float(np.max(highs[:-1]))
+        current_close = float(closes[-1])
+        avg_vol_10 = float(np.mean(volumes[-10:]))
+        current_vol = float(volumes[-1])
+
+        if current_close > resistance and avg_vol_10 > 0 and current_vol > avg_vol_10 * 1.5:
             return "VALID"
-        if c_arr[-1] > resistance:
+        if current_close > resistance:
             return "FAKE"
         return "NONE"
 
-    def _calculate_noise(self, highs: list, lows: list, closes: list) -> float:
-        """Measure market noise level (chop index)."""
+    def _calculate_noise(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray) -> float:
+        """قياس مستوى ضوضاء السوق (مؤشر التشوب)."""
         if len(closes) < 14:
             return 50.0
-        c_arr = np.array(closes[-14:])
-        total_range = c_arr.max() - c_arr.min()
-        if total_range == 0:
+
+        segment = closes[-14:]
+        total_range = float(np.max(segment) - np.min(segment))
+        if total_range <= 0:
             return 0.0
-        smoothness = 1.0 - np.std(np.diff(c_arr)) / max(total_range, 1e-10)
-        return round((1.0 - smoothness) * 100, 1)
+
+        diffs = np.diff(segment)
+        smoothness = 1.0 - float(np.std(diffs) / total_range)
+        noise = (1.0 - smoothness) * 100.0
+        return round(max(0.0, min(100.0, noise)), 1)
 
     def _calculate_confidence(self, trend_str: float, momentum: float,
                               volatility: float, liquidity: float, noise: float) -> float:
-        """Calculate analysis confidence."""
-        base = (trend_str * 0.3 + momentum * 0.2 + liquidity * 0.2 + (100 - volatility) * 0.2 + (100 - noise) * 0.1)
-        return round(max(0, min(100, base)), 1)
+        """حساب درجة الثقة في التحليل."""
+        base = (
+            trend_str * 0.30 +
+            momentum * 0.20 +
+            liquidity * 0.20 +
+            (100.0 - volatility) * 0.20 +
+            (100.0 - noise) * 0.10
+        )
+        return round(max(0.0, min(100.0, base)), 1)
 
-    def get_analysis(self, symbol: str) -> Optional[MarketAnalysis]:
-        """Get latest analysis for a symbol."""
-        return self._analyses.get(symbol)
+    # ═══════════════════════════════════════════════════════════
+    # واجهة القراءة العامة
+    # ═══════════════════════════════════════════════════════════
 
-    # ── Helpers ─────────────────────────────────────────────
+    def get_analysis(self, symbol: str, timeframe: str = None) -> Optional[MarketAnalysis]:
+        """
+        إرجاع آخر تحليل لعملة وإطار زمني محدد.
+        إذا لم يُحدد الإطار الزمني، يرجع تحليل أول إطار متاح (للتوافق مع الإصدارات السابقة).
+        """
+        sym = self._analyses.get(symbol, {})
+        if timeframe:
+            return sym.get(timeframe)
+        # للتوافق: إرجاع أول إطار زمني متاح
+        if sym:
+            return list(sym.values())[0]
+        return None
+
+    def get_all_analyses(self, symbol: str) -> Dict[str, MarketAnalysis]:
+        """إرجاع جميع تحليلات الأطر الزمنية لعملة محددة."""
+        return dict(self._analyses.get(symbol, {}))
+
+    def get_candle_count(self, symbol: str, timeframe: str) -> int:
+        """عدد الشموع المخزنة لإطار زمني محدد."""
+        bucket = self._candles.get(symbol, {}).get(timeframe, [])
+        return len(bucket)
+
+    # ═══════════════════════════════════════════════════════════
+    # أدوات مساعدة
+    # ═══════════════════════════════════════════════════════════
 
     @staticmethod
     def _ema(data: np.ndarray, window: int) -> float:
-        """Exponential moving average."""
+        """المتوسط المتحرك الأسي."""
         if len(data) < window:
             return float(data[-1])
-        alpha = 2 / (window + 1)
-        ema = data[0]
+        alpha = 2.0 / (window + 1.0)
+        ema = float(data[0])
         for x in data[1:]:
-            ema = alpha * x + (1 - alpha) * ema
-        return float(ema)
+            ema = alpha * float(x) + (1.0 - alpha) * ema
+        return ema
+
+    # ═══════════════════════════════════════════════════════════
+    # نبضات القلب
+    # ═══════════════════════════════════════════════════════════
 
     async def _heartbeat_loop(self):
+        """نبضات دورية لمراقب الصحة."""
         while self._running:
             await self.event_bus.publish(HealthEvent(
-                engine=self.name, status=HealthStatus.HEALTHY,
-                latency_ms=0, error_rate=0,
+                engine=self.name,
+                status=HealthStatus.HEALTHY,
+                latency_ms=0,
+                error_rate=0,
             ))
             await asyncio.sleep(5)

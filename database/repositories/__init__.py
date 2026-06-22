@@ -1,9 +1,9 @@
 """
-Repository layer — all database queries.
-Each repository handles exactly one entity. No business logic.
+طبقة المستودعات — كل استعلامات قاعدة البيانات.
+كل مستودع يتعامل مع كيان واحد بالضبط. لا يحتوي على منطق أعمال.
 
-CRITICAL: users.id is UUID. All tables FK to users.id MUST use the UUID,
-not the Telegram ID. UserRepository.resolve_user_uuid() handles the mapping.
+مهم: users.id هو UUID. كل الجداول التي ترتبط بـ users.id يجب أن تستخدم UUID،
+وليس Telegram ID. UserRepository.resolve_user_uuid() يتولى عملية الربط.
 """
 import ssl
 import logging
@@ -23,12 +23,13 @@ from database.models import (
 
 logger = logging.getLogger("database")
 
-# ── Engine Setup ────────────────────────────────────────────
+# ── إعداد المحرك ────────────────────────────────────────────
 _engine = None
 _async_session_factory = None
 
 
 async def init_db() -> None:
+    """تهيئة الاتصال بقاعدة البيانات وإنشاء الجداول إن لم تكن موجودة."""
     global _engine, _async_session_factory
     settings = get_settings()
     ssl_context = ssl.create_default_context()
@@ -52,30 +53,32 @@ async def init_db() -> None:
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    logger.info("[DATABASE] Initialized successfully.")
+    logger.info("[قاعدة البيانات] تمت التهيئة بنجاح.")
 
 
 async def close_db() -> None:
+    """إغلاق اتصالات قاعدة البيانات."""
     if _engine:
         await _engine.dispose()
-        logger.info("[DATABASE] Connections closed.")
+        logger.info("[قاعدة البيانات] تم إغلاق الاتصالات.")
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """منتج جلِسة async — يُستخدم كاعتماد في محركات النظام."""
     if _async_session_factory is None:
-        raise RuntimeError("Database not initialized. Call init_db() first.")
+        raise RuntimeError("قاعدة البيانات غير مهيأة. استدعِ init_db() أولاً.")
     async with _async_session_factory() as session:
         yield session
 
 
 # ═══════════════════════════════════════════════════════════════
-#  User Repository — the single source of truth for user UUID
+#  مستودع المستخدم — المصدر الوحيد للحقيقة لـ UUID المستخدم
 # ═══════════════════════════════════════════════════════════════
 
 class UserRepository:
-    """Manages User records. Provides Telegram ID → UUID resolution."""
+    """إدارة سجلات المستخدمين. يوفر تحويل Telegram ID → UUID."""
 
-    # In-process cache: telegram_id_str → user_uuid
+    # ذاكرة تخزين مؤقت داخل العملية: telegram_id_str → user_uuid
     _uuid_cache: dict[str, str] = {}
 
     @classmethod
@@ -92,28 +95,29 @@ class UserRepository:
 
     @classmethod
     def _cache_clear(cls):
+        """مسح الذاكرة المؤقتة لتحويلات Telegram ID → UUID."""
         cls._uuid_cache.clear()
 
     @staticmethod
     async def resolve_user_uuid(session: AsyncSession, telegram_id) -> str:
         """
-        Resolve a Telegram ID to the user's UUID (users.id).
-        Creates the user record automatically if it doesn't exist.
-        This is the ONLY method that should be used to get a valid user_id
-        for foreign key references.
+        تحويل Telegram ID إلى UUID المستخدم (users.id).
+        يُنشئ سجل المستخدم تلقائياً إذا لم يكن موجوداً.
+        هذه هي الطريقة الوحيدة التي يجب استخدامها للحصول على user_id صالح
+        للمفاتيح الخارجية.
 
-        Returns: str — the UUID from users.id
+        تُرجع: str — UUID من users.id
         """
         tid = str(telegram_id)
-        logger.debug(f"[AUTH] Resolving user UUID for telegram_id={tid}")
+        logger.info(f"[مصادقة] جاري تحويل telegram_id={tid} إلى UUID")
 
-        # 1. Check in-process cache
+        # ١. التحقق من الذاكرة المؤقتة
         cached = UserRepository._cache_get(tid)
         if cached:
-            logger.debug(f"[AUTH] Cache hit: telegram_id={tid} → uuid={cached[:8]}...")
+            logger.info(f"[مصادقة] موجود في الذاكرة المؤقتة: telegram_id={tid} → uuid={cached[:8]}...")
             return cached
 
-        # 2. Query database
+        # ٢. الاستعلام من قاعدة البيانات
         result = await session.execute(
             select(User).where(User.telegram_id == tid)
         )
@@ -121,29 +125,30 @@ class UserRepository:
 
         if user:
             UserRepository._cache_set(tid, user.id)
-            logger.info(f"[AUTH] User found: telegram_id={tid} → uuid={user.id[:8]}...")
+            logger.info(f"[مصادقة] المستخدم موجود: telegram_id={tid} → uuid={user.id[:8]}...")
             return user.id
 
-        # 3. Create user
-        logger.info(f"[AUTH] Creating new user for telegram_id={tid}")
+        # ٣. إنشاء مستخدم جديد
+        logger.info(f"[مصادقة] إنشاء مستخدم جديد: telegram_id={tid}")
         user = User(telegram_id=tid)
         session.add(user)
         await session.commit()
-        await session.refresh(user)  # Ensure we have the generated UUID
+        await session.refresh(user)  # ضمان الحصول على UUID المُنشأ
 
         UserRepository._cache_set(tid, user.id)
-        logger.info(f"[AUTH] User created: telegram_id={tid} → uuid={user.id[:8]}...")
+        logger.info(f"[مصادقة] تم إنشاء المستخدم: telegram_id={tid} → uuid={user.id[:8]}...")
         return user.id
 
     @staticmethod
     async def get_or_create(session: AsyncSession, telegram_id: int) -> User:
-        """Get or create user. Returns full User object."""
+        """جلب أو إنشاء مستخدم. تُرجع كائن User كاملاً."""
         uuid_str = await UserRepository.resolve_user_uuid(session, telegram_id)
         result = await session.execute(select(User).where(User.id == uuid_str))
         return result.scalars().one()
 
     @staticmethod
     async def get_by_telegram_id(session: AsyncSession, telegram_id: int) -> Optional[User]:
+        """البحث عن مستخدم بواسطة Telegram ID."""
         result = await session.execute(
             select(User).where(User.telegram_id == str(telegram_id))
         )
@@ -151,44 +156,51 @@ class UserRepository:
 
     @staticmethod
     async def get_by_uuid(session: AsyncSession, user_uuid: str) -> Optional[User]:
+        """البحث عن مستخدم بواسطة UUID."""
         result = await session.execute(select(User).where(User.id == user_uuid))
         return result.scalars().first()
 
     @staticmethod
     async def update_status(session: AsyncSession, user: User,
                             is_active: bool, emergency_stop: bool = False):
+        """تحديث حالة المستخدم (نشط/موقوف)."""
         user.is_active = is_active
         user.emergency_stop = emergency_stop
         await session.commit()
-        logger.info(f"[AUTH] User {user.telegram_id} status: active={is_active} stop={emergency_stop}")
+        logger.info(
+            f"[مصادقة] تم تحديث حالة المستخدم {user.telegram_id}: "
+            f"نشط={is_active} توقف_طارئ={emergency_stop}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Coin Repository
+#  مستودع العملات
 # ═══════════════════════════════════════════════════════════════
 
 class CoinRepository:
+    """إدارة إعدادات العملات للمستخدمين. V4.0: timeframes أصبح JSON."""
 
     @staticmethod
     async def _resolve_user_id(session: AsyncSession, identifier) -> str:
         """
-        Resolve user identifier (Telegram ID or UUID) to UUID.
-        Accepts: int (telegram_id), str (telegram_id or UUID), or User object.
+        تحويل معرّف المستخدم (Telegram ID أو UUID) إلى UUID.
+        يقبل: int (telegram_id)، str (telegram_id أو UUID)، أو كائن User.
         """
-        if hasattr(identifier, 'id'):  # User object
+        if hasattr(identifier, 'id'):  # كائن User
             return identifier.id
         try:
-            # Try as UUID first (36-char with dashes)
+            # المحاولة كـ UUID أولاً (36 حرفاً مع شرطات)
             sid = str(identifier)
             if len(sid) == 36 and sid.count('-') == 4:
                 return sid
         except Exception:
             pass
-        # Treat as telegram_id
+        # التعامل كـ telegram_id
         return await UserRepository.resolve_user_uuid(session, identifier)
 
     @staticmethod
     async def get_all_active(session: AsyncSession, identifier) -> List[Coin]:
+        """جلب كل العملات النشطة للمستخدم."""
         user_uuid = await CoinRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Coin).where(and_(Coin.user_id == user_uuid, Coin.is_active == True))
@@ -197,6 +209,7 @@ class CoinRepository:
 
     @staticmethod
     async def get_all(session: AsyncSession, identifier) -> List[Coin]:
+        """جلب كل العملات (بما فيها غير النشطة) للمستخدم."""
         user_uuid = await CoinRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Coin).where(Coin.user_id == user_uuid)
@@ -205,6 +218,7 @@ class CoinRepository:
 
     @staticmethod
     async def get_by_symbol(session: AsyncSession, identifier, symbol: str) -> Optional[Coin]:
+        """جلب إعدادات عملة محددة بالرمز للمستخدم."""
         user_uuid = await CoinRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Coin).where(and_(Coin.user_id == user_uuid, Coin.symbol == symbol))
@@ -212,23 +226,52 @@ class CoinRepository:
         return result.scalars().first()
 
     @staticmethod
-    async def add(session: AsyncSession, identifier, symbol: str,
-                  capital_allocated: float = 100.0,
-                  risk_per_trade: float = 1.0,
-                  timeframe: str = "15m") -> Coin:
+    async def get_active_timeframes(session: AsyncSession, identifier, symbol: str) -> List[str]:
         """
-        Add a coin for a user. Automatically resolves user UUID.
-        identifier can be: int (telegram_id), str (telegram_id or UUID), or User object.
+        جلب قائمة الأطر الزمنية النشطة لعملة محددة.
+        V4.0: تُرجع القائمة من حقل `timeframes` (JSON) بعد التحقق من أن العملة نشطة.
 
-        Handles duplicate symbol: if coin with same symbol exists, updates it.
+        تُرجع: List[str] — مثال: ["15m", "1h", "4h"]
         """
         user_uuid = await CoinRepository._resolve_user_id(session, identifier)
+        result = await session.execute(
+            select(Coin.timeframes).where(
+                and_(
+                    Coin.user_id == user_uuid,
+                    Coin.symbol == symbol,
+                    Coin.is_active == True
+                )
+            )
+        )
+        timeframes = result.scalars().first()
+        if timeframes is None:
+            logger.info(f"[عملات] لم يتم العثور على عملة نشطة: {symbol}")
+            return []
+        logger.info(f"[عملات] الأطر الزمنية النشطة لـ {symbol}: {timeframes}")
+        return timeframes
+
+    @staticmethod
+    async def add(session: AsyncSession, identifier, symbol: str,
+                  allocated_capital: float,
+                  risk_per_trade: float = 1.0,
+                  timeframes: Optional[List[str]] = None,
+                  min_entry_size: float = 0.0) -> Coin:
+        """
+        إضافة عملة للمستخدم. `allocated_capital` إجباري — لا قيمة افتراضية.
+        identifier يمكن أن يكون: int (telegram_id)، str (telegram_id أو UUID)، أو كائن User.
+
+        يتعامل مع الرموز المكررة: إذا كانت العملة موجودة بنفس الرمز، يُحدّثها.
+        """
+        user_uuid = await CoinRepository._resolve_user_id(session, identifier)
+        if timeframes is None:
+            timeframes = ["15m"]
+
         logger.info(
-            f"[COIN] Adding: symbol={symbol} capital={capital_allocated} "
-            f"risk={risk_per_trade}% tf={timeframe} user_uuid={user_uuid[:8]}..."
+            f"[عملات] إضافة: رمز={symbol} رأس_مال={allocated_capital} "
+            f"مخاطرة={risk_per_trade}% أطر={timeframes} مستخدم={user_uuid[:8]}..."
         )
 
-        # Check for existing coin with same symbol
+        # التحقق من وجود عملة بنفس الرمز
         existing = await session.execute(
             select(Coin).where(
                 and_(Coin.user_id == user_uuid, Coin.symbol == symbol)
@@ -237,59 +280,66 @@ class CoinRepository:
         existing_coin = existing.scalars().first()
 
         if existing_coin:
-            # Update existing
-            existing_coin.capital_allocated = capital_allocated
+            # تحديث الموجود
+            existing_coin.allocated_capital = allocated_capital
             existing_coin.risk_per_trade = risk_per_trade
-            existing_coin.timeframe = timeframe
+            existing_coin.timeframes = timeframes
+            existing_coin.min_entry_size = min_entry_size
             existing_coin.is_active = True
             await session.commit()
-            logger.info(f"[COIN] Updated existing: {symbol}")
+            logger.info(f"[عملات] تم تحديث الموجود: {symbol}")
             return existing_coin
 
-        # Create new
+        # إنشاء جديد
         coin = Coin(
             user_id=user_uuid,
             symbol=symbol,
-            capital_allocated=capital_allocated,
+            allocated_capital=allocated_capital,
             risk_per_trade=risk_per_trade,
-            timeframe=timeframe,
+            timeframes=timeframes,
+            min_entry_size=min_entry_size,
         )
         session.add(coin)
         await session.commit()
-        logger.info(f"[COIN] Created: {symbol} id={coin.id[:8]}...")
+        logger.info(f"[عملات] تم الإنشاء: {symbol} معرف={coin.id[:8]}...")
         return coin
 
     @staticmethod
     async def delete_by_symbol(session: AsyncSession, identifier, symbol: str):
+        """حذف عملة بالرمز للمستخدم."""
         user_uuid = await CoinRepository._resolve_user_id(session, identifier)
         await session.execute(
             delete(Coin).where(and_(Coin.user_id == user_uuid, Coin.symbol == symbol))
         )
         await session.commit()
-        logger.info(f"[COIN] Deleted: {symbol}")
+        logger.info(f"[عملات] تم الحذف: {symbol}")
 
     @staticmethod
     async def update(session: AsyncSession, coin: Coin, **kwargs):
+        """تحديث حقول عملة موجودة."""
         for key, value in kwargs.items():
             setattr(coin, key, value)
         await session.commit()
-        logger.info(f"[COIN] Updated: {coin.symbol} {kwargs}")
+        logger.info(f"[عملات] تم التحديث: {coin.symbol} {kwargs}")
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Trade Repository
+#  مستودع الصفقات
 # ═══════════════════════════════════════════════════════════════
 
 class TradeRepository:
+    """إدارة سجلات الصفقات المنفَّذة."""
 
     @staticmethod
     async def _resolve_user_id(session: AsyncSession, identifier) -> str:
+        """تحويل معرّف المستخدم إلى UUID."""
         if hasattr(identifier, 'id'):
             return identifier.id
         return await UserRepository.resolve_user_uuid(session, identifier)
 
     @staticmethod
     async def get_open_trades(session: AsyncSession, symbol: str) -> List[Trade]:
+        """جلب كل الصفقات المفتوحة لرمز معين (عبر كل المستخدمين)."""
         result = await session.execute(
             select(Trade).where(and_(Trade.symbol == symbol, Trade.status == "OPEN"))
         )
@@ -297,6 +347,7 @@ class TradeRepository:
 
     @staticmethod
     async def get_open_trades_for_user(session: AsyncSession, identifier) -> List[Trade]:
+        """جلب الصفقات المفتوحة لمستخدم محدد."""
         user_uuid = await TradeRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Trade).where(and_(Trade.user_id == user_uuid, Trade.status == "OPEN"))
@@ -305,6 +356,7 @@ class TradeRepository:
 
     @staticmethod
     async def get_closed_trades(session: AsyncSession, identifier, limit: int = 20) -> List[Trade]:
+        """جلب آخر الصفقات المغلقة لمستخدم (الأحدث أولاً)."""
         user_uuid = await TradeRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Trade)
@@ -316,6 +368,7 @@ class TradeRepository:
 
     @staticmethod
     async def get_all_closed(session: AsyncSession, identifier) -> List[Trade]:
+        """جلب كل الصفقات المغلقة لمستخدم."""
         user_uuid = await TradeRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Trade).where(and_(Trade.user_id == user_uuid, Trade.status != "OPEN"))
@@ -329,7 +382,7 @@ class TradeRepository:
                   risk_score: float = 50.0, confidence_score: float = 50.0,
                   entry_reason: str = "", market_conditions: dict = None,
                   fees: float = 0.0) -> Trade:
-        """Add a trade. Handles user UUID resolution automatically."""
+        """إضافة صفقة جديدة. يحل UUID المستخدم تلقائياً."""
         user_uuid = await TradeRepository._resolve_user_id(session, identifier)
         trade = Trade(
             user_id=user_uuid,
@@ -346,22 +399,28 @@ class TradeRepository:
         )
         session.add(trade)
         await session.commit()
-        logger.info(f"[TRADE] Created: {symbol} {side} qty={quantity:.6f} @ {entry_price}")
+        logger.info(
+            f"[صفقات] تم الإنشاء: {symbol} {side} كمية={quantity:.6f} @ {entry_price}"
+        )
         return trade
 
     @staticmethod
     async def close_trade(session: AsyncSession, trade: Trade,
                           exit_price: float, status: str, exit_reason: str):
+        """إغلاق صفقة وحساب الربح/الخسارة."""
         trade.exit_price = exit_price
         trade.status = status
         trade.exit_reason = exit_reason
         trade.closed_at = datetime.utcnow()
         trade.pnl = ((exit_price - trade.entry_price) / trade.entry_price) * trade.quantity
         await session.commit()
-        logger.info(f"[TRADE] Closed: {trade.symbol} {status} PnL={trade.pnl:.2f}")
+        logger.info(
+            f"[صفقات] تم الإغلاق: {trade.symbol} {status} ربح/خسارة={trade.pnl:.2f}"
+        )
 
     @staticmethod
     async def has_open_trade(session: AsyncSession, identifier, symbol: str) -> bool:
+        """التحقق من وجود صفقة مفتوحة للرمز عند المستخدم."""
         user_uuid = await TradeRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Trade).where(
@@ -372,10 +431,11 @@ class TradeRepository:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Position Repository
+#  مستودع المراكز
 # ═══════════════════════════════════════════════════════════════
 
 class PositionRepository:
+    """إدارة المراكز المفتوحة."""
 
     @staticmethod
     async def _resolve_user_id(session: AsyncSession, identifier) -> str:
@@ -385,6 +445,7 @@ class PositionRepository:
 
     @staticmethod
     async def get_open(session: AsyncSession, identifier) -> List[Position]:
+        """جلب كل المراكز المفتوحة للمستخدم."""
         user_uuid = await PositionRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Position).where(
@@ -395,6 +456,7 @@ class PositionRepository:
 
     @staticmethod
     async def get_by_symbol(session: AsyncSession, identifier, symbol: str) -> Optional[Position]:
+        """جلب المركز المفتوح لرمز معين عند المستخدم."""
         user_uuid = await PositionRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(Position).where(
@@ -407,16 +469,17 @@ class PositionRepository:
 
     @staticmethod
     async def close_position(session: AsyncSession, position: Position):
+        """إغلاق مركز."""
         position.status = "CLOSED"
         await session.commit()
-        logger.info(f"[POSITION] Closed: {position.symbol}")
+        logger.info(f"[مراكز] تم الإغلاق: {position.symbol}")
 
     @staticmethod
     async def create(session: AsyncSession, identifier, symbol: str,
                      entry_price: float, quantity: float,
                      stop_loss: float = None, take_profit: float = None,
                      risk_exposure: float = 0.0) -> Position:
-        """Create a position. Handles user UUID resolution."""
+        """إنشاء مركز جديد. يحل UUID المستخدم تلقائياً."""
         user_uuid = await PositionRepository._resolve_user_id(session, identifier)
         position = Position(
             user_id=user_uuid,
@@ -429,15 +492,16 @@ class PositionRepository:
         )
         session.add(position)
         await session.commit()
-        logger.info(f"[POSITION] Created: {symbol} qty={quantity:.6f}")
+        logger.info(f"[مراكز] تم الإنشاء: {symbol} كمية={quantity:.6f}")
         return position
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Portfolio Repository
+#  مستودع المحفظة
 # ═══════════════════════════════════════════════════════════════
 
 class PortfolioRepository:
+    """إدارة لقطات المحفظة."""
 
     @staticmethod
     async def _resolve_user_id(session: AsyncSession, identifier) -> str:
@@ -451,7 +515,7 @@ class PortfolioRepository:
                             unrealized_pnl: float = 0.0,
                             realized_pnl: float = 0.0,
                             exposure: float = 0.0) -> PortfolioSnapshot:
-        """Save a portfolio snapshot. Handles user UUID resolution."""
+        """حفظ لقطة جديدة للمحفظة."""
         user_uuid = await PortfolioRepository._resolve_user_id(session, identifier)
         snapshot = PortfolioSnapshot(
             user_id=user_uuid,
@@ -467,6 +531,7 @@ class PortfolioRepository:
 
     @staticmethod
     async def get_latest(session: AsyncSession, identifier) -> Optional[PortfolioSnapshot]:
+        """جلب أحدث لقطة محفظة للمستخدم."""
         user_uuid = await PortfolioRepository._resolve_user_id(session, identifier)
         result = await session.execute(
             select(PortfolioSnapshot)
@@ -478,60 +543,101 @@ class PortfolioRepository:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  Other Repositories (unchanged, no user FK)
+#  مستودع الإشارات
 # ═══════════════════════════════════════════════════════════════
 
 class SignalRepository:
+    """إدارة إشارات التداول. V4.0: دعم التصفية حسب الإطار الزمني."""
+
     @staticmethod
     async def save(session: AsyncSession, signal: Signal):
+        """حفظ إشارة جديدة."""
         session.add(signal)
         await session.commit()
 
     @staticmethod
     async def get_recent(session: AsyncSession, symbol: str, limit: int = 10) -> List[Signal]:
+        """جلب أحدث الإشارات لرمز معين."""
         result = await session.execute(
             select(Signal).where(Signal.symbol == symbol)
             .order_by(Signal.timestamp.desc()).limit(limit)
         )
         return list(result.scalars().all())
 
+    @staticmethod
+    async def get_recent_by_timeframe(
+        session: AsyncSession, symbol: str, timeframe: str, limit: int = 10
+    ) -> List[Signal]:
+        """جلب أحدث الإشارات لرمز وإطار زمني محدد."""
+        result = await session.execute(
+            select(Signal)
+            .where(and_(Signal.symbol == symbol, Signal.timeframe == timeframe))
+            .order_by(Signal.timestamp.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
+# ═══════════════════════════════════════════════════════════════
+#  مستودع السجلات
+# ═══════════════════════════════════════════════════════════════
 
 class LogRepository:
+    """إدارة سجلات النظام (مسار التدقيق)."""
+
     @staticmethod
     async def save(session: AsyncSession, log_entry: SystemLog):
+        """حفظ سجل جديد."""
         session.add(log_entry)
         await session.commit()
 
     @staticmethod
     async def get_recent(session: AsyncSession, limit: int = 50) -> List[SystemLog]:
+        """جلب أحدث السجلات."""
         result = await session.execute(
             select(SystemLog).order_by(SystemLog.timestamp.desc()).limit(limit)
         )
         return list(result.scalars().all())
 
 
+# ═══════════════════════════════════════════════════════════════
+#  مستودع أثر القرار
+# ═══════════════════════════════════════════════════════════════
+
 class DecisionTraceRepository:
+    """إدارة تتبع مسار القرارات."""
+
     @staticmethod
     async def save(session: AsyncSession, trace: DecisionTrace):
+        """حفظ أثر قرار جديد."""
         session.add(trace)
         await session.commit()
 
     @staticmethod
     async def get_by_signal(session: AsyncSession, signal_id: str) -> Optional[DecisionTrace]:
+        """جلب أثر القرار المرتبط بإشارة محددة."""
         result = await session.execute(
             select(DecisionTrace).where(DecisionTrace.signal_id == signal_id)
         )
         return result.scalars().first()
 
 
+# ═══════════════════════════════════════════════════════════════
+#  مستودع أحداث الحيتان
+# ═══════════════════════════════════════════════════════════════
+
 class WhaleEventRepository:
+    """إدارة تتبع صفقات الحيتان."""
+
     @staticmethod
     async def save(session: AsyncSession, event: WhaleEvent):
+        """حفظ حدث حوت جديد."""
         session.add(event)
         await session.commit()
 
     @staticmethod
     async def get_recent_by_symbol(session: AsyncSession, symbol: str, limit: int = 5) -> List[WhaleEvent]:
+        """جلب أحدث أحداث الحيتان لرمز معين."""
         result = await session.execute(
             select(WhaleEvent).where(WhaleEvent.symbol == symbol)
             .order_by(WhaleEvent.timestamp.desc()).limit(limit)
@@ -539,11 +645,18 @@ class WhaleEventRepository:
         return list(result.scalars().all())
 
 
+# ═══════════════════════════════════════════════════════════════
+#  مستودع إحصائيات الاستراتيجيات
+# ═══════════════════════════════════════════════════════════════
+
 class StrategyStatRepository:
+    """إدارة إحصائيات أداء الاستراتيجيات."""
+
     @staticmethod
     async def upsert(session: AsyncSession, strategy_name: str, symbol: str,
                      win_rate: float, avg_profit: float, avg_loss: float,
                      drawdown: float, total_trades: int, timeframe: str):
+        """تحديث أو إنشاء إحصائية استراتيجية."""
         result = await session.execute(
             select(StrategyStat).where(
                 and_(StrategyStat.strategy_name == strategy_name,
@@ -569,16 +682,88 @@ class StrategyStatRepository:
         await session.commit()
 
 
+# ═══════════════════════════════════════════════════════════════
+#  مستودع حالة السوق
+# ═══════════════════════════════════════════════════════════════
+
 class MarketStateRepository:
+    """
+    إدارة حالة السوق لكل رمز وإطار زمني.
+    V4.0: دعم التصفية حسب الإطار الزمني.
+    """
+
     @staticmethod
     async def save(session: AsyncSession, state: MarketState):
+        """حفظ حالة سوق جديدة."""
         session.add(state)
         await session.commit()
 
     @staticmethod
-    async def get_latest(session: AsyncSession, symbol: str) -> Optional[MarketState]:
+    async def get_latest(session: AsyncSession, symbol: str, timeframe: str = None) -> Optional[MarketState]:
+        """
+        جلب أحدث حالة سوق لرمز معين.
+        إذا تم تمرير `timeframe`، يتم التصفية حسب الإطار الزمني أيضاً.
+        """
+        conditions = [MarketState.symbol == symbol]
+        if timeframe:
+            conditions.append(MarketState.timeframe == timeframe)
+
         result = await session.execute(
-            select(MarketState).where(MarketState.symbol == symbol)
-            .order_by(MarketState.timestamp.desc()).limit(1)
+            select(MarketState)
+            .where(and_(*conditions))
+            .order_by(MarketState.timestamp.desc())
+            .limit(1)
         )
         return result.scalars().first()
+
+    @staticmethod
+    async def get_history(
+        session: AsyncSession, symbol: str, timeframe: str = None, limit: int = 20
+    ) -> List[MarketState]:
+        """
+        جلب سجل حالات السوق لرمز معين (الأحدث أولاً).
+        إذا تم تمرير `timeframe`، يتم التصفية حسب الإطار الزمني.
+        """
+        conditions = [MarketState.symbol == symbol]
+        if timeframe:
+            conditions.append(MarketState.timeframe == timeframe)
+
+        result = await session.execute(
+            select(MarketState)
+            .where(and_(*conditions))
+            .order_by(MarketState.timestamp.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def get_all_timeframes_latest(
+        session: AsyncSession, symbol: str
+    ) -> List[MarketState]:
+        """
+        جلب أحدث حالة سوق لكل إطار زمني مختلف لرمز معين.
+        تُرجع قائمة — عنصر واحد لكل إطار زمني فريد، بأحدث طابع زمني له.
+        """
+        # استعلام فرعي: أحدث طابع زمني لكل إطار زمني
+        subquery = (
+            select(
+                MarketState.timeframe,
+                func.max(MarketState.timestamp).label("max_ts")
+            )
+            .where(MarketState.symbol == symbol)
+            .group_by(MarketState.timeframe)
+            .subquery()
+        )
+
+        result = await session.execute(
+            select(MarketState)
+            .join(
+                subquery,
+                and_(
+                    MarketState.symbol == symbol,
+                    MarketState.timeframe == subquery.c.timeframe,
+                    MarketState.timestamp == subquery.c.max_ts
+                )
+            )
+        )
+        return list(result.scalars().all())

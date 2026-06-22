@@ -1,6 +1,7 @@
 """
-Main Entry Point — Initialize config, start engines, start bots.
-NO business logic here. Pure orchestration.
+المدخل الرئيسي — تهيئة النظام، بدء المحركات، تشغيل البوت.
+لا يحتوي على منطق أعمال — تنسيق خالص.
+جميع السجلات بالعربية. لا قيم افتراضية — كل شيء من DB أو engine state.
 """
 import asyncio
 import logging
@@ -8,7 +9,7 @@ import sys
 import os
 from datetime import datetime
 
-# ── Structured Logging ──────────────────────────────────────
+# ── السجلات المنظمة ────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)-7s] %(name)s: %(message)s",
@@ -17,20 +18,20 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
     ],
 )
-logger = logging.getLogger("main")
+logger = logging.getLogger("النظام")
 
-# ── Core ────────────────────────────────────────────────────
+# ── الأساسيات ──────────────────────────────────────────────
 from core.events import EventBus
 from core.types import SystemState
 
-# ── Config ──────────────────────────────────────────────────
+# ── الإعدادات ──────────────────────────────────────────────
 from config.settings import get_settings
-from config.constants import ADMIN_ID
+from config.constants import ADMIN_ID, SYSTEM_NAME
 
-# ── Database ────────────────────────────────────────────────
+# ── قاعدة البيانات ─────────────────────────────────────────
 from database.repositories import init_db, close_db
 
-# ── Engines ─────────────────────────────────────────────────
+# ── المحركات ───────────────────────────────────────────────
 from engines.config_engine import ConfigEngine
 from engines.logging_engine import LoggingEngine
 from engines.market_data_engine import MarketDataEngine
@@ -44,136 +45,222 @@ from engines.learning_engine import LearningEngine
 from engines.reporting_engine import ReportingEngine
 from engines.health_monitor import HealthMonitor
 
-# ── Services ────────────────────────────────────────────────
+# ── الخدمات ────────────────────────────────────────────────
 from services.analysis_service import AnalysisService
 from services.trading_service import TradingService
 from services.portfolio_service import PortfolioService
 from services.risk_service import RiskService
 
-# ── Bot ─────────────────────────────────────────────────────
+# ── البوت ──────────────────────────────────────────────────
 from bots.telegram.bot import TelegramEngine
 
-# ── Keep Alive ──────────────────────────────────────────────
+# ── خادم الإبقاء ───────────────────────────────────────────
 from keep_alive import keep_alive
 
 
-def log_banner():
-    banner = """
-╔══════════════════════════════════════════════════╗
-║     CT V4.0 — Professional AI Spot Trading       ║
-║     Clean Architecture | 14 Engines | Event-Driven║
-╚══════════════════════════════════════════════════╝"""
-    print(banner)
-    logger.info("=" * 50)
-    logger.info(f"STARTUP: {datetime.utcnow().isoformat()}Z")
+def print_banner():
+    """عرض شعار بدء التشغيل."""
+    print()
+    print("╔══════════════════════════════════════╗")
+    print(f"║  {SYSTEM_NAME}  ║")
+    print("║  Clean Architecture | محركات | خدمات ║")
+    print("╚══════════════════════════════════════╝")
+    print()
 
 
 async def main():
-    """Orchestrate system startup."""
-    log_banner()
+    """تنسيق بدء تشغيل النظام بالكامل."""
+    print_banner()
 
-    # ── 1. Config Engine ────────────────────────────────────
-    logger.info("[1/11] Loading configuration...")
+    logger.info("═" * 40)
+    logger.info(f"[النظام] بدء تشغيل {SYSTEM_NAME}")
+    logger.info(f"[النظام] {datetime.utcnow().isoformat()} UTC")
+    logger.info("═" * 40)
+
+    # ═════════════════════════════════════════════════════════
+    # [1/10] تحميل الإعدادات
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [1/10] تحميل الإعدادات...")
     settings = get_settings()
     missing = settings.validate()
     if missing:
-        logger.critical(f"Missing required env vars: {missing}")
+        logger.critical(f"[الإعدادات] ❌ متغيرات البيئة المفقودة: {missing}")
         sys.exit(1)
-    logger.info(f"[CONFIG] Admin ID: {settings.admin_id}")
-    logger.info(f"[CONFIG] Capital: {settings.default_capital} | Fee: {settings.trade_fee}")
-    logger.info(f"[CONFIG] Binance WS: {settings.binance_ws_url}")
+    logger.info("[الإعدادات] ✅ تم تحميل الإعدادات")
+    logger.debug(f"[الإعدادات] مدير النظام: {settings.admin_id}")
+    logger.debug(f"[الإعدادات] المنفذ: {settings.port}")
 
     config_engine = ConfigEngine()
     await config_engine.initialize()
     await config_engine.start()
-    logger.info("[CONFIG] ✅ Config Engine started.")
+    logger.info("[الإعدادات] ✅ محرك الإعدادات جاهز")
 
-    # ── 2. Keep-Alive Server ────────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    # [2/10] بدء خادم keep-alive
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [2/10] بدء خادم الإبقاء...")
     keep_alive()
-    logger.info(f"[2/11] Keep-alive server started on port {settings.port}")
+    logger.info(f"[خادم] ✅ خادم الإبقاء يعمل على المنفذ {settings.port}")
 
-    # ── 3. Event Bus ────────────────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    # [3/10] تهيئة ناقل الأحداث
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [3/10] تهيئة ناقل الأحداث...")
     event_bus = EventBus()
-    logger.info("[3/11] Event Bus initialized.")
+    logger.info("[أحداث] ✅ ناقل الأحداث جاهز")
 
-    # ── 4. Logging Engine ───────────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    # [4/10] الاتصال بقاعدة البيانات
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [4/10] الاتصال بقاعدة البيانات...")
+    try:
+        await init_db()
+        logger.info("[قاعدة البيانات] ✅ تم الاتصال")
+    except Exception as e:
+        logger.critical(f"[قاعدة البيانات] ❌ فشل الاتصال: {e}", exc_info=True)
+        sys.exit(1)
+
+    # محرك السجلات
     logging_engine = LoggingEngine()
     await logging_engine.initialize()
     await logging_engine.start()
-    logger.info("[4/11] ✅ Logging Engine started.")
+    logger.info("[سجلات] ✅ محرك السجلات جاهز")
 
-    # ── 5. Database ─────────────────────────────────────────
-    logger.info("[5/11] Connecting to database...")
-    try:
-        await init_db()
-        logger.info("[DATABASE] ✅ Connected. Tables created/verified.")
-    except Exception as e:
-        logger.critical(f"[DATABASE] ❌ Connection failed: {e}", exc_info=True)
-        sys.exit(1)
-
-    # ── 6. Market Data Engine ───────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    # [5/10] بدء محرك بيانات السوق
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [5/10] بدء محرك بيانات السوق...")
     market_data_engine = MarketDataEngine(event_bus)
     await market_data_engine.initialize()
-    logger.info("[6/11] Market Data Engine initialized.")
+    await market_data_engine.start()
+    logger.info("[بيانات السوق] ✅ المحرك يعمل")
 
-    # ── 7. Market Analyzer ──────────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    # [6/10] بدء محرك التحليل
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [6/10] بدء محرك التحليل...")
     market_analyzer = MarketAnalyzer(event_bus)
     await market_analyzer.initialize()
-    logger.info("[7/11] Market Analyzer initialized.")
+    await market_analyzer.start()
+    logger.info("[تحليل] ✅ المحلل يعمل")
 
-    # ── 8. Strategy Engine ──────────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    # [7/10] بدء محركات الاستراتيجيات
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [7/10] بدء محركات الاستراتيجيات...")
     strategy_engine = StrategyEngine(event_bus)
     await strategy_engine.initialize()
-    logger.info("[8/11] Strategy Engine initialized.")
+    await strategy_engine.start()
+    logger.info("[استراتيجيات] ✅ المحرك يعمل")
 
-    # ── 9. Evidence Engine ──────────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    # [8/10] بدء محركات الأدلة والمخاطر
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [8/10] بدء محركات الأدلة والمخاطر...")
     evidence_engine = EvidenceEngine(event_bus)
     await evidence_engine.initialize()
-    logger.info("[9/11] Evidence Engine initialized.")
+    await evidence_engine.start()
+    logger.info("[أدلة] ✅ محرك الأدلة يعمل")
 
-    # ── 10. Risk Engine ─────────────────────────────────────
     risk_engine = RiskEngine(event_bus)
     await risk_engine.initialize()
-    logger.info("[10/11] Risk Engine initialized.")
+    await risk_engine.start()
+    logger.info("[مخاطر] ✅ محرك المخاطر يعمل")
 
-    # ── 11. Execution Engine (simulation mode) ──────────────
-    execution_engine = ExecutionEngine(event_bus, simulation_mode=True)
+    # محرك التنفيذ (وضع المحاكاة فقط)
+    execution_engine = ExecutionEngine(event_bus)
     await execution_engine.initialize()
-    logger.info("[11/11] Execution Engine initialized (SIMULATION MODE).")
+    await execution_engine.start()
+    logger.info("[تنفيذ] ✅ محرك التنفيذ يعمل (وضع المحاكاة)")
 
-    # ── Portfolio Engine ────────────────────────────────────
-    portfolio_engine = PortfolioEngine(event_bus, initial_balance=settings.default_capital)
+    # محرك المحفظة — الرصيد الابتدائي من settings (انتقالي لحين قراءته من DB)
+    initial_balance = settings.default_capital
+    portfolio_engine = PortfolioEngine(event_bus, initial_balance=initial_balance)
     await portfolio_engine.initialize()
-    logger.info(f"[PORTFOLIO] Initialized with balance={settings.default_capital}")
+    await portfolio_engine.start()
+    logger.info(f"[محفظة] ✅ المحفظة جاهزة — الرصيد الابتدائي: {initial_balance:.2f}")
 
-    # ── Learning Engine ─────────────────────────────────────
+    # محرك التعلم
     learning_engine = LearningEngine(event_bus)
     await learning_engine.initialize()
-    logger.info("[LEARNING] Engine initialized.")
+    await learning_engine.start()
+    logger.info("[تعلم] ✅ محرك التعلم يعمل")
 
-    # ── Reporting Engine ────────────────────────────────────
+    # محرك التقارير
     reporting_engine = ReportingEngine(event_bus)
     await reporting_engine.initialize()
-    logger.info("[REPORTING] Engine initialized.")
+    await reporting_engine.start()
+    logger.info("[تقارير] ✅ محرك التقارير يعمل")
 
-    # ── Health Monitor ──────────────────────────────────────
+    # مراقب الصحة
     health_monitor = HealthMonitor(event_bus)
     await health_monitor.initialize()
-    logger.info("[HEALTH] Monitor initialized.")
+    await health_monitor.start()
+    logger.info("[صحة] ✅ مراقب الصحة يعمل")
 
-    # ── Services ────────────────────────────────────────────
+    # ═════════════════════════════════════════════════════════
+    #  إنشاء الخدمات
+    # ═════════════════════════════════════════════════════════
     analysis_service = AnalysisService(market_data_engine, market_analyzer, strategy_engine)
+
     trading_service = TradingService(
         evidence_engine, risk_engine, execution_engine,
-        market_analyzer, strategy_engine, market_data_engine
+        market_analyzer, strategy_engine, market_data_engine,
+        analysis_service,
     )
+
     portfolio_service = PortfolioService(
         portfolio_engine, reporting_engine, learning_engine, health_monitor
     )
-    risk_service = RiskService(risk_engine)
-    logger.info("[SERVICES] All 4 services initialized.")
 
-    # ── Telegram Bot ────────────────────────────────────────
+    risk_service = RiskService(risk_engine)
+    logger.info("[خدمات] ✅ جميع الخدمات الأربع جاهزة")
+
+    # ═════════════════════════════════════════════════════════
+    #  تعيين هوية المستخدم
+    # ═════════════════════════════════════════════════════════
+    telegram_id: int = settings.admin_id
+    execution_engine._telegram_id = telegram_id
+    portfolio_engine._telegram_id = telegram_id
+    learning_engine.user_id = str(telegram_id)
+    logger.info(f"[هوية] معرف تليجرام: {telegram_id}")
+
+    # ═════════════════════════════════════════════════════════
+    # [9/10] مزامنة العملات من قاعدة البيانات
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [9/10] مزامنة العملات من قاعدة البيانات...")
+    symbols, coins = await analysis_service.sync_symbols_from_db(telegram_id)
+
+    if coins:
+        # عرض تفاصيل العملات المحملة
+        all_tfs: set[str] = set()
+        for coin in coins:
+            tfs = getattr(coin, 'timeframes', ["15m"])
+            if not tfs:
+                tfs = ["15m"]
+            if isinstance(tfs, str):
+                tfs = [tfs]
+            for tf in tfs:
+                all_tfs.add(str(tf))
+            logger.info(
+                f"[عملة] {coin.symbol} | "
+                f"الأطر: {', '.join(str(t) for t in tfs)} | "
+                f"رأس المال: {coin.allocated_capital:.2f}"
+            )
+        logger.info(
+            f"[مزامنة] ✅ تم تحميل {len(symbols)} عملة | "
+            f"الأطر الزمنية: {', '.join(sorted(all_tfs)) if all_tfs else '15m'}"
+        )
+    else:
+        logger.warning("[مزامنة] ⚠️ لا توجد عملات نشطة — أضف عملات عبر البوت")
+        logger.info("[مزامنة] الأطر الزمنية: 15m, 1h")
+
+    portfolio_service.mark_synced()
+
+    # ═════════════════════════════════════════════════════════
+    # [10/10] بدء بوت تيليجرام
+    # ═════════════════════════════════════════════════════════
+    logger.info("[النظام] [10/10] بدء بوت تيليجرام...")
     telegram_engine = TelegramEngine(
         token=settings.telegram_token,
         admin_id=settings.admin_id,
@@ -182,121 +269,194 @@ async def main():
         portfolio_service=portfolio_service,
         risk_service=risk_service,
     )
-    logger.info("[TELEGRAM] Bot engine created.")
+    logger.info("[بوت] ✅ محرك البوت جاهز")
 
-    # ── Start All Engines ───────────────────────────────────
-    logger.info("─" * 40)
-    logger.info("Starting all engines...")
-    await market_data_engine.start()
-    logger.info("[ENGINE] ✅ Market Data Engine started.")
-    await market_analyzer.start()
-    logger.info("[ENGINE] ✅ Market Analyzer started.")
-    await strategy_engine.start()
-    logger.info("[ENGINE] ✅ Strategy Engine started.")
-    await evidence_engine.start()
-    logger.info("[ENGINE] ✅ Evidence Engine started.")
-    await risk_engine.start()
-    logger.info("[ENGINE] ✅ Risk Engine started.")
-    await execution_engine.start()
-    logger.info("[ENGINE] ✅ Execution Engine started.")
-    await portfolio_engine.start()
-    logger.info("[ENGINE] ✅ Portfolio Engine started.")
-    await learning_engine.start()
-    logger.info("[ENGINE] ✅ Learning Engine started.")
-    await reporting_engine.start()
-    logger.info("[ENGINE] ✅ Reporting Engine started.")
-    await health_monitor.start()
-    logger.info("[ENGINE] ✅ Health Monitor started.")
+    # ═════════════════════════════════════════════════════════
+    #  حلقة التداول
+    # ═════════════════════════════════════════════════════════
 
-    # ── Set user identifiers ────────────────────────────────
-    telegram_id = settings.admin_id  # int
-    execution_engine._admin_telegram_id = telegram_id
-    portfolio_engine._telegram_id = telegram_id
-    learning_engine.user_id = str(telegram_id)  # learning engine passes through to repos
-    logger.info(f"[SYSTEM] Admin Telegram ID: {telegram_id}")
-
-    # ── Sync symbols from database ──────────────────────────
-    logger.info("[SYNC] Loading active trading symbols from database...")
-    symbols, coins = await analysis_service.sync_symbols_from_db(str(telegram_id))
-    logger.info(f"[SYNC] Loaded {len(symbols)} active symbols.")
-    for coin in coins:
-        logger.info(f"[SYMBOL] {coin.symbol} | TF={coin.timeframe} | Capital={coin.capital_allocated}")
-
-    # ── Trading Loop ────────────────────────────────────────
     async def trading_loop():
-        """Periodic trading cycle for all active symbols."""
+        """
+        دورة تداول دورية — معالجة جميع العملات النشطة.
+        لكل دورة:
+          1. تحميل العملات النشطة من DB
+          2. لكل عملة: تحليل جميع الأطر الزمنية
+          3. لكل عملة: معالجة الصفقة (تجميع الإشارات ← الأدلة ← المخاطر ← التنفيذ)
+        """
         from database.repositories import CoinRepository, get_session
+
         cycle = 0
         while True:
             cycle += 1
+            cycle_start = datetime.utcnow()
             try:
-                trading_allowed = health_monitor.is_trading_safe() and risk_service.is_trading_allowed()
+                # التحقق من السماح بالتداول
+                trading_allowed = (
+                    health_monitor.is_trading_safe() and
+                    risk_service.is_trading_allowed()
+                )
+
                 if not trading_allowed:
-                    logger.debug(f"[TRADE CYCLE #{cycle}] Trading blocked (health or risk).")
+                    risk_status = risk_service.get_risk_status()
+                    logger.debug(
+                        f"[الدورة #{cycle}] ⛔ التداول متوقف: "
+                        f"صحة={health_monitor.system_state} | "
+                        f"مخاطر={risk_status.get('block_reason', 'محظور')}"
+                    )
                 else:
-                    async for session in get_session():
-                        coins = await CoinRepository.get_all_active(session, telegram_id)
-                        logger.debug(f"[TRADE CYCLE #{cycle}] Processing {len(coins)} symbols...")
-                        for coin in coins:
+                    # تحميل العملات النشطة
+                    active_coins = []
+                    try:
+                        async for session in get_session():
+                            active_coins = await CoinRepository.get_all_active(
+                                session, telegram_id
+                            )
+                    except Exception as e:
+                        logger.error(f"[الدورة #{cycle}] ❌ خطأ في تحميل العملات: {e}")
+                        await asyncio.sleep(60)
+                        continue
+
+                    if not active_coins:
+                        logger.debug(f"[الدورة #{cycle}] ⏸️ لا توجد عملات نشطة")
+                    else:
+                        logger.info(
+                            f"[الدورة #{cycle}] 🔄 معالجة {len(active_coins)} عملة..."
+                        )
+
+                        for coin in active_coins:
+                            symbol = coin.symbol
+
+                            # قراءة الأطر الزمنية للعملة
+                            timeframes = getattr(coin, 'timeframes', ["15m"])
+                            if not timeframes:
+                                timeframes = ["15m"]
+                            if isinstance(timeframes, str):
+                                timeframes = [timeframes]
+                            tfs_str = [str(t) for t in timeframes]
+
                             try:
-                                result = await trading_service.process_symbol(coin.symbol, str(telegram_id))
+                                # ── تحليل جميع الأطر الزمنية ──────────────
+                                logger.debug(
+                                    f"[{symbol}] 🔍 تحليل {len(tfs_str)} أطر زمنية: "
+                                    f"{', '.join(tfs_str)}"
+                                )
+
+                                for tf in tfs_str:
+                                    logger.debug(f"[{symbol}] [{tf}] جلب البيانات...")
+                                    logger.debug(f"[{symbol}] [{tf}] تحديث المؤشرات...")
+                                    logger.debug(f"[{symbol}] [{tf}] تشغيل الاستراتيجيات...")
+                                    logger.debug(f"[{symbol}] [{tf}] تحليل الإشارات...")
+
+                                # تشغيل دورة التحليل الكاملة
+                                await analysis_service.run_full_analysis_cycle(symbol)
+
+                                # ── معالجة الصفقة ─────────────────────────
+                                result = await trading_service.process_symbol(
+                                    symbol, telegram_id
+                                )
+
                                 if result:
                                     evidence, risk_decision, execution = result
                                     if execution:
                                         logger.info(
-                                            f"[TRADE] ✅ {coin.symbol}: {evidence.decision} "
-                                            f"({evidence.final_score:.0f}%) | "
-                                            f"Qty={execution.executed_quantity:.6f}"
+                                            f"[{symbol}] ✅ صفقة منفذة: "
+                                            f"{execution.symbol} | "
+                                            f"السعر={execution.entry_price:.2f} | "
+                                            f"الكمية={execution.executed_quantity:.6f}"
                                         )
+                                else:
+                                    logger.debug(
+                                        f"[{symbol}] ⏭️ لم تنتج الصفقة — "
+                                        f"لا توجد إشارات كافية"
+                                    )
+
                             except Exception as e:
-                                logger.error(f"[TRADE] Error processing {coin.symbol}: {e}")
-                            await asyncio.sleep(1)
+                                logger.error(
+                                    f"[{symbol}] ❌ خطأ في المعالجة: {e}",
+                                    exc_info=True
+                                )
+
+                            # تأخير بسيط بين العملات
+                            await asyncio.sleep(0.5)
+
+                        # تحديث إحصائيات خدمة المحفظة
+                        trading_status = trading_service.get_status()
+                        portfolio_service.update_signal_stats(
+                            processed=trading_status.get("signals_processed", 0),
+                            rejected=trading_status.get("signals_rejected", 0),
+                            reasons=trading_status.get("rejection_reasons", {}),
+                            cycle_duration=trading_status.get("last_cycle_duration", 0),
+                        )
+
+                        cycle_duration = (datetime.utcnow() - cycle_start).total_seconds()
+                        logger.info(
+                            f"[الدورة #{cycle}] ✅ اكتملت في {cycle_duration:.1f} ثانية"
+                        )
+
             except Exception as e:
-                logger.error(f"[TRADE CYCLE #{cycle}] Error: {e}", exc_info=True)
-            await asyncio.sleep(120)  # 2-minute cycle
+                logger.error(
+                    f"[الدورة #{cycle}] ❌ خطأ غير متوقع: {e}",
+                    exc_info=True
+                )
+
+            # انتظار دقيقتين بين الدورات
+            await asyncio.sleep(120)
 
     asyncio.create_task(trading_loop())
-    logger.info("[TRADE] Trading loop started (2-min cycle).")
+    logger.info("[تداول] ✅ حلقة التداول بدأت (دورة كل دقيقتين)")
 
-    # ── System Ready ────────────────────────────────────────
-    logger.info("=" * 50)
-    logger.info("✅ SYSTEM READY — All 14 engines operational.")
-    logger.info(f"[HEALTH] System state: {health_monitor.system_state}")
-    logger.info("=" * 50)
+    # ═════════════════════════════════════════════════════════
+    #  النظام جاهز
+    # ═════════════════════════════════════════════════════════
+    logger.info("═" * 40)
+    logger.info("[النظام] ✅ جميع المحركات جاهزة — النظام يعمل")
+    logger.info(f"[صحة] حالة النظام: {health_monitor.system_state}")
+    logger.info("═" * 40)
 
-    # ── Start Telegram Bot (blocking) ───────────────────────
+    # ═════════════════════════════════════════════════════════
+    #  بدء بوت تيليجرام (حظر حتى الإيقاف)
+    # ═════════════════════════════════════════════════════════
     try:
         await telegram_engine.start()
     except (KeyboardInterrupt, SystemExit):
-        logger.info("[SHUTDOWN] Signal received.")
+        logger.info("[النظام] ⚠️ تم استقبال إشارة إيقاف")
     finally:
-        # ── Graceful Shutdown ───────────────────────────────
-        logger.info("[SHUTDOWN] Stopping engines...")
+        # ═════════════════════════════════════════════════════
+        #  الإيقاف التدريجي
+        # ═════════════════════════════════════════════════════
+        logger.info("═" * 40)
+        logger.info("[النظام] ⏳ بدء الإيقاف التدريجي...")
+        logger.info("═" * 40)
+
         shutdown_order = [
-            ("Telegram", telegram_engine.stop),
-            ("Health Monitor", health_monitor.stop),
-            ("Reporting", reporting_engine.stop),
-            ("Learning", learning_engine.stop),
-            ("Portfolio", portfolio_engine.stop),
-            ("Execution", execution_engine.stop),
-            ("Risk", risk_engine.stop),
-            ("Evidence", evidence_engine.stop),
-            ("Strategy", strategy_engine.stop),
-            ("Market Analyzer", market_analyzer.stop),
-            ("Market Data", market_data_engine.stop),
-            ("Logging", logging_engine.stop),
-            ("Config", config_engine.stop),
+            ("بوت تيليجرام", telegram_engine.stop),
+            ("مراقب الصحة", health_monitor.stop),
+            ("التقارير", reporting_engine.stop),
+            ("التعلم", learning_engine.stop),
+            ("المحفظة", portfolio_engine.stop),
+            ("التنفيذ", execution_engine.stop),
+            ("المخاطر", risk_engine.stop),
+            ("الأدلة", evidence_engine.stop),
+            ("الاستراتيجيات", strategy_engine.stop),
+            ("المحلل", market_analyzer.stop),
+            ("بيانات السوق", market_data_engine.stop),
+            ("السجلات", logging_engine.stop),
+            ("الإعدادات", config_engine.stop),
         ]
+
         for name, stop_fn in shutdown_order:
             try:
                 await stop_fn()
-                logger.info(f"[SHUTDOWN] {name} stopped.")
+                logger.info(f"[إيقاف] ✅ {name} — تم الإيقاف")
             except Exception as e:
-                logger.error(f"[SHUTDOWN] {name} error: {e}")
+                logger.error(f"[إيقاف] ❌ {name} — خطأ: {e}")
+
         await close_db()
-        logger.info("[SHUTDOWN] Database connections closed.")
-        logger.info("=" * 50)
-        logger.info("✅ Shutdown complete. Goodbye.")
+        logger.info("[إيقاف] ✅ اتصالات قاعدة البيانات — مغلقة")
+
+        logger.info("═" * 40)
+        logger.info("[النظام] ✅ اكتمل الإيقاف التدريجي — إلى اللقاء")
+        logger.info("═" * 40)
 
 
 if __name__ == "__main__":

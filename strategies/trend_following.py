@@ -1,13 +1,16 @@
 """
-Trend Following Strategy — trades in the direction of the established trend.
-Best in TRENDING regimes. Avoids RANGING/CHOPPY markets.
+استراتيجية تتبع الاتجاه — Trend Following
+تتداول في اتجاه الاتجاه القائم. الأفضل في الأسواق ذات الاتجاه الواضح.
+تتجنب الأسواق المتذبذبة والعشوائية.
+الأطر المدعومة: 15 دقيقة، 1 ساعة، 4 ساعات، يومي
 """
 from strategies import BaseStrategy, StrategySignal
 from core.types import MarketAnalysis
 
 
 class TrendFollowingStrategy(BaseStrategy):
-    name = "trend_following"
+    name = "تتبع_الاتجاه"
+    supported_timeframes = ["15m", "1h", "4h", "1d"]
 
     async def evaluate(self, analysis: MarketAnalysis) -> StrategySignal:
         signal = StrategySignal(
@@ -19,58 +22,72 @@ class TrendFollowingStrategy(BaseStrategy):
             reasoning="",
         )
 
-        # Only trade in trending markets
+        # لا نتداول إلا في الأسواق ذات الاتجاه
         if analysis.regime not in ("TRENDING",):
-            signal.reasoning = f"Regime {analysis.regime} — skipping"
+            signal.reasoning = f"السوق في حالة {analysis.regime} — استراتيجية تتبع الاتجاه لا تعمل في هذه الحالة"
             signal.confidence = 10.0
             return signal
 
-        # Skip low confidence
+        # ثقة منخفضة — لا نتداول
         if analysis.confidence < 60:
-            signal.reasoning = f"Low confidence ({analysis.confidence})"
+            signal.reasoning = f"ثقة التحليل منخفضة ({analysis.confidence:.0f}%) — تخطي"
             signal.confidence = 15.0
             return signal
 
-        # Score calculation
         score = 0.0
 
-        # Trend strength (40%)
-        score += analysis.trend_strength * 0.40
+        # قوة الاتجاه (40%)
+        trend_component = analysis.trend_strength * 0.40
+        score += trend_component
 
-        # Momentum confirmation (25%)
+        # تأكيد الزخم (25%)
+        momentum_component = 0
         if analysis.trend_direction == "UP" and analysis.momentum > 50:
+            momentum_component = 25
             score += 25
         elif analysis.trend_direction == "DOWN" and analysis.momentum > 50:
+            momentum_component = 25
             score += 25
 
-        # Structure confirmation (20%)
+        # تأكيد الهيكل (20%)
         structure = analysis.structure
+        structure_component = 0
         if analysis.trend_direction == "UP" and structure.get("higher_highs") and structure.get("higher_lows"):
+            structure_component = 20
             score += 20
         elif analysis.trend_direction == "DOWN" and not structure.get("higher_highs") and not structure.get("higher_lows"):
+            structure_component = 20
             score += 20
 
-        # Liquidity (15%)
+        # السيولة (15%)
+        liquidity_component = 0
         if analysis.liquidity_score > 60:
+            liquidity_component = 15
             score += 15
 
         signal.confidence = min(100, score)
         signal.score_breakdown = {
-            "trend_strength": round(analysis.trend_strength * 0.40, 1),
-            "momentum": 25 if analysis.momentum > 50 else 0,
-            "structure": 20 if structure.get("higher_highs") else 0,
-            "liquidity": 15 if analysis.liquidity_score > 60 else 0,
+            "قوة_الاتجاه": round(trend_component, 1),
+            "تأكيد_الزخم": momentum_component,
+            "تأكيد_الهيكل": structure_component,
+            "السيولة": liquidity_component,
         }
 
-        # Decision
+        # القرار
         if analysis.trend_direction == "UP" and signal.confidence >= 70:
             signal.action = "BUY"
-            signal.reasoning = f"Strong uptrend — {analysis.trend_strength:.0f} strength, {analysis.momentum:.0f} momentum"
+            signal.reasoning = (
+                f"اتجاه صاعد قوي — قوة الاتجاه {analysis.trend_strength:.0f}%، "
+                f"زخم {analysis.momentum:.0f}%، سيولة {analysis.liquidity_score:.0f}%"
+            )
         elif analysis.trend_direction == "DOWN" and signal.confidence >= 70:
             signal.action = "SELL"
-            signal.reasoning = f"Strong downtrend — {analysis.trend_strength:.0f} strength, {analysis.momentum:.0f} momentum"
+            signal.reasoning = (
+                f"اتجاه هابط قوي — قوة الاتجاه {analysis.trend_strength:.0f}%، "
+                f"زخم {analysis.momentum:.0f}%، سيولة {analysis.liquidity_score:.0f}%"
+            )
         else:
             signal.action = "HOLD"
-            signal.reasoning = f"Insufficient confidence ({signal.confidence:.0f})"
+            signal.reasoning = f"ثقة غير كافية ({signal.confidence:.0f}%) — انتظار تأكيد أقوى"
 
         return signal

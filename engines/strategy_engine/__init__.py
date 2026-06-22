@@ -1,67 +1,62 @@
 """
-Strategy Engine — manages and executes all trading strategies.
-Each strategy is isolated. Strategies never communicate directly.
+محرك الاستراتيجيات — CT V4.0
+يدير وينفذ كل استراتيجيات التداول. كل استراتيجية تُنفذ لكل إطار زمني بشكل مستقل.
+لا تلويث بين الأطر الزمنية. الاستراتيجيات لا تتواصل مع بعضها مباشرة.
 """
 import asyncio
 import logging
-from typing import List, Optional
-from dataclasses import dataclass
+from typing import Dict, List, Optional
 from datetime import datetime
 import importlib
+import importlib.util
 import os
 
 from core.base import BaseEngine
 from core.events import SignalEvent, AnalysisEvent, EventBus, HealthEvent, HealthStatus
 from core.types import MarketAnalysis
 from core.errors import StrategyError
+from strategies import StrategySignal, BaseStrategy
 
 logger = logging.getLogger("strategy_engine")
 
 
-@dataclass
-class StrategySignal:
-    """Output signal from a single strategy."""
-    symbol: str
-    strategy_name: str
-    action: str  # BUY, SELL, HOLD, IGNORE
-    confidence: float
-    score_breakdown: dict
-    reasoning: str
-
-
 class StrategyEngine(BaseEngine):
-    """Manages and runs trading strategies in isolation."""
+    """يدير وينفذ استراتيجيات التداول في عزلة تامة لكل إطار زمني."""
 
     def __init__(self, event_bus: EventBus):
         super().__init__("strategy_engine")
         self.event_bus = event_bus
-        self.strategies: dict[str, object] = {}
+        self.strategies: Dict[str, BaseStrategy] = {}
         self._active_strategies: set[str] = set()
-        self._last_signals: dict[str, StrategySignal] = {}
+        self._last_signals: Dict[str, Dict[str, List[StrategySignal]]] = {}  # symbol → timeframe → signals
         self._strategy_dir = os.path.join(os.path.dirname(__file__), "..", "..", "strategies")
 
     async def initialize(self) -> None:
+        """تحميل الاستراتيجيات والاشتراك في الأحداث."""
         await self.event_bus.subscribe("AnalysisEvent", self._on_analysis)
         self._load_strategies()
-        self.logger.info(f"Strategy Engine initialized. Loaded: {list(self.strategies.keys())}")
+        self.logger.info(f"[الاستراتيجيات] تم التهيئة. المحملة: {list(self.strategies.keys())}")
 
     async def start(self) -> None:
+        """بدء المحرك."""
         self._running = True
         asyncio.create_task(self._heartbeat_loop())
-        self.logger.info("Strategy Engine started.")
+        self.logger.info("[الاستراتيجيات] تم البدء")
 
     async def stop(self) -> None:
+        """إيقاف المحرك."""
         self._running = False
+        self.logger.info("[الاستراتيجيات] تم الإيقاف")
 
     def _load_strategies(self):
-        """Dynamically load all strategies from the strategies directory."""
+        """تحميل ديناميكي لكل الاستراتيجيات من مجلد الاستراتيجيات."""
         try:
             strategies_dir = os.path.abspath(self._strategy_dir)
             if not os.path.exists(strategies_dir):
-                self.logger.warning(f"Strategies directory not found: {strategies_dir}")
+                self.logger.warning(f"[الاستراتيجيات] مجلد الاستراتيجيات غير موجود: {strategies_dir}")
                 return
 
-            for filename in os.listdir(strategies_dir):
+            for filename in sorted(os.listdir(strategies_dir)):
                 if filename.endswith(".py") and not filename.startswith("_"):
                     module_name = filename[:-3]
                     try:
@@ -71,49 +66,89 @@ class StrategyEngine(BaseEngine):
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
 
-                        # Find strategy class in module
                         for attr_name in dir(module):
                             attr = getattr(module, attr_name)
-                            if (isinstance(attr, type) and
-                                hasattr(attr, "evaluate") and
-                                attr_name.endswith("Strategy")):
-                                self.strategies[module_name] = attr()
+                            if (isinstance(attr, type)
+                                    and issubclass(attr, BaseStrategy)
+                                    and attr is not BaseStrategy
+                                    and attr_name.endswith("Strategy")):
+                                instance = attr()
+                                self.strategies[module_name] = instance
                                 self._active_strategies.add(module_name)
-                                self.logger.info(f"  Loaded strategy: {module_name}")
+                                self.logger.info(
+                                    f"[الاستراتيجيات] ✓ تم تحميل: {instance.name} "
+                                    f"| الأطر: {instance.supported_timeframes}"
+                                )
                     except Exception as e:
-                        self.logger.error(f"Failed to load strategy {module_name}: {e}")
+                        self.logger.error(f"[الاستراتيجيات] فشل تحميل {module_name}: {e}")
         except Exception as e:
-            self.logger.error(f"Strategy loading error: {e}")
+            self.logger.error(f"[الاستراتيجيات] خطأ في التحميل: {e}")
+
+    # ── Event Handler (backward-compatible) ─────────────────────
 
     async def _on_analysis(self, event: AnalysisEvent):
-        """When new analysis arrives, run all strategies."""
+        """استقبال تحليل السوق — تنفيذ الاستراتيجيات للإطار الزمني الحالي."""
         if not self._running:
             return
 
         analysis = MarketAnalysis(
-            symbol=event.symbol, regime=event.regime,
+            symbol=event.symbol,
+            regime=event.regime,
             trend_direction=event.trend_direction,
             trend_strength=event.trend_strength,
-            momentum=event.momentum, volatility=event.volatility,
+            momentum=event.momentum,
+            volatility=event.volatility,
             liquidity_score=event.liquidity_score,
-            structure=event.structure, breakout_state=event.breakout_state,
-            noise_level=event.noise_level, confidence=event.confidence,
+            structure=event.structure,
+            breakout_state=event.breakout_state,
+            noise_level=event.noise_level,
+            confidence=event.confidence,
         )
-        await self.run_strategies(event.symbol, analysis)
+        # التشغيل بدون إطار زمني محدد — كل الاستراتيجيات النشطة
+        await self.run_strategies(event.symbol, None, analysis)
 
-    async def run_strategies(self, symbol: str, analysis: MarketAnalysis) -> List[StrategySignal]:
-        """Run all active strategies against market analysis."""
-        signals = []
-        for name in list(self._active_strategies):
+    # ── Core API ──────────────────────────────────────────────
+
+    async def run_strategies(
+        self, symbol: str, timeframe: Optional[str], analysis: MarketAnalysis
+    ) -> List[StrategySignal]:
+        """
+        تشغيل كل الاستراتيجيات النشطة لإطار زمني محدد.
+        إذا كان timeframe=None، تشغّل كل الاستراتيجيات بغض النظر عن الإطار.
+        """
+        signals: List[StrategySignal] = []
+
+        for name in sorted(self._active_strategies):
             strategy = self.strategies.get(name)
             if not strategy:
                 continue
+
+            # تصفية حسب الإطار الزمني إذا كان محدداً
+            if timeframe is not None and timeframe not in strategy.supported_timeframes:
+                continue
+
             try:
                 signal = await strategy.evaluate(analysis)
-                if signal and signal.action != "HOLD":
+                if signal is None:
+                    continue
+
+                signal.symbol = symbol
+                signal.timeframe = timeframe or "unknown"
+
+                if signal.action != "HOLD":
                     signals.append(signal)
-                    self._last_signals[symbol] = signal
-                    # Publish signal event
+                    self.logger.info(
+                        f"[إشارة] {symbol} | {signal.strategy_name} | "
+                        f"{signal.timeframe} | {signal.action} | "
+                        f"ثقة {signal.confidence:.0f}% | {signal.reasoning}"
+                    )
+
+                    # تخزين آخر إشارة
+                    self._last_signals.setdefault(symbol, {}).setdefault(
+                        signal.timeframe, []
+                    ).append(signal)
+
+                    # نشر حدث الإشارة
                     await self.event_bus.publish(SignalEvent(
                         symbol=symbol,
                         strategy_name=signal.strategy_name,
@@ -122,25 +157,96 @@ class StrategyEngine(BaseEngine):
                         score_breakdown=signal.score_breakdown,
                         reasoning=signal.reasoning,
                     ))
+                else:
+                    self.logger.debug(
+                        f"[إشارة] {symbol} | {signal.strategy_name} | "
+                        f"{signal.timeframe} | انتظار | ثقة {signal.confidence:.0f}%"
+                    )
+
             except Exception as e:
-                self.logger.error(f"Strategy {name} error for {symbol}: {e}")
+                self.logger.error(
+                    f"[الاستراتيجيات] خطأ في {name} للرمز {symbol}: {e}",
+                    exc_info=True
+                )
 
         return signals
 
-    def get_last_signal(self, symbol: str) -> Optional[StrategySignal]:
-        return self._last_signals.get(symbol)
+    async def run_all_timeframes(
+        self, symbol: str, analyses: Dict[str, MarketAnalysis]
+    ) -> Dict[str, List[StrategySignal]]:
+        """
+        تشغيل كل الاستراتيجيات لكل الأطر الزمنية دفعة واحدة.
+        لا تلويث بين الأطر — كل إطار زمني مستقل تماماً.
+
+        Args:
+            symbol: رمز العملة
+            analyses: dict يربط كل إطار زمني بتحليله الخاص
+                مثال: {"15m": MarketAnalysis(...), "1h": MarketAnalysis(...), "4h": MarketAnalysis(...)}
+
+        Returns:
+            dict يربط كل إطار زمني بقائمة إشاراته
+                مثال: {"15m": [Signal, ...], "1h": [Signal, ...]}
+        """
+        all_signals: Dict[str, List[StrategySignal]] = {}
+
+        self.logger.info(f"[الاستراتيجيات] تشغيل كل الأطر للرمز {symbol} — {len(analyses)} أطر")
+
+        for timeframe, analysis in analyses.items():
+            if not analysis:
+                self.logger.warning(f"[الاستراتيجيات] {symbol} | {timeframe} — تحليل فارغ، تخطي")
+                continue
+
+            signals = await self.run_strategies(symbol, timeframe, analysis)
+            if signals:
+                all_signals[timeframe] = signals
+
+        total = sum(len(s) for s in all_signals.values())
+        self.logger.info(
+            f"[الاستراتيجيات] {symbol} — {total} إشارة من {len(all_signals)} أطر زمنية"
+        )
+
+        return all_signals
+
+    # ── Public Helpers ────────────────────────────────────────
+
+    def get_last_signals(self, symbol: str, timeframe: Optional[str] = None) -> List[StrategySignal]:
+        """استرجاع آخر الإشارات — اختيارياً حسب الإطار الزمني."""
+        symbol_signals = self._last_signals.get(symbol, {})
+        if timeframe:
+            return symbol_signals.get(timeframe, [])
+        # كل الإشارات من كل الأطر
+        all_sigs = []
+        for tf_sigs in symbol_signals.values():
+            all_sigs.extend(tf_sigs)
+        return all_sigs
+
+    def get_strategies_by_timeframe(self, timeframe: str) -> List[BaseStrategy]:
+        """قائمة الاستراتيجيات التي تدعم إطاراً زمنياً محدداً."""
+        return [
+            s for s in self.strategies.values()
+            if timeframe in s.supported_timeframes and s.name in self._active_strategies
+        ]
 
     def enable_strategy(self, name: str):
+        """تفعيل استراتيجية."""
         if name in self.strategies:
             self._active_strategies.add(name)
+            self.logger.info(f"[الاستراتيجيات] تم تفعيل: {name}")
 
     def disable_strategy(self, name: str):
+        """تعطيل استراتيجية."""
         self._active_strategies.discard(name)
+        self.logger.info(f"[الاستراتيجيات] تم تعطيل: {name}")
+
+    # ── Health ────────────────────────────────────────────────
 
     async def _heartbeat_loop(self):
+        """نبض المحرك الدوري."""
         while self._running:
             await self.event_bus.publish(HealthEvent(
-                engine=self.name, status=HealthStatus.HEALTHY,
-                latency_ms=0, error_rate=0,
+                engine=self.name,
+                status=HealthStatus.HEALTHY,
+                latency_ms=0,
+                error_rate=0,
             ))
             await asyncio.sleep(5)

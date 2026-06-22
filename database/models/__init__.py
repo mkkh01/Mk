@@ -1,6 +1,6 @@
 """
-Database models — SQLAlchemy ORM definitions.
-Fully normalized, event-driven schema. No business logic.
+نماذج قاعدة البيانات — تعريفات SQLAlchemy ORM.
+مُطابقة تماماً، مدفوعة بالأحداث. لا تحتوي على منطق أعمال.
 """
 from datetime import datetime
 from typing import Optional
@@ -15,16 +15,19 @@ import uuid
 
 
 def gen_uuid() -> str:
+    """توليد UUID فريد للمفاتيح الأساسية."""
     return str(uuid.uuid4())
 
 
 class Base(DeclarativeBase):
+    """الصنف الأساسي لكل نماذج SQLAlchemy."""
     def __repr__(self):
         return f"<{self.__class__.__name__}>"
 
 
-# ── 1. Users ────────────────────────────────────────────────
+# ── 1. المستخدمون ───────────────────────────────────────────
 class User(Base):
+    """سجل المستخدم — المصدر الوحيد للحقيقة لـ UUID المستخدم."""
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
@@ -44,32 +47,49 @@ class User(Base):
     portfolio_snapshots: Mapped[list["PortfolioSnapshot"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
-# ── 2. Coins (Configuration) ────────────────────────────────
+# ── 2. العملات (الإعداد) ────────────────────────────────────
 class Coin(Base):
+    """
+    إعدادات العملة للمستخدم.
+    V4.0: `timeframes` أصبح JSON بدلاً من `timeframe` السابق (قائمة أطر زمنية).
+    `allocated_capital` مطلوب من المستخدم — لا قيمة افتراضية.
+    """
     __tablename__ = "coins"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
-    capital_allocated: Mapped[float] = mapped_column(Float, default=100.0)
+    allocated_capital: Mapped[float] = mapped_column(Float, nullable=False)  # إجباري من المستخدم
     risk_per_trade: Mapped[float] = mapped_column(Float, default=1.0)
-    timeframe: Mapped[str] = mapped_column(String(10), default="15m")
+    timeframes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)  # قائمة أطر زمنية، افتراضي ["15m"]
+    min_entry_size: Mapped[float] = mapped_column(Float, default=0.0)  # الحد الأدنى لحجم الصفقة
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="coins")
+
+    def __init__(self, **kwargs):
+        """تهيئة العملة مع ضمان أن timeframes تحتوي على ["15m"] افتراضياً إذا كانت فارغة."""
+        super().__init__(**kwargs)
+        if not self.timeframes:
+            self.timeframes = ["15m"]
 
     __table_args__ = (
         Index("idx_coins_user_symbol", "user_id", "symbol"),
     )
 
 
-# ── 3. Market Data (Cache) ──────────────────────────────────
+# ── 3. بيانات السوق (ذاكرة مؤقتة) ─────────────────────────
 class MarketData(Base):
+    """
+    بيانات السوق الخام — مخزنة لكل إطار زمني بشكل منفصل.
+    V4.0: أضيف حقل `timeframe` للعزل بين الأطر الزمنية.
+    """
     __tablename__ = "market_data"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(10), nullable=False, default="15m")  # عزل الأطر الزمنية
     price: Mapped[float] = mapped_column(Float, default=0.0)
     volume: Mapped[float] = mapped_column(Float, default=0.0)
     bid: Mapped[float] = mapped_column(Float, default=0.0)
@@ -77,16 +97,21 @@ class MarketData(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        Index("idx_market_data_symbol_ts", "symbol", "timestamp"),
+        Index("idx_market_data_symbol_tf_ts", "symbol", "timeframe", "timestamp"),
     )
 
 
-# ── 4. Market State (Regime) ────────────────────────────────
+# ── 4. حالة السوق (النظام) ─────────────────────────────────
 class MarketState(Base):
+    """
+    حالة السوق لكل رمز وإطار زمني.
+    V4.0: أضيف حقل `timeframe` مع فهرس مركب.
+    """
     __tablename__ = "market_state"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(10), nullable=False, default="15m")  # عزل الأطر الزمنية
     regime: Mapped[str] = mapped_column(String(30), default="UNKNOWN")
     trend_direction: Mapped[str] = mapped_column(String(10), default="NONE")
     trend_strength: Mapped[float] = mapped_column(Float, default=0.0)
@@ -97,16 +122,21 @@ class MarketState(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        Index("idx_market_state_symbol_ts", "symbol", "timestamp"),
+        Index("idx_market_state_symbol_tf_ts", "symbol", "timeframe", "timestamp"),
     )
 
 
-# ── 5. Signals (Strategy Signals) ───────────────────────────
+# ── 5. الإشارات (إشارات الاستراتيجيات) ─────────────────────
 class Signal(Base):
+    """
+    إشارات التداول من الاستراتيجيات.
+    V4.0: أضيف حقل `timeframe` لمعرفة أي إطار زمني أنتج الإشارة.
+    """
     __tablename__ = "signals"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(10), nullable=False, default="15m")  # الإطار الزمني المُنتِج للإشارة
     strategy_name: Mapped[str] = mapped_column(String(50), nullable=False)
     action: Mapped[str] = mapped_column(String(10), nullable=False)  # BUY/SELL/HOLD
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
@@ -119,11 +149,13 @@ class Signal(Base):
     __table_args__ = (
         Index("idx_signals_symbol_ts", "symbol", "timestamp"),
         Index("idx_signals_strategy", "strategy_name"),
+        Index("idx_signals_symbol_tf_ts", "symbol", "timeframe", "timestamp"),
     )
 
 
-# ── 6. Trades (Executed, Immutable) ─────────────────────────
+# ── 6. الصفقات (منفَّذة، غير قابلة للتعديل) ────────────────
 class Trade(Base):
+    """سجل الصفقات المنفَّذة — غير قابل للتعديل بعد الإغلاق."""
     __tablename__ = "trades"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
@@ -155,8 +187,9 @@ class Trade(Base):
     )
 
 
-# ── 7. Positions (Open) ─────────────────────────────────────
+# ── 7. المراكز (مفتوحة) ─────────────────────────────────────
 class Position(Base):
+    """المراكز المفتوحة حالياً للمستخدم."""
     __tablename__ = "positions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
@@ -174,8 +207,9 @@ class Position(Base):
     user: Mapped["User"] = relationship(back_populates="positions")
 
 
-# ── 8. Risk Events ──────────────────────────────────────────
+# ── 8. أحداث المخاطر ────────────────────────────────────────
 class RiskEvent(Base):
+    """أحداث إدارة المخاطر المرتبطة بالصفقات."""
     __tablename__ = "risk_events"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
@@ -188,8 +222,9 @@ class RiskEvent(Base):
     trade: Mapped["Trade"] = relationship(back_populates="risk_events")
 
 
-# ── 9. Portfolio Snapshots ──────────────────────────────────
+# ── 9. لقطات المحفظة ───────────────────────────────────────
 class PortfolioSnapshot(Base):
+    """لقطة لحظية لحالة المحفظة."""
     __tablename__ = "portfolio_snapshots"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -208,8 +243,9 @@ class PortfolioSnapshot(Base):
     )
 
 
-# ── 10. Whale Events ────────────────────────────────────────
+# ── 10. أحداث الحيتان ──────────────────────────────────────
 class WhaleEvent(Base):
+    """تتبع صفقات الحيتان الكبيرة."""
     __tablename__ = "whale_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -226,8 +262,9 @@ class WhaleEvent(Base):
     )
 
 
-# ── 11. News Events ─────────────────────────────────────────
+# ── 11. أحداث الأخبار ───────────────────────────────────────
 class NewsEvent(Base):
+    """أخبار السوق وتأثيرها."""
     __tablename__ = "news_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -239,8 +276,9 @@ class NewsEvent(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-# ── 12. Strategy Stats ──────────────────────────────────────
+# ── 12. إحصائيات الاستراتيجيات ─────────────────────────────
 class StrategyStat(Base):
+    """إحصائيات أداء الاستراتيجيات لكل رمز وإطار زمني."""
     __tablename__ = "strategy_stats"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -259,8 +297,9 @@ class StrategyStat(Base):
     )
 
 
-# ── 13. System Logs (Audit Trail) ───────────────────────────
+# ── 13. سجلات النظام (مسار التدقيق) ────────────────────────
 class SystemLog(Base):
+    """سجل تدقيق لكل أحداث النظام."""
     __tablename__ = "logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -276,8 +315,9 @@ class SystemLog(Base):
     )
 
 
-# ── 14. Decision Trace ──────────────────────────────────────
+# ── 14. أثر القرار ──────────────────────────────────────────
 class DecisionTrace(Base):
+    """تتبع مسار القرار من الإشارة إلى التنفيذ."""
     __tablename__ = "decision_trace"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
