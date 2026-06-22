@@ -64,7 +64,7 @@ from keep_alive import keep_alive
 # ═══════════════════════════════════════════════════════════════
 
 class TradingState:
-    """حالة النظام المركزية — مصدر وحيد للحقيقة. كل المتغيرات مهيأة مسبقاً.
+    """حالة النظام المركزية — مصدر وحيد للحقيقة. Deterministic + Idempotent.
 
     آلة الحالات (State Machine):
         INIT ──▶ CONNECTING_WS ──▶ LOADING_HISTORY ──▶ WARMING_UP ──▶ RUNNING
@@ -72,10 +72,15 @@ class TradingState:
     الانتقالات المسموحة:
         INIT           → CONNECTING_WS  (بدء تهيئة المحركات)
         CONNECTING_WS  → LOADING_HISTORY (بعد تهيئة المحركات — تحميل تاريخي)
-        LOADING_HISTORY → WARMING_UP     (بعد اكتمال/فشل التسخين — بناء مخازن)
-        WARMING_UP     → RUNNING         (WebSocket متصل + ticks كافية)
+        LOADING_HISTORY → WARMING_UP     (بعد اكتمال/فشل التسخين)
+        WARMING_UP     → RUNNING         (WS مستقر + ticks كافية)
 
-    لا توجد مراحل طرفية (Dead Ends). كل مرحلة لها مخرج.
+    خصائص الضمان (Production Hardening):
+        - Idempotent: أي transition لنفس المرحلة = NO-OP
+        - Immutable: المراحل لا تتكرر بعد الخروج منها (إلا ERROR→WARMING_UP)
+        - Invariants: تحقق من الثوابت قبل وبعد كل انتقال
+        - Reconnect-safe: لا يُعاد تصفير ticks إلا في INIT
+        - Duplicate-safe: لا يمكن دخول RUNNING مرتين
     """
 
     INIT = "INIT"
@@ -85,15 +90,18 @@ class TradingState:
     RUNNING = "RUNNING"
     ERROR = "ERROR"
 
-    # الانتقالات المسموحة (Allowed Transitions)
+    # الانتقالات المسموحة
     _VALID_TRANSITIONS: dict[str, set[str]] = {
         "INIT": {"CONNECTING_WS", "ERROR"},
         "CONNECTING_WS": {"LOADING_HISTORY", "WARMING_UP", "ERROR"},
         "LOADING_HISTORY": {"WARMING_UP", "ERROR"},
         "WARMING_UP": {"RUNNING", "ERROR"},
         "RUNNING": {"ERROR"},
-        "ERROR": {"WARMING_UP"},  # استرداد من الخطأ
+        "ERROR": {"WARMING_UP"},
     }
+
+    # المراحل التي لا يمكن إعادة دخولها بعد الخروج
+    _ONCE_ONLY_PHASES: set[str] = {"INIT", "CONNECTING_WS", "LOADING_HISTORY", "RUNNING"}
 
     def __init__(self):
         self.phase: str = self.INIT
@@ -101,8 +109,10 @@ class TradingState:
         self.started_at = _utcnow()
         self.errors: list = []
         self._transition_count: int = 0
+        self._entered_phases: set[str] = {self.INIT}  # مراحل دُخلت فعلاً
+        self._exited_phases: set[str] = set()          # مراحل خرج منها
 
-        # التداول — مهيأة دائماً
+        # التداول
         self.open_positions: list = []
         self.coins: list = []
         self.price_lines: list = []
@@ -110,45 +120,74 @@ class TradingState:
         self.analysis_ok: int = 0
         self.analysis_miss: int = 0
 
-        # WebSocket
+        # WebSocket — لا تصفير إلا في INIT
         self.ws_connected: bool = False
         self.ws_connected_at: float = 0.0
-        self.ws_tick_count: int = 0
+        self.ws_stable_since: float = 0.0       # متى استقر الاتصال
+        self.ws_tick_count: int = 0              # لا يُصفّر عند reconnect
+        self.ws_reconnect_count: int = 0         # عداد إعادة الاتصال
+        self.ws_last_seen_at: float = 0.0        # آخر مرة وردت بيانات
         self.history_loaded: bool = False
 
         # حدود
         self.MIN_CANDLES = 50
         self.MIN_WS_TICKS = 20
+        self.MIN_WS_STABLE_SEC = 15              # نافذة استقرار WS قبل RUNNING
 
-        # ضمان عدم بقاء الحالة عالقة
+        # كشف العالق
         self._phase_stuck_warned: set = set()
         self.MAX_CYCLES_IN_PHASE: dict[str, int] = {
-            "INIT": 0,              # لا دورات — قبل الحلقة
-            "CONNECTING_WS": 0,      # لا دورات — قبل الحلقة
-            "LOADING_HISTORY": 10,   # 10 دورات كحد أقصى (~110 ثانية)
-            "WARMING_UP": 300,       # 300 دورة (~50 دقيقة)
-            "RUNNING": 0,            # غير محدود
+            "INIT": 0,
+            "CONNECTING_WS": 0,
+            "LOADING_HISTORY": 10,
+            "WARMING_UP": 300,
+            "RUNNING": 0,
         }
 
+    # ═══════════════════════════════════════════════════════
+    #  Idempotent Transition
+    # ═══════════════════════════════════════════════════════
+
     def transition(self, new_phase: str) -> None:
-        """تنفيذ انتقال آلة الحالات مع التحقق من الصلاحية."""
+        """انتقال آلة الحالات — Idempotent + Invariant-checked."""
         old = self.phase
         now = _utcnow()
         now_ts = now.timestamp()
         duration = now_ts - self.phase_set_at
 
+        # 🛡️ Idempotent: نفس المرحلة = NO-OP
+        if new_phase == old:
+            return
+
         # 🛡️ تحقق: هل الانتقال مسموح؟
         allowed = self._VALID_TRANSITIONS.get(old, set())
-        if new_phase not in allowed and old != new_phase:
+        if new_phase not in allowed:
             logger.critical(
                 f"[آلة_الحالات] ❌ انتقال غير مسموح: {old} → {new_phase} | "
-                f"المسموح من {old}: {sorted(allowed) | '—'}"
+                f"المسموح من {old}: {sorted(allowed) if allowed else '—'}"
             )
-            return  # منع الانتقال غير القانوني
+            return
 
+        # 🛡️ تحقق: لا يمكن إعادة دخول مرحلة once-only
+        if new_phase in self._ONCE_ONLY_PHASES and new_phase in self._exited_phases:
+            logger.critical(
+                f"[آلة_الحالات] ❌ محاولة إعادة دخول مرحلة غير قابلة للتكرار: "
+                f"{new_phase} (سُبِق الخروج منها)"
+            )
+            return
+
+        # 🛡️ تحقق: ثوابت ما قبل الانتقال
+        self._check_pre_transition_invariants(old, new_phase)
+
+        # تنفيذ الانتقال
+        self._exited_phases.add(old)
         self.phase = new_phase
         self.phase_set_at = now_ts
+        self._entered_phases.add(new_phase)
         self._transition_count += 1
+
+        # 🛡️ تحقق: ثوابت ما بعد الانتقال
+        self._check_post_transition_invariants(new_phase)
 
         labels = {
             self.INIT: "🟡 بدء التشغيل",
@@ -164,12 +203,97 @@ class TradingState:
         )
         logger.info(
             f"[آلة_الحالات] السبب: {labels.get(new_phase, new_phase)} | "
-            f"المدة في {old}: {duration:.1f}ث"
+            f"المدة في {old}: {duration:.1f}ث | ticks={self.ws_tick_count} | "
+            f"reconnects={self.ws_reconnect_count}"
         )
         logger.info(
-            f"[آلة_الحالات] الحالة الآن: {labels.get(new_phase, new_phase)}"
+            f"[آلة_الحالات] المراحل المزارة: {' → '.join(sorted(self._entered_phases, key=lambda x: {'INIT':0,'CONNECTING_WS':1,'LOADING_HISTORY':2,'WARMING_UP':3,'RUNNING':4,'ERROR':5}.get(x,99)))}"
         )
         logger.info("═" * 50)
+
+    # ═══════════════════════════════════════════════════════
+    #  Invariants
+    # ═══════════════════════════════════════════════════════
+
+    def _check_pre_transition_invariants(self, old: str, new: str) -> None:
+        """ثوابت يجب أن تتحقق قبل الانتقال."""
+        if new == self.RUNNING:
+            assert self.ws_connected, (
+                f"[ثابت] RUNNING يتطلب ws_connected=True"
+            )
+            assert self.ws_tick_count >= self.MIN_WS_TICKS, (
+                f"[ثابت] RUNNING يتطلب ticks≥{self.MIN_WS_TICKS}، الحالي={self.ws_tick_count}"
+            )
+            stable_duration = _utcnow().timestamp() - self.ws_stable_since
+            assert stable_duration >= self.MIN_WS_STABLE_SEC or self.ws_reconnect_count == 0, (
+                f"[ثابت] RUNNING يتطلب WS مستقر {self.MIN_WS_STABLE_SEC}ث، "
+                f"الحالي={stable_duration:.1f}ث | reconnects={self.ws_reconnect_count}"
+            )
+
+    def _check_post_transition_invariants(self, phase: str) -> None:
+        """ثوابت يجب أن تتحقق بعد الانتقال."""
+        if phase == self.RUNNING:
+            assert self.trading_allowed, (
+                f"[ثابت] RUNNING يجب أن يكون trading_allowed=True"
+            )
+            assert self.analysis_allowed, (
+                f"[ثابت] RUNNING يجب أن يكون analysis_allowed=True"
+            )
+        elif phase == self.WARMING_UP:
+            assert self.analysis_allowed, (
+                f"[ثابت] WARMING_UP يجب أن يكون analysis_allowed=True"
+            )
+            assert not self.trading_allowed, (
+                f"[ثابت] WARMING_UP لا يجب أن يسمح بالتداول"
+            )
+
+    # ═══════════════════════════════════════════════════════
+    #  WebSocket management
+    # ═══════════════════════════════════════════════════════
+
+    def mark_ws_connected(self) -> None:
+        """تسجيل اتصال WebSocket — لا يُصفّر ticks."""
+        was_connected = self.ws_connected
+        self.ws_connected = True
+        self.ws_connected_at = _utcnow().timestamp()
+        if not was_connected:
+            self.ws_stable_since = self.ws_connected_at
+        logger.info(
+            f"[آلة_الحالات] 🔌 WebSocket متصل | ticks={self.ws_tick_count} | "
+            f"reconnects={self.ws_reconnect_count} | stable_window={'جديد' if not was_connected else 'مستمر'}"
+        )
+
+    def mark_ws_disconnected(self) -> None:
+        """تسجيل انقطاع WebSocket — يزيد عداد reconnect ولا يُصفّر ticks."""
+        if self.ws_connected:
+            self.ws_connected = False
+            self.ws_reconnect_count += 1
+            self.ws_stable_since = 0.0  # إعادة تعيين نافذة الاستقرار
+            logger.warning(
+                f"[آلة_الحالات] 🔌 WebSocket منفصل | ticks={self.ws_tick_count} | "
+                f"reconnect #{self.ws_reconnect_count}"
+            )
+
+    def record_tick(self) -> None:
+        """تسجيل tick وارد — لا يُعاد تصفيره إلا في INIT."""
+        self.ws_tick_count += 1
+        self.ws_last_seen_at = _utcnow().timestamp()
+
+    @property
+    def ws_is_stable(self) -> bool:
+        """هل WebSocket مستقر لمدة كافية؟"""
+        if not self.ws_connected or self.ws_stable_since <= 0:
+            return False
+        return (_utcnow().timestamp() - self.ws_stable_since) >= self.MIN_WS_STABLE_SEC
+
+    @property
+    def ws_ready_for_running(self) -> bool:
+        """كل شروط WebSocket لـ RUNNING."""
+        return (
+            self.ws_connected
+            and self.ws_tick_count >= self.MIN_WS_TICKS
+            and self.ws_is_stable
+        )
 
     @property
     def trading_allowed(self) -> bool:
@@ -546,40 +670,31 @@ async def main():
             try:
                 # ── آلة الحالات: إدارة الانتقالات ──
                 ws_alive = getattr(market_data_engine, '_ws', None) is not None
-                state.ws_tick_count = getattr(market_data_engine, '_kline_count', 0)
 
-                # تحديث حالة WebSocket
+                # تتبع WS — لا يُصفّر ticks أبداً (فقط mark_ws_disconnected يزيد reconnect)
                 if ws_alive and not state.ws_connected:
-                    state.ws_connected = True
-                    state.ws_connected_at = _utcnow().timestamp()
-                    logger.info(f"[آلة_الحالات] 🔌 WebSocket متصل — ticks={state.ws_tick_count}")
+                    state.mark_ws_connected()
+                elif not ws_alive and state.ws_connected:
+                    state.mark_ws_disconnected()
+
+                # مزامنة ticks من محرك البيانات (تراكمي — لا تصفير)
+                engine_ticks = getattr(market_data_engine, '_kline_count', 0)
+                if engine_ticks > state.ws_tick_count:
+                    delta = engine_ticks - state.ws_tick_count
+                    state.ws_tick_count = engine_ticks
+                    state.ws_last_seen_at = _utcnow().timestamp()
 
                 # الانتقال: WARMING_UP → RUNNING
                 if state.phase == TradingState.WARMING_UP:
-                    if state.ws_connected and state.ws_tick_count >= state.MIN_WS_TICKS:
-                        # 🛡️ تأكيدات (Assertions) قبل الانتقال لـ RUNNING
-                        assert state.ws_connected, (
-                            f"[تأكيد] محاولة RUNNING بدون WebSocket! ticks={state.ws_tick_count}"
-                        )
-                        assert state.ws_tick_count >= state.MIN_WS_TICKS, (
-                            f"[تأكيد] محاولة RUNNING بـ {state.ws_tick_count} tick فقط! "
-                            f"الحد الأدنى={state.MIN_WS_TICKS}"
-                        )
-                        assert state.phase == TradingState.WARMING_UP, (
-                            f"[تأكيد] انتقال RUNNING من {state.phase} وليس من WARMING_UP!"
-                        )
+                    if state.ws_ready_for_running:
                         state.transition(TradingState.RUNNING)
-                        # تأكيد بعد الانتقال
-                        assert state.trading_allowed, (
-                            f"[تأكيد] RUNNING لكن trading_allowed=False!"
-                        )
-                        assert state.analysis_allowed, (
-                            f"[تأكيد] RUNNING لكن analysis_allowed=False!"
-                        )
-                    elif cycle % 3 == 0:
+                    elif cycle % 5 == 0:
+                        stable_sec = (_utcnow().timestamp() - state.ws_stable_since) if state.ws_stable_since > 0 else 0
                         logger.info(
-                            f"[تسخين] 🔥 WS ticks={state.ws_tick_count}/{state.MIN_WS_TICKS} — "
-                            f"انتظار بيانات حية..."
+                            f"[تسخين] 🔥 ticks={state.ws_tick_count}/{state.MIN_WS_TICKS} | "
+                            f"WS={'متصل' if state.ws_connected else 'منفصل'} | "
+                            f"مستقر={stable_sec:.0f}/{state.MIN_WS_STABLE_SEC}ث | "
+                            f"reconnects={state.ws_reconnect_count}"
                         )
 
                 # 🛡️ شبكة أمان: إذا وصلنا للحلقة في LOADING_HISTORY (لا يجب أن يحدث)
@@ -604,9 +719,11 @@ async def main():
 
                 # 🛡️ تأكيد: RUNNING لا يجب أن يتراجع
                 if state.phase == TradingState.RUNNING:
-                    assert state.ws_connected, (
-                        f"[تأكيد] RUNNING لكن ws_connected=False! دورة #{cycle}"
-                    )
+                    if not state.ws_connected:
+                        logger.error(
+                            f"[آلة_الحالات] ⚠️ RUNNING لكن WS منفصل! "
+                            f"reconnects={state.ws_reconnect_count} | ticks={state.ws_tick_count}"
+                        )
                     assert state.trading_allowed, (
                         f"[تأكيد] RUNNING لكن trading_allowed=False! دورة #{cycle}"
                     )
