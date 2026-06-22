@@ -60,6 +60,62 @@ from keep_alive import keep_alive
 
 
 # ═══════════════════════════════════════════════════════════════
+#  الهجرة التلقائية (Auto-Migration)
+# ═══════════════════════════════════════════════════════════════
+
+_MIGRATIONS = {
+    "coins": {
+        # (اسم العمود, نوع SQL, القيمة الافتراضية)
+        "timeframes": ("JSON", "'[]'::json"),
+        "min_entry_size": ("FLOAT", "0.0"),
+    },
+}
+
+
+async def auto_migrate() -> tuple[bool, list[str]]:
+    """
+    فحص الأعمدة المفقودة وإضافتها تلقائياً.
+    لا تلمس الأعمدة الموجودة. لا تحذف شيئاً.
+    تُرجع: (نجاح, قائمة الأعمدة المضافة)
+    """
+    from sqlalchemy import text
+    from database.repositories import _engine
+
+    if _engine is None:
+        return False, []
+
+    added = []
+    try:
+        async with _engine.connect() as conn:
+            for table, columns in _MIGRATIONS.items():
+                # جلب الأعمدة الحالية
+                result = await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = :tname"
+                    ),
+                    {"tname": table},
+                )
+                existing = {row[0] for row in result}
+
+                for col_name, (col_type, default_val) in columns.items():
+                    if col_name not in existing:
+                        sql = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {col_type} DEFAULT {default_val}"
+                        logger.info(f"[هجرة] إضافة عمود: {table}.{col_name} ({col_type})")
+                        await conn.execute(text(sql))
+                        added.append(f"{table}.{col_name}")
+
+                if added:
+                    await conn.commit()
+                    logger.info(f"[هجرة] ✅ تمت إضافة {len(added)} عمود: {', '.join(added)}")
+
+        return True, added
+    except Exception as e:
+        logger.error(f"[هجرة] ❌ فشل: {e}", exc_info=True)
+        return False, added
+
+
+# ═══════════════════════════════════════════════════════════════
 #  نظام فحص ما قبل التشغيل (Pre-Flight Checks)
 # ═══════════════════════════════════════════════════════════════
 
@@ -246,7 +302,18 @@ async def main():
         logger.critical(f"[قاعدة البيانات] ❌ فشل الاتصال: {e}", exc_info=True)
         sys.exit(1)
 
-    # فحص المخطط قبل المتابعة
+    # تشغيل الهجرة التلقائية قبل فحص المخطط
+    logger.info("[النظام] تشغيل الهجرة التلقائية...")
+    migrate_ok, added_cols = await auto_migrate()
+    if not migrate_ok:
+        record_error("الهجرة", "فشل الهجرة التلقائية")
+        logger.warning("[الهجرة] ⚠️ فشل الهجرة — متابعة مع فحص المخطط")
+    elif added_cols:
+        logger.info(f"[الهجرة] أعمدة مضافة: {', '.join(added_cols)}")
+    else:
+        logger.info("[الهجرة] المخطط محدث — لا أعمدة مفقودة")
+
+    # فحص المخطط بعد الهجرة
     logger.info("[النظام] فحص تطابق المخطط...")
     schema_ok, schema_msg = await preflight_check_schema()
     if not schema_ok:
