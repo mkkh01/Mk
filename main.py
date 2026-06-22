@@ -229,10 +229,40 @@ _system_state = {
     "engines": {},
 }
 
+# ── مراحل التشغيل الثلاث ──
+class SystemPhase:
+    BOOTSTRAP = "bootstrap"   # المرحلة 1: تحميل البيانات التاريخية
+    WARMUP = "warmup"         # المرحلة 2: WebSocket + بناء المخازن
+    LIVE = "live"             # المرحلة 3: تحليل كامل + إشارات + تنفيذ
+
+_system_phase = SystemPhase.BOOTSTRAP
+_ws_first_tick: dict[str, float] = {}  # symbol → وقت أول tick حي
+_ws_tick_count: dict[str, int] = {}    # symbol → عدد الـ ticks
+
+MIN_LIVE_TICKS = 20       # الحد الأدنى من الـ ticks قبل المرحلة 3
+MIN_WARMUP_SECONDS = 10   # الحد الأدنى من الثواني قبل المرحلة 3
+
 
 def set_system_status(status: str):
     _system_state["status"] = status
     logger.info(f"[النظام] الحالة ← {status}")
+
+
+def set_phase(new_phase: str):
+    """تسجيل انتقال المرحلة مع سجل واضح."""
+    global _system_phase
+    old = _system_phase
+    _system_phase = new_phase
+    labels = {
+        SystemPhase.BOOTSTRAP: "🧱 تمهيد — تحميل البيانات التاريخية",
+        SystemPhase.WARMUP: "🔥 تسخين — WebSocket + بناء المخازن",
+        SystemPhase.LIVE: "✅ مباشر — تحليل كامل + إشارات + تنفيذ",
+    }
+    logger.info("═" * 50)
+    logger.info(f"[مرحلة] {old} → {new_phase}")
+    logger.info(f"[مرحلة] {labels.get(new_phase, new_phase)}")
+    logger.info("═" * 50)
+    _system_state["phase"] = new_phase
 
 
 def record_error(component: str, error: str):
@@ -452,7 +482,8 @@ async def main():
     _system_state["engines"]["market_data"] = "يعمل" if symbols else "ينتظر"
     _system_state["preflight"]["coins_loaded"] = len(symbols)
 
-    # تسخين الشموع من REST API قبل بدء التداول
+    # ── المرحلة 1: تسخين — تحميل البيانات التاريخية ──
+    set_phase(SystemPhase.BOOTSTRAP)
     logger.info("[النظام] تسخين الشموع التاريخية...")
     all_timeframes = set()
     for coin in coins:
@@ -462,6 +493,11 @@ async def main():
     if symbols and all_timeframes:
         await market_analyzer.warmup_candles(symbols, all_timeframes)
         logger.info("[النظام] ✅ تسخين الشموع اكتمل — المحلل جاهز فوراً")
+    else:
+        logger.warning("[النظام] ⚠️ لا عملات أو أطر زمنية للتسخين")
+
+    # ── المرحلة 2: تسخين — WebSocket + بناء المخازن ──
+    set_phase(SystemPhase.WARMUP)
 
     # ── 10. بوت تيليجرام + حلقة التداول ────────────────────
     set_system_status("بدء_البوت")
@@ -511,8 +547,9 @@ async def main():
                 async for session in get_session():
                     coins = await CoinRepository.get_all_active(session, telegram_id)
 
-                    # ── مراقبة المراكز المفتوحة (TP/SL) ──
-                    open_positions = await PositionRepository.get_open(session, telegram_id)
+                    # ── مراقبة المراكز المفتوحة — فقط في LIVE ──
+                    if _system_phase == SystemPhase.LIVE:
+                        open_positions = await PositionRepository.get_open(session, telegram_id)
                     for pos in open_positions:
                         try:
                             analysis = await market_analyzer.analyze(pos.symbol, "1m")
@@ -569,6 +606,21 @@ async def main():
                     signals_found = 0
                     analysis_ok = 0
                     analysis_miss = 0
+                    live_tick_arrived = False
+
+                    # ── تتبع المرحلة: هل دخلنا LIVE؟ ──
+                    if _system_phase == SystemPhase.WARMUP:
+                        ws_alive = getattr(market_data_engine, '_ws', None) is not None
+                        if ws_alive:
+                            live_count = getattr(market_data_engine, '_kline_count', 0)
+                            warmup_elapsed = (_utcnow() - cycle_start).total_seconds()
+                            if live_count >= MIN_LIVE_TICKS:
+                                set_phase(SystemPhase.LIVE)
+                            elif cycle % 3 == 0:
+                                logger.info(
+                                    f"[تسخين] 🔥 WS ticks={live_count}/{MIN_LIVE_TICKS} | "
+                                    f"انتظار وصول بيانات حية..."
+                                )
 
                     # ── تشخيص دورة البيانات (مرة كل 10 دورات) ──
                     if cycle % 10 == 0:
@@ -637,55 +689,60 @@ async def main():
                             price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
                             price_lines.append(f"  {coin.symbol:<10} {price_str}")
 
-                        # فحص إشارات التداول
-                        try:
-                            result = await trading_service.process_symbol(
-                                coin.symbol, telegram_id
-                            )
-                            if result:
-                                evidence, risk_decision, execution = result
-                                signals_found += 1
-                                if execution:
-                                    logger.info(
-                                        f"[صفقة #{signals_found}] {coin.symbol} | "
-                                        f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
-                                        f"كمية: {execution.executed_quantity:.6f} | "
-                                        f"سعر: {execution.executed_price:.6f}"
-                                    )
-                                    # ── إشعار فوري بفتح الصفقة ──
-                                    tp = getattr(execution, 'take_profit', None)
-                                    sl = getattr(execution, 'stop_loss', None)
-                                    tp_str = f"{tp:.6f}" if tp else "—"
-                                    sl_str = f"{sl:.6f}" if sl else "—"
-                                    order_msg = (
-                                        f"🔔 **صفقة جديدة**\n"
-                                        f"━━━━━━━━━━━━━━\n"
-                                        f"💰 {coin.symbol}\n"
-                                        f"📊 {evidence.decision}\n"
-                                        f"💵 السعر: {execution.executed_price:.6f}\n"
-                                        f"📦 الكمية: {execution.executed_quantity:.4f}\n"
-                                        f"🎯 هدف: {tp_str}\n"
-                                        f"🛑 وقف: {sl_str}\n"
-                                        f"✅ ثقة: {evidence.final_score:.0f}%\n"
-                                        f"🧠 السبب: {evidence.reasoning[:100]}\n"
-                                    )
-                                    await notify_tg(order_msg)
-                                else:
-                                    logger.info(
-                                        f"[إشارة #{signals_found}] {coin.symbol} | "
-                                        f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
-                                        f"مرفوضة: {evidence.reasoning[:60]}"
-                                    )
-                        except Exception as e:
-                            logger.debug(f"[{coin.symbol}] خطأ تداول: {e}")
+                        # فحص إشارات التداول — فقط في المرحلة LIVE
+                        if _system_phase == SystemPhase.LIVE:
+                            try:
+                                result = await trading_service.process_symbol(
+                                    coin.symbol, telegram_id
+                                )
+                                if result:
+                                    evidence, risk_decision, execution = result
+                                    signals_found += 1
+                                    if execution:
+                                        logger.info(
+                                            f"[صفقة #{signals_found}] {coin.symbol} | "
+                                            f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                            f"كمية: {execution.executed_quantity:.6f} | "
+                                            f"سعر: {execution.executed_price:.6f}"
+                                        )
+                                        # ── إشعار فوري بفتح الصفقة ──
+                                        tp = getattr(execution, 'take_profit', None)
+                                        sl = getattr(execution, 'stop_loss', None)
+                                        tp_str = f"{tp:.6f}" if tp else "—"
+                                        sl_str = f"{sl:.6f}" if sl else "—"
+                                        order_msg = (
+                                            f"🔔 **صفقة جديدة**\n"
+                                            f"━━━━━━━━━━━━━━\n"
+                                            f"💰 {coin.symbol}\n"
+                                            f"📊 {evidence.decision}\n"
+                                            f"💵 السعر: {execution.executed_price:.6f}\n"
+                                            f"📦 الكمية: {execution.executed_quantity:.4f}\n"
+                                            f"🎯 هدف: {tp_str}\n"
+                                            f"🛑 وقف: {sl_str}\n"
+                                            f"✅ ثقة: {evidence.final_score:.0f}%\n"
+                                            f"🧠 السبب: {evidence.reasoning[:100]}\n"
+                                        )
+                                        await notify_tg(order_msg)
+                                    else:
+                                        logger.info(
+                                            f"[إشارة #{signals_found}] {coin.symbol} | "
+                                            f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                            f"مرفوضة: {evidence.reasoning[:60]}"
+                                        )
+                            except Exception as e:
+                                logger.debug(f"[{coin.symbol}] خطأ تداول: {e}")
 
                         await asyncio.sleep(0.5)
 
                     # ── تقرير الدورة ──
                     duration = (_utcnow() - cycle_start).total_seconds()
+                    phase_label = "🔥" if _system_phase == SystemPhase.WARMUP else "✅"
+                    if _system_phase == SystemPhase.BOOTSTRAP:
+                        phase_label = "🧱"
                     data_status = f"تحليلات: {analysis_ok}" if analysis_ok > 0 else "⏳ بلا بيانات"
+                    mode = f"{phase_label} {_system_phase}"
                     summary = (
-                        f"[دورة #{cycle}] {len(coins)} عملة | "
+                        f"[{mode}] دورة #{cycle} | {len(coins)} عملة | "
                         f"{data_status} | "
                         f"إشارات: {signals_found} | "
                         f"{duration:.1f}ث"
