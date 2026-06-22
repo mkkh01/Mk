@@ -556,6 +556,8 @@ async def main():
                     # ── فحص الأسعار ──
                     price_lines = []
                     signals_found = 0
+                    analysis_ok = 0
+                    analysis_miss = 0
 
                     for coin in coins:
                         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
@@ -568,9 +570,18 @@ async def main():
                                 if analysis:
                                     price = analysis.get("close", analysis.get("price", 0))
                                     coin_prices[tf] = price
+                                    analysis_ok += 1
                                     await strategy_engine.run_strategies(coin.symbol, tf, analysis)
+                                else:
+                                    analysis_miss += 1
                             except Exception as e:
+                                analysis_miss += 1
                                 logger.debug(f"[{coin.symbol}] [{tf}] خطأ تحليل: {e}")
+
+                        # سطر سعر واحد لكل عملة
+                        if coin_prices:
+                            price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
+                            price_lines.append(f"  {coin.symbol:<10} {price_str}")
 
                         # سطر سعر واحد لكل عملة
                         if coin_prices:
@@ -623,12 +634,19 @@ async def main():
 
                     # ── تقرير الدورة ──
                     duration = (_utcnow() - cycle_start).total_seconds()
+                    data_status = f"تحليلات: {analysis_ok}" if analysis_ok > 0 else "⏳ بلا بيانات"
                     summary = (
                         f"[دورة #{cycle}] {len(coins)} عملة | "
+                        f"{data_status} | "
                         f"إشارات: {signals_found} | "
                         f"{duration:.1f}ث"
                     )
                     logger.info(summary)
+                    if analysis_miss > analysis_ok and cycle <= 3:
+                        logger.warning(
+                            f"[دورة #{cycle}] ⚠️ {analysis_miss} تحليل فشل — "
+                            f"قد تكون بيانات السوق لم تصل بعد (WebSocket يحتاج وقتاً)"
+                        )
                     if price_lines:
                         logger.info(f"[أسعار #{cycle}]\n" + "\n".join(price_lines))
 
