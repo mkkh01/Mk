@@ -1,6 +1,6 @@
 """
 نقطة الدخول الرئيسية — تنسيق بدء التشغيل بدون أي منطق تجاري.
-V4.0: تسلسل صارم، فشل مبكر، صحة مشتقة من الحالة الفعلية.
+V4.1: آلة حالات مركزية — State Machine — لا UnboundLocalError، لا race conditions.
 """
 import asyncio
 import logging
@@ -10,7 +10,7 @@ import traceback
 from datetime import datetime, timezone
 
 def _utcnow():
-    """تُرجع datetime.now(tz=timezone.utc) — متوافقة مع Python 3.9+ كبديل لـ utcnow()."""
+    """تُرجع datetime.now(tz=timezone.utc) — بديل لـ utcnow()."""
     return datetime.now(tz=timezone.utc)
 
 # ── سجلات منظمة ───────────────────────────────────────────
@@ -60,12 +60,115 @@ from keep_alive import keep_alive
 
 
 # ═══════════════════════════════════════════════════════════════
+#  آلة الحالات المركزية (State Machine)
+# ═══════════════════════════════════════════════════════════════
+
+class TradingState:
+    """حالة النظام المركزية — مصدر وحيد للحقيقة. كل المتغيرات مهيأة مسبقاً."""
+
+    INIT = "INIT"
+    CONNECTING_WS = "CONNECTING_WS"
+    LOADING_HISTORY = "LOADING_HISTORY"
+    WARMING_UP = "WARMING_UP"
+    RUNNING = "RUNNING"
+    ERROR = "ERROR"
+
+    def __init__(self):
+        self.phase: str = self.INIT
+        self.started_at = _utcnow()
+        self.errors: list = []
+
+        # التداول — مهيأة دائماً
+        self.open_positions: list = []
+        self.coins: list = []
+        self.price_lines: list = []
+        self.signals_found: int = 0
+        self.analysis_ok: int = 0
+        self.analysis_miss: int = 0
+
+        # WebSocket
+        self.ws_connected: bool = False
+        self.ws_connected_at: float = 0.0
+        self.ws_tick_count: int = 0
+        self.history_loaded: bool = False
+
+        # حدود
+        self.MIN_CANDLES = 50
+        self.MIN_WS_TICKS = 20
+
+    def transition(self, new_phase: str) -> None:
+        old = self.phase
+        self.phase = new_phase
+        labels = {
+            self.INIT: "🟡 بدء التشغيل",
+            self.CONNECTING_WS: "🔌 الاتصال بـ WebSocket",
+            self.LOADING_HISTORY: "📥 تحميل البيانات التاريخية",
+            self.WARMING_UP: "🔥 تسخين — بناء المخازن",
+            self.RUNNING: "✅ مباشر — تحليل + إشارات + تنفيذ",
+            self.ERROR: "🔴 خطأ",
+        }
+        logger.info("═" * 50)
+        logger.info(f"[حالة] {old} → {new_phase}")
+        logger.info(f"[حالة] {labels.get(new_phase, new_phase)}")
+        logger.info("═" * 50)
+
+    @property
+    def trading_allowed(self) -> bool:
+        return self.phase == self.RUNNING
+
+    @property
+    def analysis_allowed(self) -> bool:
+        return self.phase in (self.WARMING_UP, self.RUNNING)
+
+    @property
+    def health(self) -> str:
+        if self.errors:
+            return "تحذير"
+        if self.phase == self.RUNNING:
+            return "صحيحة"
+        return self.phase
+
+    def add_error(self, component: str, error: str) -> None:
+        self.errors.append({"component": component, "error": error, "time": _utcnow().isoformat()})
+        logger.error(f"[نظام] ❌ {component}: {error}")
+
+    def reset_cycle(self) -> None:
+        self.open_positions = []
+        self.price_lines = []
+        self.signals_found = 0
+        self.analysis_ok = 0
+        self.analysis_miss = 0
+
+    def can_start(self) -> bool:
+        failed = []
+        if not self.ws_connected:
+            failed.append("ws_connected")
+        if not self.history_loaded:
+            failed.append("history_loaded")
+        if failed:
+            logger.warning(f"[حالة] لا يمكن البدء — ناقص: {failed}")
+            return False
+        return True
+
+
+# نسخة وحيدة
+state = TradingState()
+
+# للحفاظ على التوافق مع باقي الكود
+_system_state = {"status": "بدء_التشغيل", "started_at": None, "errors": [], "preflight": {}, "engines": {}}
+
+
+def set_system_status(status: str):
+    _system_state["status"] = status
+    logger.info(f"[النظام] الحالة ← {status}")
+
+
+# ═══════════════════════════════════════════════════════════════
 #  الهجرة التلقائية (Auto-Migration)
 # ═══════════════════════════════════════════════════════════════
 
 _MIGRATIONS = {
     "coins": {
-        # (اسم العمود, نوع SQL, القيمة الافتراضية)
         "timeframes": ("JSON", "'[]'::json"),
         "min_entry_size": ("FLOAT", "0.0"),
     },
@@ -79,31 +182,19 @@ _MIGRATIONS = {
 
 
 async def auto_migrate() -> tuple[bool, list[str]]:
-    """
-    فحص الأعمدة المفقودة وإضافتها تلقائياً.
-    لا تلمس الأعمدة الموجودة. لا تحذف شيئاً.
-    تُرجع: (نجاح, قائمة الأعمدة المضافة)
-    """
     from sqlalchemy import text
     from database.repositories import _engine
-
     if _engine is None:
         return False, []
-
     added = []
     try:
         async with _engine.connect() as conn:
             for table, columns in _MIGRATIONS.items():
-                # جلب الأعمدة الحالية
                 result = await conn.execute(
-                    text(
-                        "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_name = :tname"
-                    ),
+                    text("SELECT column_name FROM information_schema.columns WHERE table_name = :tname"),
                     {"tname": table},
                 )
                 existing = {row[0] for row in result}
-
                 for col_name, (col_type, default_val) in columns.items():
                     if col_name not in existing:
                         if default_val is not None:
@@ -113,11 +204,9 @@ async def auto_migrate() -> tuple[bool, list[str]]:
                         logger.info(f"[هجرة] إضافة عمود: {table}.{col_name} ({col_type})")
                         await conn.execute(text(sql))
                         added.append(f"{table}.{col_name}")
-
                 if added:
                     await conn.commit()
                     logger.info(f"[هجرة] ✅ تمت إضافة {len(added)} عمود: {', '.join(added)}")
-
         return True, added
     except Exception as e:
         logger.error(f"[هجرة] ❌ فشل: {e}", exc_info=True)
@@ -125,72 +214,46 @@ async def auto_migrate() -> tuple[bool, list[str]]:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  نظام فحص ما قبل التشغيل (Pre-Flight Checks)
+#  فحوصات ما قبل التشغيل
 # ═══════════════════════════════════════════════════════════════
 
 async def preflight_check_schema() -> tuple[bool, str]:
-    """التحقق من تطابق الـ schema باستخدام استعلامات SQL خالصة (متوافقة مع async)."""
     try:
         from sqlalchemy import text
         from database.repositories import _engine
-
         if _engine is None:
             return False, "محرك قاعدة البيانات غير مهيأ"
-
         async with _engine.connect() as conn:
-            # التحقق من وجود الجداول الأساسية
             required_tables = ["users", "coins", "trades", "positions",
                               "market_data", "market_state", "signals",
                               "risk_events", "portfolio_snapshots", "logs"]
-
             for table in required_tables:
                 result = await conn.execute(
-                    text(
-                        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-                        "WHERE table_name = :tname)"
-                    ),
+                    text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :tname)"),
                     {"tname": table},
                 )
-                exists = result.scalar()
-                if not exists:
+                if not result.scalar():
                     return False, f"الجدول مفقود: {table}"
-
-            # التحقق من الأعمدة المطلوبة في جدول coins
-            required_coins_columns = [
-                "id", "user_id", "symbol", "capital_allocated",
-                "risk_per_trade", "timeframes", "is_active"
-            ]
-            result = await conn.execute(
-                text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = 'coins'"
-                )
-            )
-            coins_columns = {row[0] for row in result}
-            for col in required_coins_columns:
-                if col not in coins_columns:
-                    return False, f"العمود مفقود في جدول coins: {col}"
-
-            # التحقق من الأعمدة المطلوبة في جدول users
-            required_users_columns = ["id", "telegram_id", "total_capital", "is_active"]
-            result = await conn.execute(
-                text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = 'users'"
-                )
-            )
-            users_columns = {row[0] for row in result}
-            for col in required_users_columns:
-                if col not in users_columns:
-                    return False, f"العمود مفقود في جدول users: {col}"
-
+            # coins columns
+            required_coins = ["id", "user_id", "symbol", "capital_allocated", "risk_per_trade", "timeframes", "is_active"]
+            result = await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'coins'"))
+            existing = {row[0] for row in result}
+            for col in required_coins:
+                if col not in existing:
+                    return False, f"العمود مفقود في coins: {col}"
+            # users columns
+            required_users = ["id", "telegram_id", "total_capital", "is_active"]
+            result = await conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'users'"))
+            existing = {row[0] for row in result}
+            for col in required_users:
+                if col not in existing:
+                    return False, f"العمود مفقود في users: {col}"
         return True, "المخطط متطابق"
     except Exception as e:
         return False, f"فشل فحص المخطط: {e}"
 
 
 async def preflight_check_exchange() -> tuple[bool, str]:
-    """التحقق من الاتصال بـ Binance (REST API)."""
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10) as client:
@@ -203,83 +266,16 @@ async def preflight_check_exchange() -> tuple[bool, str]:
 
 
 async def preflight_check_telegram(token: str) -> tuple[bool, str]:
-    """التحقق من صلاحية توكن تيليجرام."""
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
             data = resp.json()
             if data.get("ok"):
-                bot_name = data["result"]["username"]
-                return True, f"بوت تيليجرام: @{bot_name}"
+                return True, f"بوت تيليجرام: @{data['result']['username']}"
             return False, f"توكن تيليجرام غير صالح: {data.get('description', '')}"
     except Exception as e:
         return False, f"فشل الاتصال بـ Telegram API: {e}"
-
-
-# ═══════════════════════════════════════════════════════════════
-#  حالة النظام العالمية
-# ═══════════════════════════════════════════════════════════════
-
-_system_state = {
-    "status": "بدء_التشغيل",
-    "started_at": None,
-    "errors": [],
-    "preflight": {},
-    "engines": {},
-}
-
-# ── مراحل التشغيل الثلاث ──
-class SystemPhase:
-    BOOTSTRAP = "bootstrap"   # المرحلة 1: تحميل البيانات التاريخية
-    WARMUP = "warmup"         # المرحلة 2: WebSocket + بناء المخازن
-    LIVE = "live"             # المرحلة 3: تحليل كامل + إشارات + تنفيذ
-
-_system_phase = SystemPhase.BOOTSTRAP
-_ws_first_tick: dict[str, float] = {}  # symbol → وقت أول tick حي
-_ws_tick_count: dict[str, int] = {}    # symbol → عدد الـ ticks
-
-MIN_LIVE_TICKS = 20       # الحد الأدنى من الـ ticks قبل المرحلة 3
-MIN_WARMUP_SECONDS = 10   # الحد الأدنى من الثواني قبل المرحلة 3
-
-
-def set_system_status(status: str):
-    _system_state["status"] = status
-    logger.info(f"[النظام] الحالة ← {status}")
-
-
-def set_phase(new_phase: str):
-    """تسجيل انتقال المرحلة مع سجل واضح."""
-    global _system_phase
-    old = _system_phase
-    _system_phase = new_phase
-    labels = {
-        SystemPhase.BOOTSTRAP: "🧱 تمهيد — تحميل البيانات التاريخية",
-        SystemPhase.WARMUP: "🔥 تسخين — WebSocket + بناء المخازن",
-        SystemPhase.LIVE: "✅ مباشر — تحليل كامل + إشارات + تنفيذ",
-    }
-    logger.info("═" * 50)
-    logger.info(f"[مرحلة] {old} → {new_phase}")
-    logger.info(f"[مرحلة] {labels.get(new_phase, new_phase)}")
-    logger.info("═" * 50)
-    _system_state["phase"] = new_phase
-
-
-def record_error(component: str, error: str):
-    _system_state["errors"].append({"component": component, "error": error, "time": _utcnow().isoformat()})
-    logger.error(f"[النظام] ❌ {component}: {error}")
-
-
-def get_system_health() -> str:
-    """صحة النظام مشتقة من الحالة الفعلية — ليست ثابتة."""
-    if _system_state["errors"]:
-        critical = [e for e in _system_state["errors"] if "فشل" in e["error"] or "حرج" in e["error"]]
-        if critical:
-            return "متدهورة"
-        return "تحذير"
-    if _system_state["status"] == "يعمل":
-        return "صحيحة"
-    return _system_state["status"]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -296,25 +292,22 @@ def log_banner():
 
 async def main():
     log_banner()
-    _system_state["started_at"] = _utcnow()
     logger.info("═" * 50)
-    logger.info("[النظام] بدء تشغيل CT V4.0")
+    logger.info("[النظام] بدء تشغيل CT V4.1 — State Machine")
     logger.info("═" * 50)
 
     # ── 1. تحميل الإعدادات ──────────────────────────────────
     set_system_status("تحميل_الإعدادات")
-    logger.info("[النظام] [1/10] تحميل الإعدادات...")
     try:
         settings = get_settings()
         missing = settings.validate()
         if missing:
-            record_error("الإعدادات", f"متغيرات مفقودة: {missing}")
-            logger.critical(f"[النظام] ❌ فشل التحقق من الإعدادات. مطلوب: {missing}")
+            state.add_error("الإعدادات", f"متغيرات مفقودة: {missing}")
+            logger.critical(f"[النظام] ❌ متغيرات مفقودة: {missing}")
             sys.exit(1)
         logger.info("[الإعدادات] ✅ تم تحميل الإعدادات")
     except Exception as e:
-        record_error("الإعدادات", f"فشل التحميل: {e}")
-        logger.critical(f"[النظام] ❌ فشل تحميل الإعدادات: {e}", exc_info=True)
+        state.add_error("الإعدادات", f"فشل التحميل: {e}")
         sys.exit(1)
 
     # ── 2. Keep-Alive ───────────────────────────────────────
@@ -326,130 +319,87 @@ async def main():
     event_bus = EventBus()
     logger.info("[النظام] [3/10] ناقل الأحداث جاهز")
 
-    # ── 4. قاعدة البيانات + فحص المخطط ─────────────────────
+    # ── 4. قاعدة البيانات ──────────────────────────────────
     set_system_status("الاتصال_بقاعدة_البيانات")
-    logger.info("[النظام] [4/10] الاتصال بقاعدة البيانات...")
     try:
         await init_db()
-        logger.info("[قاعدة البيانات] ✅ تم الاتصال بقاعدة البيانات")
+        logger.info("[قاعدة البيانات] ✅ تم الاتصال")
     except Exception as e:
-        record_error("قاعدة البيانات", f"فشل الاتصال: {e}")
-        logger.critical(f"[قاعدة البيانات] ❌ فشل الاتصال: {e}", exc_info=True)
+        state.add_error("قاعدة البيانات", str(e))
         sys.exit(1)
 
-    # تشغيل الهجرة التلقائية قبل فحص المخطط
-    logger.info("[النظام] تشغيل الهجرة التلقائية...")
+    # هجرة تلقائية
     migrate_ok, added_cols = await auto_migrate()
     if not migrate_ok:
-        record_error("الهجرة", "فشل الهجرة التلقائية")
-        logger.warning("[الهجرة] ⚠️ فشل الهجرة — متابعة مع فحص المخطط")
+        state.add_error("الهجرة", "فشل الهجرة التلقائية")
     elif added_cols:
-        logger.info(f"[الهجرة] أعمدة مضافة: {', '.join(added_cols)}")
+        logger.info(f"[هجرة] أعمدة مضافة: {', '.join(added_cols)}")
     else:
-        logger.info("[الهجرة] المخطط محدث — لا أعمدة مفقودة")
+        logger.info("[هجرة] المخطط محدث")
 
-    # فحص المخطط بعد الهجرة
-    logger.info("[النظام] فحص تطابق المخطط...")
+    # فحص المخطط
     schema_ok, schema_msg = await preflight_check_schema()
     if not schema_ok:
-        record_error("المخطط", schema_msg)
-        logger.critical(f"[المخطط] ❌ {schema_msg}")
-        logger.critical("[النظام] ❌ فشل فحص المخطط — توقف.")
+        state.add_error("المخطط", schema_msg)
         sys.exit(1)
     logger.info(f"[المخطط] ✅ {schema_msg}")
-    _system_state["preflight"]["schema"] = "متطابق"
 
-    # ── 5. فحص الاتصالات الخارجية ──────────────────────────
+    # ── 5. فحص الاتصالات ───────────────────────────────────
     set_system_status("فحص_الاتصالات")
-    logger.info("[النظام] [5/10] فحص الاتصالات الخارجية...")
-
     exchange_ok, exchange_msg = await preflight_check_exchange()
-    if exchange_ok:
-        logger.info(f"[اتصال] ✅ {exchange_msg}")
-        _system_state["preflight"]["exchange"] = "متصل"
-    else:
-        logger.warning(f"[اتصال] ⚠️ {exchange_msg}")
-        _system_state["preflight"]["exchange"] = exchange_msg
-        # لا نتوقف — Market Data Engine يستخدم WebSocket وقد ينجح
+    logger.info(f"[اتصال] {'✅' if exchange_ok else '⚠️'} {exchange_msg}")
 
     telegram_ok, telegram_msg = await preflight_check_telegram(settings.telegram_token)
     if telegram_ok:
         logger.info(f"[اتصال] ✅ {telegram_msg}")
-        _system_state["preflight"]["telegram"] = "متصل"
     else:
-        record_error("تيليجرام", telegram_msg)
-        logger.critical(f"[اتصال] ❌ {telegram_msg}")
-        logger.critical("[النظام] ❌ توكن تيليجرام غير صالح — توقف.")
+        state.add_error("تيليجرام", telegram_msg)
         sys.exit(1)
 
-    # ── 6. بدء المحركات ────────────────────────────────────
+    # ── 6. بدء المحركات الأساسية ───────────────────────────
     set_system_status("بدء_المحركات")
-    logger.info("[النظام] [6/10] بدء المحركات الأساسية...")
-
-    # Config + Logging
     config_engine = ConfigEngine()
     await config_engine.initialize()
     await config_engine.start()
-
     logging_engine = LoggingEngine()
     await logging_engine.initialize()
     await logging_engine.start()
 
-    # Market Data Engine
+    state.transition(TradingState.CONNECTING_WS)
     market_data_engine = MarketDataEngine(event_bus)
     await market_data_engine.initialize()
     await market_data_engine.start()
     logger.info("[محرك] ✅ بيانات السوق بدأ")
 
-    # Market Analyzer
     market_analyzer = MarketAnalyzer(event_bus)
     await market_analyzer.initialize()
     await market_analyzer.start()
     logger.info("[محرك] ✅ محلل السوق بدأ")
 
-    # Strategy Engine
     strategy_engine = StrategyEngine(event_bus)
     await strategy_engine.initialize()
     await strategy_engine.start()
     logger.info("[محرك] ✅ محرك الاستراتيجيات بدأ")
 
     # ── 7. المحركات المتقدمة ───────────────────────────────
-    logger.info("[النظام] [7/10] بدء المحركات المتقدمة...")
-
     evidence_engine = EvidenceEngine(event_bus)
-    await evidence_engine.initialize()
-    await evidence_engine.start()
-
+    await evidence_engine.initialize(); await evidence_engine.start()
     risk_engine = RiskEngine(event_bus)
-    await risk_engine.initialize()
-    await risk_engine.start()
-
+    await risk_engine.initialize(); await risk_engine.start()
     execution_engine = ExecutionEngine(event_bus)
-    await execution_engine.initialize()
-    await execution_engine.start()
-
+    await execution_engine.initialize(); await execution_engine.start()
     portfolio_engine = PortfolioEngine(event_bus, initial_balance=settings.default_capital)
-    await portfolio_engine.initialize()
-    await portfolio_engine.start()
-
+    await portfolio_engine.initialize(); await portfolio_engine.start()
     learning_engine = LearningEngine(event_bus)
-    await learning_engine.initialize()
-    await learning_engine.start()
-
+    await learning_engine.initialize(); await learning_engine.start()
     reporting_engine = ReportingEngine(event_bus)
-    await reporting_engine.initialize()
-    await reporting_engine.start()
-
+    await reporting_engine.initialize(); await reporting_engine.start()
     health_monitor = HealthMonitor(event_bus)
-    await health_monitor.initialize()
-    await health_monitor.start()
-
+    await health_monitor.initialize(); await health_monitor.start()
     logger.info("[النظام] ✅ جميع المحركات الـ 14 بدأت")
 
     # ── 8. الخدمات ─────────────────────────────────────────
     set_system_status("بدء_الخدمات")
-    logger.info("[النظام] [8/10] بدء الخدمات...")
-
     telegram_id = settings.admin_id
     execution_engine._admin_telegram_id = telegram_id
     portfolio_engine._telegram_id = telegram_id
@@ -458,20 +408,14 @@ async def main():
     analysis_service = AnalysisService(market_data_engine, market_analyzer, strategy_engine)
     trading_service = TradingService(
         evidence_engine, risk_engine, execution_engine,
-        market_analyzer, strategy_engine, market_data_engine,
-        analysis_service
+        market_analyzer, strategy_engine, market_data_engine, analysis_service
     )
-    portfolio_service = PortfolioService(
-        portfolio_engine, reporting_engine, learning_engine, health_monitor
-    )
+    portfolio_service = PortfolioService(portfolio_engine, reporting_engine, learning_engine, health_monitor)
     risk_service = RiskService(risk_engine)
-
     logger.info("[النظام] ✅ جميع الخدمات بدأت")
 
     # ── 9. مزامنة العملات ──────────────────────────────────
     set_system_status("مزامنة_العملات")
-    logger.info("[النظام] [9/10] مزامنة العملات من قاعدة البيانات...")
-
     symbols, coins = await analysis_service.sync_symbols_from_db(str(telegram_id))
     logger.info(f"[مزامنة] ✅ تم تحميل {len(symbols)} عملة")
 
@@ -479,12 +423,8 @@ async def main():
         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
         logger.info(f"[عملة] {coin.symbol} | أطر: {', '.join(tfs)} | رأس مال: {coin.capital_allocated:.2f}")
 
-    _system_state["engines"]["market_data"] = "يعمل" if symbols else "ينتظر"
-    _system_state["preflight"]["coins_loaded"] = len(symbols)
-
-    # ── المرحلة 1: تسخين — تحميل البيانات التاريخية ──
-    set_phase(SystemPhase.BOOTSTRAP)
-    logger.info("[النظام] تسخين الشموع التاريخية...")
+    # ── المرحلة التمهيد: تحميل البيانات التاريخية ─────────
+    state.transition(TradingState.LOADING_HISTORY)
     all_timeframes = set()
     for coin in coins:
         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
@@ -492,75 +432,78 @@ async def main():
             all_timeframes.add(tf)
     if symbols and all_timeframes:
         await market_analyzer.warmup_candles(symbols, all_timeframes)
-        logger.info("[النظام] ✅ تسخين الشموع اكتمل — المحلل جاهز فوراً")
+        state.history_loaded = True
+        logger.info("[النظام] ✅ تسخين الشموع اكتمل")
     else:
-        logger.warning("[النظام] ⚠️ لا عملات أو أطر زمنية للتسخين")
-
-    # ── المرحلة 2: تسخين — WebSocket + بناء المخازن ──
-    set_phase(SystemPhase.WARMUP)
+        logger.warning("[النظام] ⚠️ لا عملات للتسخين")
 
     # ── 10. بوت تيليجرام + حلقة التداول ────────────────────
     set_system_status("بدء_البوت")
-    logger.info("[النظام] [10/10] بدء بوت تيليجرام...")
-
     telegram_engine = TelegramEngine(
-        token=settings.telegram_token,
-        admin_id=settings.admin_id,
-        analysis_service=analysis_service,
-        trading_service=trading_service,
-        portfolio_service=portfolio_service,
-        risk_service=risk_service,
+        token=settings.telegram_token, admin_id=settings.admin_id,
+        analysis_service=analysis_service, trading_service=trading_service,
+        portfolio_service=portfolio_service, risk_service=risk_service,
     )
 
-    # ── حلقة التداول ───────────────────────────────────────
+    # ── حلقة التداول — SAFE EXECUTION PIPELINE ─────────────
     async def trading_loop():
-        """حلقة تداول دورية — تعالج كل العملات بكل أطرها الزمنية."""
-        from database.repositories import CoinRepository, TradeRepository, PositionRepository, get_session
+        from database.repositories import CoinRepository, PositionRepository, get_session
         cycle = 0
 
         async def notify_tg(text: str):
-            """إرسال إشعار للمستخدم عبر تيليجرام."""
             try:
-                if telegram_engine and telegram_engine.application:
+                if telegram_engine and getattr(telegram_engine, 'application', None):
                     await telegram_engine.send_message(telegram_id, text)
-            except Exception as e:
-                logger.debug(f"[إشعار] فشل الإرسال: {e}")
+            except Exception:
+                pass
 
         while True:
             cycle += 1
             cycle_start = _utcnow()
 
-            try:
-                trading_allowed = (
-                    getattr(health_monitor, 'is_trading_safe', lambda: False)() and
-                    getattr(risk_service, 'is_trading_allowed', lambda: False)()
-                )
+            # ── المرحلة 0: تهيئة آمنة لجميع المتغيرات ──
+            state.reset_cycle()
 
+            try:
+                # ── تتبع اتصال WS ──
+                ws_alive = getattr(market_data_engine, '_ws', None) is not None
+                if ws_alive and state.phase == TradingState.CONNECTING_WS:
+                    state.ws_connected = True
+                    state.ws_connected_at = _utcnow().timestamp()
+                    state.transition(TradingState.WARMING_UP)
+
+                # تحديث عداد ticks
+                state.ws_tick_count = getattr(market_data_engine, '_kline_count', 0)
+
+                # الانتقال من WARMING_UP إلى RUNNING
+                if state.phase == TradingState.WARMING_UP:
+                    if state.ws_connected and state.ws_tick_count >= state.MIN_WS_TICKS:
+                        state.transition(TradingState.RUNNING)
+                    elif cycle % 3 == 0:
+                        logger.info(
+                            f"[تسخين] 🔥 WS ticks={state.ws_tick_count}/{state.MIN_WS_TICKS} — "
+                            f"انتظار بيانات حية..."
+                        )
+
+                # ── المرحلة 1: فحص السماح بالتداول ──
+                trading_allowed = (
+                    getattr(health_monitor, 'is_trading_safe', lambda: True)() and
+                    getattr(risk_service, 'is_trading_allowed', lambda: True)()
+                )
                 if not trading_allowed:
-                    logger.warning(
-                        f"[دورة #{cycle}] ⛔ التداول معلق "
-                        f"(الصحة: {health_monitor.system_state})"
-                    )
+                    logger.warning(f"[دورة #{cycle}] ⛔ تداول معلق")
                     await asyncio.sleep(30)
                     continue
 
-                    # ── المرحلة 0: تهيئة آمنة لجميع المتغيرات ──
-                    open_positions: list = []
-                    coins: list = []
-                    price_lines: list = []
-                    coin_prices: dict = {}
-                    signals_found: int = 0
-                    analysis_ok: int = 0
-                    analysis_miss: int = 0
+                # ── المرحلة 2: جمع البيانات ──
+                async for session in get_session():
+                    state.coins = await CoinRepository.get_all_active(session, telegram_id)
 
-                    coins = await CoinRepository.get_all_active(session, telegram_id)
+                    # مراقبة المراكز — فقط في RUNNING
+                    if state.trading_allowed:
+                        state.open_positions = await PositionRepository.get_open(session, telegram_id)
 
-                    # ── مراقبة المراكز المفتوحة — فقط في LIVE ──
-                    if _system_phase == SystemPhase.LIVE:
-                        open_positions = await PositionRepository.get_open(session, telegram_id)
-                    # else: open_positions = [] (مضمون من التهيئة أعلاه)
-
-                    for pos in open_positions:
+                    for pos in state.open_positions:
                         try:
                             analysis = await market_analyzer.analyze(pos.symbol, "1m")
                             if not analysis:
@@ -568,162 +511,88 @@ async def main():
                             current_price = getattr(analysis, 'current_price', 0)
                             if current_price <= 0:
                                 continue
-
-                            # فحص TP/SL
-                            if pos.side == "BUY" or pos.side == "LONG":
-                                hit_tp = pos.take_profit and current_price >= pos.take_profit
-                                hit_sl = pos.stop_loss and current_price <= pos.stop_loss
-                            else:  # SELL / SHORT
-                                hit_tp = pos.take_profit and current_price <= pos.take_profit
-                                hit_sl = pos.stop_loss and current_price >= pos.stop_loss
-
+                            side = getattr(pos, 'side', 'BUY')
+                            if side in ("BUY", "LONG"):
+                                hit_tp = getattr(pos, 'take_profit', None) and current_price >= pos.take_profit
+                                hit_sl = getattr(pos, 'stop_loss', None) and current_price <= pos.stop_loss
+                            else:
+                                hit_tp = getattr(pos, 'take_profit', None) and current_price <= pos.take_profit
+                                hit_sl = getattr(pos, 'stop_loss', None) and current_price >= pos.stop_loss
                             if hit_tp or hit_sl:
-                                pnl = (current_price - pos.entry_price) / pos.entry_price * 100
-                                if pos.side in ("SELL", "SHORT"):
+                                entry = getattr(pos, 'entry_price', current_price)
+                                pnl = (current_price - entry) / entry * 100
+                                if side in ("SELL", "SHORT"):
                                     pnl = -pnl
                                 reason = "🎯 هدف" if hit_tp else "🛑 وقف خسارة"
                                 emoji = "🟢" if pnl > 0 else "🔴"
-
-                                await PositionRepository.close_position(
-                                    session, pos, exit_price=current_price, reason=reason
+                                await PositionRepository.close_position(session, pos, exit_price=current_price, reason=reason)
+                                logger.info(f"[مركز] {pos.symbol} | {reason} | PnL={pnl:+.2f}%")
+                                await notify_tg(
+                                    f"{emoji} {reason}\n━━━━━━━━━━━━━━\n"
+                                    f"💰 {pos.symbol}\n📊 السعر: {current_price:.6f}\n"
+                                    f"📈 الدخول: {entry:.6f}\n💵 الربح/الخسارة: {pnl:+.2f}%\n"
+                                    f"📦 الكمية: {getattr(pos, 'quantity', 0):.4f}"
                                 )
-
-                                msg = (
-                                    f"{emoji} {reason}\n"
-                                    f"━━━━━━━━━━━━━━\n"
-                                    f"💰 {pos.symbol}\n"
-                                    f"📊 السعر: {current_price:.6f}\n"
-                                    f"📈 الدخول: {pos.entry_price:.6f}\n"
-                                    f"💵 الربح/الخسارة: {pnl:+.2f}%\n"
-                                    f"📦 الكمية: {pos.quantity:.4f}\n"
-                                )
-                                logger.info(
-                                    f"[مركز] {pos.symbol} | {reason} | "
-                                    f"سعر={current_price:.6f} | PnL={pnl:+.2f}%"
-                                )
-                                await notify_tg(msg)
                         except Exception as e:
-                            logger.debug(f"[مركز] {pos.symbol} خطأ فحص TP/SL: {e}")
+                            logger.debug(f"[مركز] {pos.symbol} خطأ: {e}")
 
-                    if not coins:
+                    if not state.coins:
                         if cycle % 10 == 0:
-                            logger.info(f"[دورة #{cycle}] لا عملات نشطة — انتظار")
+                            logger.info(f"[دورة #{cycle}] لا عملات — انتظار")
                         await asyncio.sleep(1)
                         break
 
-                    # ── المرحلة 1: فحص الأسعار ──
-                    if _system_phase == SystemPhase.WARMUP:
-                        ws_alive = getattr(market_data_engine, '_ws', None) is not None
-                        if ws_alive:
-                            live_count = getattr(market_data_engine, '_kline_count', 0)
-                            warmup_elapsed = (_utcnow() - cycle_start).total_seconds()
-                            if live_count >= MIN_LIVE_TICKS:
-                                set_phase(SystemPhase.LIVE)
-                            elif cycle % 3 == 0:
-                                logger.info(
-                                    f"[تسخين] 🔥 WS ticks={live_count}/{MIN_LIVE_TICKS} | "
-                                    f"انتظار وصول بيانات حية..."
-                                )
-
-                    # ── تشخيص دورة البيانات (مرة كل 10 دورات) ──
-                    if cycle % 10 == 0:
-                        diag = []
-                        # 1. حالة WebSocket
-                        ws_alive = getattr(market_data_engine, '_ws', None) is not None
-                        sub_count = len(getattr(market_data_engine, '_symbols', set()))
-                        diag.append(f"🔌 WS={'متصل' if ws_alive else 'منفصل'} | رموز مشتركة: {sub_count}")
-
-                        # 2. الشموع في MarketAnalyzer (نفس الكائن؟)
-                        total_candles = sum(
-                            len(tf_dict) for tf_dict in market_analyzer._candles.values()
-                        )
-                        diag.append(f"🕯️ شموع المحلل: {total_candles} إطار")
-
-                        # 3. تفصيل الشموع لكل عملة×إطار
-                        for symbol in sorted(market_analyzer._candles.keys()):
-                            for tf in sorted(market_analyzer._candles[symbol].keys()):
-                                n = len(market_analyzer._candles[symbol][tf])
-                                status = "✅" if n >= 50 else f"⏳({n}/50)"
-                                diag.append(f"  {symbol} {tf}: {n} شمعة {status}")
-
-                        # 4. المهام النشطة
-                        active_tasks = len(asyncio.all_tasks())
-                        diag.append(f"📋 مهام asyncio: {active_tasks}")
-
-                        # 5. معرفات الكائنات (نفس النسخة؟)
-                        diag.append(
-                            f"🆔 محلل={id(market_analyzer)} | "
-                            f"بيانات={id(market_data_engine)} | "
-                            f"أحداث={id(event_bus)}"
-                        )
-
-                        # 6. الأسعار الحية
-                        live_count = len(getattr(market_data_engine, 'live_prices', {}))
-                        diag.append(f"💹 أسعار حية: {live_count} رمز")
-
-                        logger.info(f"[تشخيص #{cycle}]\n" + "\n".join(diag))
-
-                    for coin in coins:
+                    # ── المرحلة 3: التحليل ──
+                    for coin in state.coins:
                         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
-
-                        # جمع السعر الحالي لكل إطار
                         coin_prices = {}
+
                         for tf in tfs:
                             try:
                                 analysis = await market_analyzer.analyze(coin.symbol, tf)
                                 if analysis and getattr(analysis, 'current_price', 0) > 0:
-                                    price = analysis.current_price
-                                    coin_prices[tf] = price
-                                    analysis_ok += 1
+                                    coin_prices[tf] = analysis.current_price
+                                    state.analysis_ok += 1
                                     await strategy_engine.run_strategies(coin.symbol, tf, analysis)
                                 else:
-                                    analysis_miss += 1
+                                    state.analysis_miss += 1
                             except Exception as e:
-                                analysis_miss += 1
-                                logger.debug(f"[{coin.symbol}] [{tf}] خطأ تحليل: {e}")
+                                state.analysis_miss += 1
+                                logger.debug(f"[{coin.symbol}] [{tf}] خطأ: {e}")
 
-                        # سطر سعر واحد لكل عملة
                         if coin_prices:
                             price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
-                            price_lines.append(f"  {coin.symbol:<10} {price_str}")
+                            state.price_lines.append(f"  {coin.symbol:<10} {price_str}")
 
-                        # فحص إشارات التداول — فقط في المرحلة LIVE
-                        if _system_phase == SystemPhase.LIVE:
+                        # ── المرحلة 4: التنفيذ — فقط في RUNNING ──
+                        if state.trading_allowed:
                             try:
-                                result = await trading_service.process_symbol(
-                                    coin.symbol, telegram_id
-                                )
+                                result = await trading_service.process_symbol(coin.symbol, telegram_id)
                                 if result:
                                     evidence, risk_decision, execution = result
-                                    signals_found += 1
+                                    state.signals_found += 1
                                     if execution:
                                         logger.info(
-                                            f"[صفقة #{signals_found}] {coin.symbol} | "
+                                            f"[صفقة #{state.signals_found}] {coin.symbol} | "
                                             f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
                                             f"كمية: {execution.executed_quantity:.6f} | "
                                             f"سعر: {execution.executed_price:.6f}"
                                         )
-                                        # ── إشعار فوري بفتح الصفقة ──
                                         tp = getattr(execution, 'take_profit', None)
                                         sl = getattr(execution, 'stop_loss', None)
-                                        tp_str = f"{tp:.6f}" if tp else "—"
-                                        sl_str = f"{sl:.6f}" if sl else "—"
-                                        order_msg = (
-                                            f"🔔 **صفقة جديدة**\n"
-                                            f"━━━━━━━━━━━━━━\n"
-                                            f"💰 {coin.symbol}\n"
-                                            f"📊 {evidence.decision}\n"
+                                        await notify_tg(
+                                            f"🔔 **صفقة جديدة**\n━━━━━━━━━━━━━━\n"
+                                            f"💰 {coin.symbol}\n📊 {evidence.decision}\n"
                                             f"💵 السعر: {execution.executed_price:.6f}\n"
                                             f"📦 الكمية: {execution.executed_quantity:.4f}\n"
-                                            f"🎯 هدف: {tp_str}\n"
-                                            f"🛑 وقف: {sl_str}\n"
+                                            f"🎯 هدف: {tp:.6f if tp else '—'}\n"
+                                            f"🛑 وقف: {sl:.6f if sl else '—'}\n"
                                             f"✅ ثقة: {evidence.final_score:.0f}%\n"
-                                            f"🧠 السبب: {evidence.reasoning[:100]}\n"
+                                            f"🧠 {evidence.reasoning[:100]}"
                                         )
-                                        await notify_tg(order_msg)
                                     else:
                                         logger.info(
-                                            f"[إشارة #{signals_found}] {coin.symbol} | "
+                                            f"[إشارة #{state.signals_found}] {coin.symbol} | "
                                             f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
                                             f"مرفوضة: {evidence.reasoning[:60]}"
                                         )
@@ -732,86 +601,78 @@ async def main():
 
                         await asyncio.sleep(0.5)
 
-                    # ── تقرير الدورة ──
+                    # ── المرحلة 5: تشخيص (كل 10 دورات) ──
+                    if cycle % 10 == 0:
+                        diag = []
+                        diag.append(f"🔌 WS={'متصل' if state.ws_connected else 'منفصل'} | ticks={state.ws_tick_count}")
+                        total_candles = sum(len(tf_dict) for tf_dict in market_analyzer._candles.values())
+                        diag.append(f"🕯️ شموع: {total_candles} إطار")
+                        for sym in sorted(market_analyzer._candles.keys()):
+                            for tf in sorted(market_analyzer._candles[sym].keys()):
+                                n = len(market_analyzer._candles[sym][tf])
+                                diag.append(f"  {sym} {tf}: {n} شمعة {'✅' if n>=50 else f'⏳({n}/50)'}")
+                        diag.append(f"📋 مهام: {len(asyncio.all_tasks())}")
+                        diag.append(f"🆔 محلل={id(market_analyzer)} بيانات={id(market_data_engine)}")
+                        diag.append(f"💹 أسعار حية: {len(getattr(market_data_engine, 'live_prices', {}))} رمز")
+                        logger.info(f"[تشخيص #{cycle}]\n" + "\n".join(diag))
+
+                    # ── المرحلة 6: تقرير الدورة ──
                     duration = (_utcnow() - cycle_start).total_seconds()
-                    phase_label = "🔥" if _system_phase == SystemPhase.WARMUP else "✅"
-                    if _system_phase == SystemPhase.BOOTSTRAP:
-                        phase_label = "🧱"
-                    data_status = f"تحليلات: {analysis_ok}" if analysis_ok > 0 else "⏳ بلا بيانات"
-                    mode = f"{phase_label} {_system_phase}"
+                    phase_icon = {"INIT": "🟡", "CONNECTING_WS": "🔌", "LOADING_HISTORY": "📥",
+                                  "WARMING_UP": "🔥", "RUNNING": "✅", "ERROR": "🔴"}.get(state.phase, "❓")
+                    data_status = f"تحليلات: {state.analysis_ok}" if state.analysis_ok > 0 else "⏳ بلا بيانات"
                     summary = (
-                        f"[{mode}] دورة #{cycle} | {len(coins)} عملة | "
-                        f"{data_status} | "
-                        f"إشارات: {signals_found} | "
-                        f"{duration:.1f}ث"
+                        f"[{phase_icon} {state.phase}] دورة #{cycle} | "
+                        f"{len(state.coins)} عملة | {data_status} | "
+                        f"إشارات: {state.signals_found} | {duration:.1f}ث"
                     )
                     logger.info(summary)
-                    if analysis_miss > analysis_ok and cycle <= 3:
-                        logger.warning(
-                            f"[دورة #{cycle}] ⚠️ {analysis_miss} تحليل فشل — "
-                            f"قد تكون بيانات السوق لم تصل بعد (WebSocket يحتاج وقتاً)"
-                        )
-                    if price_lines:
-                        logger.info(f"[أسعار #{cycle}]\n" + "\n".join(price_lines))
+                    if state.price_lines:
+                        logger.info(f"[أسعار #{cycle}]\n" + "\n".join(state.price_lines))
 
             except Exception as e:
                 logger.error(f"[دورة #{cycle}] ❌ خطأ: {e}", exc_info=True)
 
-            # أول 5 دورات سريعة، ثم كل 30 ثانية
+            # تأخير تكيفي
             delay = 10 if cycle <= 5 else 30
             await asyncio.sleep(delay)
 
     asyncio.create_task(trading_loop())
-    logger.info("[النظام] حلقة التداول بدأت (أول 5 دورات كل 10ث، ثم كل 30ث)")
+    logger.info(f"[النظام] حلقة التداول بدأت — {state.phase}")
 
     # ── النظام جاهز ────────────────────────────────────────
     set_system_status("يعمل")
     logger.info("═" * 50)
-    logger.info("[النظام] ✅ النظام جاهز — جميع المحركات والخدمات تعمل")
-    logger.info(f"[النظام] حالة النظام: {get_system_health()}")
+    logger.info(f"[النظام] ✅ جاهز — {state.phase} — {state.health}")
     logger.info("═" * 50)
 
-    # ── تشغيل بوت تيليجرام (مانع) ──────────────────────────
+    # ── تشغيل بوت تيليجرام ──────────────────────────────────
     try:
         await telegram_engine.start()
     except (KeyboardInterrupt, SystemExit):
         logger.info("[النظام] إشارة إيقاف")
     except Exception as e:
-        record_error("البوت", f"فشل تشغيل البوت: {e}")
-        logger.critical(f"[النظام] ❌ فشل تشغيل بوت تيليجرام: {e}", exc_info=True)
+        state.add_error("البوت", str(e))
     finally:
-        # ── إيقاف تدريجي ───────────────────────────────────
         logger.info("[النظام] بدء الإيقاف التدريجي...")
         set_system_status("إيقاف")
-
-        shutdown_order = [
+        for name, stop_fn in [
             ("البوت", telegram_engine.stop),
-            ("مراقب الصحة", health_monitor.stop),
-            ("التقارير", reporting_engine.stop),
-            ("التعلم", learning_engine.stop),
-            ("المحفظة", portfolio_engine.stop),
-            ("التنفيذ", execution_engine.stop),
-            ("المخاطر", risk_engine.stop),
-            ("الأدلة", evidence_engine.stop),
-            ("الاستراتيجيات", strategy_engine.stop),
-            ("محلل السوق", market_analyzer.stop),
-            ("بيانات السوق", market_data_engine.stop),
-            ("السجلات", logging_engine.stop),
-            ("الإعدادات", config_engine.stop),
-        ]
-
-        for name, stop_fn in shutdown_order:
+            ("مراقب الصحة", health_monitor.stop), ("التقارير", reporting_engine.stop),
+            ("التعلم", learning_engine.stop), ("المحفظة", portfolio_engine.stop),
+            ("التنفيذ", execution_engine.stop), ("المخاطر", risk_engine.stop),
+            ("الأدلة", evidence_engine.stop), ("الاستراتيجيات", strategy_engine.stop),
+            ("محلل السوق", market_analyzer.stop), ("بيانات السوق", market_data_engine.stop),
+            ("السجلات", logging_engine.stop), ("الإعدادات", config_engine.stop),
+        ]:
             try:
                 await stop_fn()
-                logger.info(f"[إيقاف] {name} توقف")
+                logger.info(f"[إيقاف] {name}")
             except Exception as e:
-                logger.error(f"[إيقاف] {name} خطأ: {e}")
-
+                logger.error(f"[إيقاف] {name}: {e}")
         await close_db()
         logger.info("[إيقاف] قاعدة البيانات أغلقت")
-        logger.info("═" * 50)
-        logger.info("[النظام] ✅ إيقاف كامل — وداعاً")
-        logger.info("═" * 50)
+        logger.info("[النظام] ✅ إيقاف كامل")
 
 
 if __name__ == "__main__":
