@@ -142,25 +142,52 @@ class TelegramEngine:
         logger.info("[بوت] تم تسجيل المعالجات (start, cancel, conv_handler, message, callback).")
 
     async def start(self):
-        """Start polling."""
+        """بدء استطلاع البوت مع معالجة تضارب الجلسات."""
         if not self.application:
             await self.initialize()
 
-        logger.info("[بوت] بدء استطلاع البوت...")
-        async with self.application:
-            await self.application.initialize()
-            await self.application.start()
-            await self.application.updater.start_polling(drop_pending_updates=True)
-            logger.info("[بوت] ✅ استطلاع البوت بدأ. في انتظار الرسائل.")
+        logger.info("[بوت] انتظار 3 ثوانٍ لتجنب تضارب النشر...")
+        await asyncio.sleep(3)
 
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
             try:
-                while True:
-                    await asyncio.sleep(3600)
-            except (KeyboardInterrupt, SystemExit):
-                logger.info("[بوت] استلام إشارة إيقاف.")
-                await self.application.updater.stop()
-                await self.application.stop()
-                await self.application.shutdown()
+                logger.info(f"[بوت] بدء استطلاع البوت (محاولة {attempt}/{max_retries})...")
+                async with self.application:
+                    await self.application.initialize()
+                    await self.application.start()
+                    await self.application.updater.start_polling(
+                        drop_pending_updates=True,
+                        allowed_updates=["message", "callback_query"],
+                    )
+                    logger.info("[بوت] ✅ استطلاع البوت بدأ. في انتظار الرسائل.")
+
+                    try:
+                        while True:
+                            await asyncio.sleep(3600)
+                    except (KeyboardInterrupt, SystemExit):
+                        logger.info("[بوت] استلام إشارة إيقاف.")
+                        await self.application.updater.stop()
+                        await self.application.stop()
+                        await self.application.shutdown()
+                return  # نجاح — خروج من الحلقة
+
+            except Exception as e:
+                err_msg = str(e)
+                if "Conflict" in err_msg and "getUpdates" in err_msg:
+                    wait = 5 * attempt
+                    logger.warning(
+                        f"[بوت] ⚠️ تضارب في جلسة الاستطلاع — "
+                        f"انتظار {wait} ثوانٍ... (محاولة {attempt}/{max_retries})"
+                    )
+                    await asyncio.sleep(wait)
+                    # إعادة تهيئة التطبيق للمحاولة التالية
+                    await self.initialize()
+                else:
+                    logger.critical(f"[بوت] ❌ فشل بدء البوت: {e}", exc_info=True)
+                    raise
+
+        logger.critical("[بوت] ❌ فشل بدء البوت بعد كل المحاولات")
 
     async def stop(self):
         """Stop bot gracefully."""

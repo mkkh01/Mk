@@ -1,7 +1,7 @@
 """
 خدمة التداول — تنسيق مسار الصفقة الكامل.
 الأدلة ← المخاطر ← التنفيذ.
-V4.0: لا قيم افتراضية لرأس المال — يُقرأ من coin.allocated_capital.
+V4.0: لا قيم افتراضية لرأس المال — يُقرأ من coin.capital_allocated.
        دعم الأطر الزمنية المتعددة — تجميع الإشارات من جميع الأطر.
 """
 import logging
@@ -124,22 +124,22 @@ class TradingService:
             return (evidence, None, None)
 
         # d. تقييم المخاطر — قراءة رأس المال من DB
-        allocated_capital: Optional[float] = None
+        capital_allocated: Optional[float] = None
         risk_per_trade: float = 1.0
 
         try:
             async for session in get_session():
                 coin = await CoinRepository.get_by_symbol(session, telegram_id, symbol)
                 if coin:
-                    allocated_capital = coin.allocated_capital
+                    capital_allocated = coin.capital_allocated
                     risk_per_trade = getattr(coin, 'risk_per_trade', 1.0) or 1.0
         except Exception as e:
             logger.error(f"[{symbol}] ❌ خطأ في قراءة إعدادات العملة: {e}")
 
-        if allocated_capital is None:
+        if capital_allocated is None:
             logger.error(
                 f"[{symbol}] ❌ لم يتم إيجاد رأس مال مخصص — "
-                f"يجب على المستخدم تعيين allocated_capital للعملة"
+                f"يجب على المستخدم تعيين capital_allocated للعملة"
             )
             return (evidence, None, None)
 
@@ -151,7 +151,7 @@ class TradingService:
         logger.info(
             f"[{symbol}] 🟢 إشارة {evidence.decision} | "
             f"الثقة: {evidence.final_score:.0f}% | "
-            f"رأس المال: {allocated_capital:.2f} | "
+            f"رأس المال: {capital_allocated:.2f} | "
             f"نسبة المخاطرة: {risk_per_trade}%"
         )
 
@@ -159,7 +159,7 @@ class TradingService:
         try:
             risk_decision = await self.risk_engine.evaluate(
                 evidence, entry_price=entry_price,
-                capital=allocated_capital, risk_percentage=risk_per_trade,
+                capital=capital_allocated, risk_percentage=risk_per_trade,
             )
         except Exception as e:
             logger.error(f"[{symbol}] ❌ خطأ في تقييم المخاطر: {e}")

@@ -252,12 +252,12 @@ class CoinRepository:
 
     @staticmethod
     async def add(session: AsyncSession, identifier, symbol: str,
-                  allocated_capital: float,
+                  capital_allocated: float,
                   risk_per_trade: float = 1.0,
                   timeframes: Optional[List[str]] = None,
                   min_entry_size: float = 0.0) -> Coin:
         """
-        إضافة عملة للمستخدم. `allocated_capital` إجباري — لا قيمة افتراضية.
+        إضافة عملة للمستخدم. `capital_allocated` إجباري — لا قيمة افتراضية.
         identifier يمكن أن يكون: int (telegram_id)، str (telegram_id أو UUID)، أو كائن User.
 
         يتعامل مع الرموز المكررة: إذا كانت العملة موجودة بنفس الرمز، يُحدّثها.
@@ -267,7 +267,7 @@ class CoinRepository:
             timeframes = ["15m"]
 
         logger.info(
-            f"[عملات] إضافة: رمز={symbol} رأس_مال={allocated_capital} "
+            f"[عملات] إضافة: رمز={symbol} رأس_مال={capital_allocated} "
             f"مخاطرة={risk_per_trade}% أطر={timeframes} مستخدم={user_uuid[:8]}..."
         )
 
@@ -281,7 +281,7 @@ class CoinRepository:
 
         if existing_coin:
             # تحديث الموجود
-            existing_coin.allocated_capital = allocated_capital
+            existing_coin.capital_allocated = capital_allocated
             existing_coin.risk_per_trade = risk_per_trade
             existing_coin.timeframes = timeframes
             existing_coin.min_entry_size = min_entry_size
@@ -294,7 +294,7 @@ class CoinRepository:
         coin = Coin(
             user_id=user_uuid,
             symbol=symbol,
-            allocated_capital=allocated_capital,
+            capital_allocated=capital_allocated,
             risk_per_trade=risk_per_trade,
             timeframes=timeframes,
             min_entry_size=min_entry_size,

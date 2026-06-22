@@ -191,14 +191,14 @@ class PortfolioService:
                     "details": [
                         {
                             "symbol": c.symbol,
-                            "allocated_capital": c.allocated_capital,
+                            "capital_allocated": c.capital_allocated,
                             "timeframes": getattr(c, 'timeframes', ["15m"]),
                             "risk_per_trade": getattr(c, 'risk_per_trade', 1.0),
                             "active": c.is_active,
                         }
                         for c in coins
                     ],
-                    "total_allocated": sum(c.allocated_capital for c in coins),
+                    "total_allocated": sum(c.capital_allocated for c in coins),
                 }
         except Exception:
             report["coins"] = {"count": 0, "details": [], "total_allocated": 0}

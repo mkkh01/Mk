@@ -52,14 +52,14 @@ class Coin(Base):
     """
     إعدادات العملة للمستخدم.
     V4.0: `timeframes` أصبح JSON بدلاً من `timeframe` السابق (قائمة أطر زمنية).
-    `allocated_capital` مطلوب من المستخدم — لا قيمة افتراضية.
+    `capital_allocated` مطلوب من المستخدم — لا قيمة افتراضية.
     """
     __tablename__ = "coins"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False)
-    allocated_capital: Mapped[float] = mapped_column(Float, nullable=False)  # إجباري من المستخدم
+    capital_allocated: Mapped[float] = mapped_column(Float, nullable=False)  # إجباري من المستخدم
     risk_per_trade: Mapped[float] = mapped_column(Float, default=1.0)
     timeframes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)  # قائمة أطر زمنية، افتراضي ["15m"]
     min_entry_size: Mapped[float] = mapped_column(Float, default=0.0)  # الحد الأدنى لحجم الصفقة
