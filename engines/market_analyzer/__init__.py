@@ -209,9 +209,11 @@ class MarketAnalyzer(BaseEngine):
                 if len(bucket) > MAX_CANDLES_HISTORY:
                     bucket.pop(0)
 
-        # تسجيل تشخيصي
+        # تسجيل — فقط عند تغير العدد (ليس عند تحديث نفس الشمعة)
         count = len(bucket)
-        if count % 50 == 0 or count == 1:
+        prev_count = getattr(self, f'_last_logged_{symbol}_{timeframe}', 0)
+        if count != prev_count:
+            setattr(self, f'_last_logged_{symbol}_{timeframe}', count)
             self.logger.info(
                 f"[محلل السوق] 📈 {symbol} {timeframe}: "
                 f"{count} شمعة | آخر سعر={event.close:.6f}"
@@ -267,18 +269,25 @@ class MarketAnalyzer(BaseEngine):
         adaptive_min = min(20, MIN_CANDLES_FOR_ANALYSIS)
 
         if len(candles) < adaptive_min:
-            self.logger.info(
-                f"[تحليل] ⏳ {symbol} {timeframe}: "
-                f"{len(candles)}/{adaptive_min} شمعة — غير كافٍ للتحليل"
-            )
+            # تسجيل فقط عند تغير العدد — ليس كل دورة
+            prev = getattr(self, f'_last_insuff_{symbol}_{timeframe}', -1)
+            if len(candles) != prev:
+                setattr(self, f'_last_insuff_{symbol}_{timeframe}', len(candles))
+                self.logger.info(
+                    f"[تحليل] ⏳ {symbol} {timeframe}: "
+                    f"{len(candles)}/{adaptive_min} شمعة — غير كافٍ للتحليل"
+                )
             return None
 
-        # تحذير إذا أقل من الحد الكامل
+        # تحذير — مرة واحدة فقط عند الوصول للحد الأدنى
         if len(candles) < MIN_CANDLES_FOR_ANALYSIS:
-            self.logger.info(
-                f"[تحليل] ⚠️ {symbol} {timeframe}: "
-                f"{len(candles)}/{MIN_CANDLES_FOR_ANALYSIS} شمعة — تحليل أساسي فقط"
-            )
+            prev_warn = getattr(self, f'_last_warned_{symbol}_{timeframe}', -1)
+            if len(candles) != prev_warn:
+                setattr(self, f'_last_warned_{symbol}_{timeframe}', len(candles))
+                self.logger.info(
+                    f"[تحليل] ⚠️ {symbol} {timeframe}: "
+                    f"{len(candles)}/{MIN_CANDLES_FOR_ANALYSIS} شمعة — تحليل أساسي فقط"
+                )
 
         # استخراج البيانات كمصفوفات numpy — من هذا الإطار فقط
         closes = np.array([c["c"] for c in candles], dtype=np.float64)
