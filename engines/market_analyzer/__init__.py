@@ -266,6 +266,8 @@ class MarketAnalyzer(BaseEngine):
             breakout_state=breakout,
             noise_level=noise,
             confidence=confidence,
+            current_price=float(closes[-1]) if len(closes) > 0 else 0.0,
+            current_volume=float(volumes[-1]) if len(volumes) > 0 else 0.0,
         )
 
         # تخزين التحليل في الهيكل المستقل

@@ -518,7 +518,7 @@ async def main():
                             analysis = await market_analyzer.analyze(pos.symbol, "1m")
                             if not analysis:
                                 continue
-                            current_price = analysis.get("close", analysis.get("price", 0))
+                            current_price = getattr(analysis, 'current_price', 0)
                             if current_price <= 0:
                                 continue
 
@@ -616,8 +616,8 @@ async def main():
                         for tf in tfs:
                             try:
                                 analysis = await market_analyzer.analyze(coin.symbol, tf)
-                                if analysis:
-                                    price = analysis.get("close", analysis.get("price", 0))
+                                if analysis and getattr(analysis, 'current_price', 0) > 0:
+                                    price = analysis.current_price
                                     coin_prices[tf] = price
                                     analysis_ok += 1
                                     await strategy_engine.run_strategies(coin.symbol, tf, analysis)

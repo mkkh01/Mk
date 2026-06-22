@@ -65,6 +65,8 @@ class MarketAnalysis:
     breakout_state: str = "NONE"
     noise_level: float = 0.0
     confidence: float = 0.0
+    current_price: float = 0.0
+    current_volume: float = 0.0
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
