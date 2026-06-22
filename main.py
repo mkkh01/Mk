@@ -570,6 +570,44 @@ async def main():
                     analysis_ok = 0
                     analysis_miss = 0
 
+                    # ── تشخيص دورة البيانات (مرة كل 10 دورات) ──
+                    if cycle % 10 == 0:
+                        diag = []
+                        # 1. حالة WebSocket
+                        ws_alive = getattr(market_data_engine, '_ws', None) is not None
+                        sub_count = len(getattr(market_data_engine, '_symbols', set()))
+                        diag.append(f"🔌 WS={'متصل' if ws_alive else 'منفصل'} | رموز مشتركة: {sub_count}")
+
+                        # 2. الشموع في MarketAnalyzer (نفس الكائن؟)
+                        total_candles = sum(
+                            len(tf_dict) for tf_dict in market_analyzer._candles.values()
+                        )
+                        diag.append(f"🕯️ شموع المحلل: {total_candles} إطار")
+
+                        # 3. تفصيل الشموع لكل عملة×إطار
+                        for symbol in sorted(market_analyzer._candles.keys()):
+                            for tf in sorted(market_analyzer._candles[symbol].keys()):
+                                n = len(market_analyzer._candles[symbol][tf])
+                                status = "✅" if n >= 50 else f"⏳({n}/50)"
+                                diag.append(f"  {symbol} {tf}: {n} شمعة {status}")
+
+                        # 4. المهام النشطة
+                        active_tasks = len(asyncio.all_tasks())
+                        diag.append(f"📋 مهام asyncio: {active_tasks}")
+
+                        # 5. معرفات الكائنات (نفس النسخة؟)
+                        diag.append(
+                            f"🆔 محلل={id(market_analyzer)} | "
+                            f"بيانات={id(market_data_engine)} | "
+                            f"أحداث={id(event_bus)}"
+                        )
+
+                        # 6. الأسعار الحية
+                        live_count = len(getattr(market_data_engine, 'live_prices', {}))
+                        diag.append(f"💹 أسعار حية: {live_count} رمز")
+
+                        logger.info(f"[تشخيص #{cycle}]\n" + "\n".join(diag))
+
                     for coin in coins:
                         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
 

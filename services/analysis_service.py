@@ -58,12 +58,12 @@ class AnalysisService:
                         all_timeframes.add(str(tf))
 
                 self._active_symbols = set(symbols)
-                primary_timeframes: dict[str, str] = {}
+                primary_timeframes: dict[str, list] = {}
                 for coin in active_coins:
                     tfs = getattr(coin, 'timeframes', ["15m"])
                     if not tfs: tfs = ["15m"]
                     if isinstance(tfs, str): tfs = [tfs]
-                    primary_timeframes[coin.symbol] = str(tfs[0])
+                    primary_timeframes[coin.symbol] = tfs  # القائمة كاملة وليس tfs[0]
 
                 self.market_data.update_symbols(symbols, primary_timeframes)
                 self.analyzer.update_symbols(symbols)
