@@ -321,7 +321,7 @@ class Handlers:
                     symbol=symbol,
                     capital_allocated=capital,
                     risk_per_trade=risk,
-                    timeframe=tfs_str,
+                    timeframes=sorted(selected),  # قائمة الأطر المختارة
                 )
                 logger.info(
                     f"[محادثة] ✅ تم حفظ العملة: {symbol} tfs={tfs_str} "
