@@ -532,8 +532,8 @@ async def main():
 
             try:
                 trading_allowed = (
-                    health_monitor.is_trading_safe() and
-                    risk_service.is_trading_allowed()
+                    getattr(health_monitor, 'is_trading_safe', lambda: False)() and
+                    getattr(risk_service, 'is_trading_allowed', lambda: False)()
                 )
 
                 if not trading_allowed:
@@ -544,12 +544,22 @@ async def main():
                     await asyncio.sleep(30)
                     continue
 
-                async for session in get_session():
+                    # ── المرحلة 0: تهيئة آمنة لجميع المتغيرات ──
+                    open_positions: list = []
+                    coins: list = []
+                    price_lines: list = []
+                    coin_prices: dict = {}
+                    signals_found: int = 0
+                    analysis_ok: int = 0
+                    analysis_miss: int = 0
+
                     coins = await CoinRepository.get_all_active(session, telegram_id)
 
                     # ── مراقبة المراكز المفتوحة — فقط في LIVE ──
                     if _system_phase == SystemPhase.LIVE:
                         open_positions = await PositionRepository.get_open(session, telegram_id)
+                    # else: open_positions = [] (مضمون من التهيئة أعلاه)
+
                     for pos in open_positions:
                         try:
                             analysis = await market_analyzer.analyze(pos.symbol, "1m")
@@ -596,19 +606,12 @@ async def main():
                             logger.debug(f"[مركز] {pos.symbol} خطأ فحص TP/SL: {e}")
 
                     if not coins:
-                        if cycle % 10 == 0:  # كل 10 دورات فقط
+                        if cycle % 10 == 0:
                             logger.info(f"[دورة #{cycle}] لا عملات نشطة — انتظار")
                         await asyncio.sleep(1)
                         break
 
-                    # ── فحص الأسعار ──
-                    price_lines = []
-                    signals_found = 0
-                    analysis_ok = 0
-                    analysis_miss = 0
-                    live_tick_arrived = False
-
-                    # ── تتبع المرحلة: هل دخلنا LIVE؟ ──
+                    # ── المرحلة 1: فحص الأسعار ──
                     if _system_phase == SystemPhase.WARMUP:
                         ws_alive = getattr(market_data_engine, '_ws', None) is not None
                         if ws_alive:
@@ -678,11 +681,6 @@ async def main():
                             except Exception as e:
                                 analysis_miss += 1
                                 logger.debug(f"[{coin.symbol}] [{tf}] خطأ تحليل: {e}")
-
-                        # سطر سعر واحد لكل عملة
-                        if coin_prices:
-                            price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
-                            price_lines.append(f"  {coin.symbol:<10} {price_str}")
 
                         # سطر سعر واحد لكل عملة
                         if coin_prices:
