@@ -27,7 +27,7 @@ from config.constants import ANALYSIS_INTERVAL_SEC
 logger = logging.getLogger("market_analyzer")
 
 MAX_CANDLES_HISTORY = 300
-MIN_CANDLES_FOR_ANALYSIS = 50
+MIN_CANDLES_FOR_ANALYSIS = 20  # الحد الأدنى للتحليل الكامل (20 شمعة للتحليل الأساسي)
 
 
 class MarketAnalyzer(BaseEngine):
@@ -71,7 +71,7 @@ class MarketAnalyzer(BaseEngine):
                     try:
                         url = (
                             f"https://api.binance.com/api/v3/klines"
-                            f"?symbol={symbol}&interval={tf}&limit=100"
+                            f"?symbol={symbol}&interval={tf}&limit=200"
                         )
                         resp = await client.get(url)
                         if resp.status_code != 200:
@@ -167,21 +167,29 @@ class MarketAnalyzer(BaseEngine):
         bucket = self._candles[symbol][timeframe]
 
         if event.is_closed:
-            # تجنب التكرار
+            # شمعة مغلقة — أضفها أو حدّث الأخيرة إذا متطابقة
             if bucket and bucket[-1]["t"] == candle["t"]:
-                bucket[-1] = candle
-                return
-            bucket.append(candle)
+                bucket[-1] = candle  # تحديث الشمعة المغلقة
+            else:
+                bucket.append(candle)
             if len(bucket) > MAX_CANDLES_HISTORY:
                 bucket.pop(0)
+        else:
+            # شمعة مفتوحة — حدّث الأخيرة أو أضف جديد
+            if bucket and bucket[-1]["t"] == candle["t"]:
+                bucket[-1] = candle  # تحديث الشمعة الحية
+            elif not bucket or bucket[-1]["t"] != candle["t"]:
+                bucket.append(candle)  # شمعة جديدة (حية)
+                if len(bucket) > MAX_CANDLES_HISTORY:
+                    bucket.pop(0)
 
-            # تسجيل تشخيصي — كل 50 شمعة لكل إطار
-            count = len(bucket)
-            if count % 50 == 0 or count == 1:
-                self.logger.info(
-                    f"[محلل السوق] 📈 {symbol} {timeframe}: "
-                    f"{count} شمعة | آخر سعر={event.close:.6f}"
-                )
+        # تسجيل تشخيصي
+        count = len(bucket)
+        if count % 50 == 0 or count == 1:
+            self.logger.info(
+                f"[محلل السوق] 📈 {symbol} {timeframe}: "
+                f"{count} شمعة | آخر سعر={event.close:.6f}"
+            )
 
     # ═══════════════════════════════════════════════════════════
     # حلقة التحليل الدورية
@@ -229,12 +237,22 @@ class MarketAnalyzer(BaseEngine):
         """
         candles = self._candles.get(symbol, {}).get(timeframe, [])
 
-        if len(candles) < MIN_CANDLES_FOR_ANALYSIS:
+        # حد أدنى تكيفي: 20 شمعة كافية لتحليل أساسي، 50 للتحليل الكامل
+        adaptive_min = min(20, MIN_CANDLES_FOR_ANALYSIS)
+
+        if len(candles) < adaptive_min:
             self.logger.info(
                 f"[تحليل] ⏳ {symbol} {timeframe}: "
-                f"{len(candles)}/{MIN_CANDLES_FOR_ANALYSIS} شمعة — غير كافٍ للتحليل"
+                f"{len(candles)}/{adaptive_min} شمعة — غير كافٍ للتحليل"
             )
             return None
+
+        # تحذير إذا أقل من الحد الكامل
+        if len(candles) < MIN_CANDLES_FOR_ANALYSIS:
+            self.logger.info(
+                f"[تحليل] ⚠️ {symbol} {timeframe}: "
+                f"{len(candles)}/{MIN_CANDLES_FOR_ANALYSIS} شمعة — تحليل أساسي فقط"
+            )
 
         # استخراج البيانات كمصفوفات numpy — من هذا الإطار فقط
         closes = np.array([c["c"] for c in candles], dtype=np.float64)
