@@ -154,8 +154,13 @@ class ExecutionEngine(BaseEngine):
                     f"[تنفيذ] ✅ تم فتح الصفقة: {symbol}"
                 )
                 self.logger.info(
-                    f"[أمر] رقم الصفقة={trade.id[:8]} | المركز={position.id[:8]} | "
-                    f"الكمية={risk.position_size:.6f} | السعر={executed_price:.6f}"
+                    f"[EXECUTION] {symbol}: ✅ تنفيذ Simulation | "
+                    f"الأمر=#{order_id} | السعر={executed_price:.6f} | "
+                    f"الكمية={risk.position_size:.6f}"
+                )
+                self.logger.info(
+                    f"[DATABASE] {symbol}: ✅ صفقة #{trade.id[:8]} | مركز #{position.id[:8]} | "
+                    f"تبريد={getattr(trade, 'cooldown_minutes', '—')}"
                 )
 
         except Exception as e:

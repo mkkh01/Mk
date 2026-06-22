@@ -548,18 +548,36 @@ async def main():
 
                     # ── المرحلة 3: التحليل ──
                     for coin in state.coins:
+                        logger.info(
+                            f"[SCAN] 🔍 بدء فحص {coin.symbol} — "
+                            f"أطر: {coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]}"
+                        )
                         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
                         coin_prices = {}
+                        coin_had_analysis = False
 
                         for tf in tfs:
                             try:
                                 analysis = await market_analyzer.analyze(coin.symbol, tf)
                                 if analysis and getattr(analysis, 'current_price', 0) > 0:
+                                    logger.info(
+                                        f"[ANALYSIS] {coin.symbol} {tf}: ✅ "
+                                        f"نظام={analysis.regime} | اتجاه={analysis.trend_direction} | "
+                                        f"زخم={analysis.momentum:.0f} | تقلب={analysis.volatility:.0f} | "
+                                        f"سيولة={analysis.liquidity_score:.0f} | ثقة={analysis.confidence:.0f}"
+                                    )
                                     coin_prices[tf] = analysis.current_price
+                                    coin_had_analysis = True
                                     state.analysis_ok += 1
                                     await strategy_engine.run_strategies(coin.symbol, tf, analysis)
                                 else:
                                     state.analysis_miss += 1
+                                    reason = "لا تحليل" if not analysis else "سعر=0"
+                                    candle_count = len(market_analyzer._candles.get(coin.symbol, {}).get(tf, []))
+                                    logger.info(
+                                        f"[ANALYSIS] {coin.symbol} {tf}: ❌ {reason} | "
+                                        f"شموع={candle_count}/20"
+                                    )
                             except Exception as e:
                                 state.analysis_miss += 1
                                 logger.debug(f"[{coin.symbol}] [{tf}] خطأ: {e}")
@@ -577,29 +595,39 @@ async def main():
                                     state.signals_found += 1
                                     if execution:
                                         logger.info(
-                                            f"[صفقة #{state.signals_found}] {coin.symbol} | "
+                                            f"[EXECUTION] {coin.symbol}: ✅ تم إرسال الأمر للتنفيذ | "
                                             f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
                                             f"كمية: {execution.executed_quantity:.6f} | "
                                             f"سعر: {execution.executed_price:.6f}"
                                         )
+                                        logger.info(
+                                            f"[DATABASE] {coin.symbol}: ✅ تم حفظ الصفقة"
+                                        )
                                         tp = getattr(execution, 'take_profit', None)
                                         sl = getattr(execution, 'stop_loss', None)
-                                        await notify_tg(
-                                            f"🔔 **صفقة جديدة**\n━━━━━━━━━━━━━━\n"
-                                            f"💰 {coin.symbol}\n📊 {evidence.decision}\n"
-                                            f"💵 السعر: {execution.executed_price:.6f}\n"
-                                            f"📦 الكمية: {execution.executed_quantity:.4f}\n"
-                                            f"🎯 هدف: {tp:.6f if tp else '—'}\n"
-                                            f"🛑 وقف: {sl:.6f if sl else '—'}\n"
-                                            f"✅ ثقة: {evidence.final_score:.0f}%\n"
-                                            f"🧠 {evidence.reasoning[:100]}"
-                                        )
+                                        try:
+                                            await notify_tg(
+                                                f"🔔 **صفقة جديدة**\n━━━━━━━━━━━━━━\n"
+                                                f"💰 {coin.symbol}\n📊 {evidence.decision}\n"
+                                                f"💵 السعر: {execution.executed_price:.6f}\n"
+                                                f"📦 الكمية: {execution.executed_quantity:.4f}\n"
+                                                f"🎯 هدف: {tp:.6f if tp else '—'}\n"
+                                                f"🛑 وقف: {sl:.6f if sl else '—'}\n"
+                                                f"✅ ثقة: {evidence.final_score:.0f}%\n"
+                                                f"🧠 {evidence.reasoning[:100]}"
+                                            )
+                                            logger.info(f"[TELEGRAM] {coin.symbol}: ✅ تم إرسال رسالة تيليجرام")
+                                        except Exception as e:
+                                            logger.error(f"[TELEGRAM] {coin.symbol}: ❌ خطأ في إرسال رسالة تيليجرام: {e}")
                                     else:
                                         logger.info(
-                                            f"[إشارة #{state.signals_found}] {coin.symbol} | "
+                                            f"[SIGNAL] {coin.symbol}: ❌ مرفوضة — "
                                             f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
-                                            f"مرفوضة: {evidence.reasoning[:60]}"
+                                            f"السبب: {evidence.reasoning[:80]}"
                                         )
+                                else:
+                                    # process_symbol returned None — no signals generated
+                                    pass  # already logged inside process_symbol
                             except Exception as e:
                                 logger.debug(f"[{coin.symbol}] خطأ تداول: {e}")
 

@@ -60,7 +60,7 @@ class TradingService:
         all_analyses: dict[str, MarketAnalysis] = self.analysis_service.get_all_analyses(symbol)
 
         if not all_analyses:
-            logger.debug(f"[{symbol}] ⏭️ لا توجد تحليلات متاحة — تخطي المعالجة")
+            logger.info(f"[SCAN] {symbol}: ⏭️ لا تحليلات — تخطي")
             return None
 
         for timeframe, analysis in all_analyses.items():
@@ -84,7 +84,10 @@ class TradingService:
                 )
 
         if not all_signals:
-            logger.debug(f"[{symbol}] ⏸️ لا توجد إشارات من أي إطار زمني")
+            logger.info(
+                f"[SIGNAL] {symbol}: ❌ لا إشارات من أي إطار — "
+                f"السبب: الاستراتيجيات لم تُنتج إشارات (strategy returned None)"
+            )
             return None
 
         # b+c. تجميع الإشارات وتقييم الأدلة
@@ -111,15 +114,41 @@ class TradingService:
         self._signals_processed += 1
 
         if evidence.decision in ("HOLD", "IGNORE"):
-            reason = evidence.reasoning[:80] if evidence.reasoning else "قرار الأدلة"
+            reason = evidence.reasoning[:120] if evidence.reasoning else "قرار الأدلة"
             self._signals_rejected += 1
             self._rejection_reasons[reason] = self._rejection_reasons.get(reason, 0) + 1
             conflict_info = ""
             if evidence.conflicts:
                 conflict_info = f" | تعارضات: {len(evidence.conflicts)}"
+
+            # تصنيف سبب الرفض
+            reject_type = "قرار الأدلة"
+            if evidence.conflicts:
+                c0 = evidence.conflicts[0]
+                if "اتجاه" in c0:
+                    reject_type = "trend filter"
+                elif "زخم" in c0 or "تباعد" in c0:
+                    reject_type = "momentum filter"
+                elif "تذبذب" in c0 or "RANGING" in c0:
+                    reject_type = "regime blocked"
+                elif "تقلب" in c0:
+                    reject_type = "volatility filter"
+                elif "سيولة" in c0:
+                    reject_type = "liquidity filter"
+                elif "تعارض" in c0:
+                    reject_type = "duplicate signal"
+                elif "كسر" in c0:
+                    reject_type = "structure broken"
+            elif evidence.final_score < 40:
+                reject_type = "confidence too low"
+
             logger.info(
-                f"[{symbol}] ⛔ تم رفض الصفقة: {evidence.decision} "
-                f"({evidence.final_score:.0f}/100){conflict_info}"
+                f"[SIGNAL] {symbol}: ❌ مرفوضة — {evidence.decision} | "
+                f"نوع الرفض: {reject_type} | "
+                f"ثقة={evidence.final_score:.0f}/100{conflict_info}"
+            )
+            logger.info(
+                f"[SIGNAL] {symbol}: 📋 السبب: {reason}"
             )
             return (evidence, None, None)
 
@@ -170,8 +199,10 @@ class TradingService:
             self._signals_rejected += 1
             self._rejection_reasons[reason] = self._rejection_reasons.get(reason, 0) + 1
             logger.info(
-                f"[{symbol}] ⛔ تم رفض الصفقة: {reason} "
-                f"(مستوى الخطر: {risk_decision.risk_level})"
+                f"[RISK] {symbol}: ❌ رفض — {reason} | "
+                f"مستوى الخطر: {risk_decision.risk_level} | "
+                f"حجم المركز: {risk_decision.position_size:.6f} | "
+                f"الخسارة القصوى: {risk_decision.max_loss:.2f}"
             )
             return (evidence, risk_decision, None)
 
