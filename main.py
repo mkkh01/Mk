@@ -796,6 +796,10 @@ async def main():
                         f"[تأكيد] TRADING_ACTIVE لكن trading_allowed=False! دورة #{cycle}"
                     )
 
+                # 🛡️ سجل حيوية — يؤكد أن الحلقة لم تمت
+                ws_status = "متصل" if state.ws_connected else "منفصل"
+                logger.info(f"[دورة #{cycle}] بداية — {state.phase} | WS={ws_status} | ticks={state.ws_tick_count}")
+
                 # ── المرحلة 1: فحص السماح بالتداول ──
                 trading_allowed = (
                     getattr(health_monitor, 'is_trading_safe', lambda: True)() and
@@ -811,9 +815,7 @@ async def main():
                 if cycle == 1 or cycle % 10 == 0 or not state.coins:
                     async for session in get_session():
                         state.coins = await CoinRepository.get_all_active(session, telegram_id)
-                else:
-                    async for session in get_session():
-                        pass  # جلسة فارغة — نحافظ على الاتصال بدون استعلامات ثقيلة
+                # لا جلسة فارغة — توفر اتصالات Supabase
 
                 # مراقبة المراكز — فقط في TRADING_ACTIVE
                 if state.trading_allowed and cycle % 5 == 0:
