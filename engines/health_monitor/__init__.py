@@ -88,7 +88,7 @@ class HealthMonitor(BaseEngine):
         # إعدادات
         self._check_interval = HEARTBEAT_INTERVAL_SEC
         self._heartbeat_timeout = 120  # ثواني قبل اعتبار المحرك فاشلاً (ضعف مدة النبض 60s)
-        self._warning_timeout = 10    # ثواني قبل اعتبار المحرك في تحذير
+        self._warning_timeout = 65   # ثواني قبل تحذير (أطول قليلاً من مدة النبض 60s)
         self._max_alerts = 100
         # عداد الأخطاء لكل خدمة
         self._error_counts: dict[str, int] = {}
