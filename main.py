@@ -6,6 +6,7 @@ import asyncio
 import logging
 import sys
 import os
+import time
 import traceback
 from datetime import datetime, timezone
 
@@ -25,6 +26,12 @@ logger = logging.getLogger("main")
 # ── Core ────────────────────────────────────────────────────
 from core.events import EventBus
 from core.trading_kernel import TradingKernel
+from core.reason_codes import ReasonCode, Rejection
+from core.decision_trace import (
+    DecisionTrace, get_counters, update_counters,
+    format_5min_report, format_hourly_report,
+)
+from core.tracing import TraceBuilder, timer
 
 # ── Config ──────────────────────────────────────────────────
 from config.settings import get_settings
@@ -822,135 +829,177 @@ async def main():
                         await asyncio.sleep(1)
                         break
 
-                    # ── المرحلة 3: التحليل ──
+                    # ── المرحلة 3: التحليل (مع تتبع كامل) ──
+                    cycle_start_time = time.time()
+                    
                     for coin in state.coins:
-                        # STEP 1
-                        logger.info(
-                            f"[STEP 1] {coin.symbol}: بدء المسار — "
-                            f"أطر: {coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]} | "
-                            f"مرحلة={state.phase} | مسموح_بالتداول={state.trading_allowed}"
-                        )
+                        symbol = coin.symbol
                         tfs = coin.timeframes if isinstance(coin.timeframes, list) else [coin.timeframes]
                         coin_prices = {}
                         coin_had_analysis = False
+                        
+                        # ── إنشاء DecisionTrace لهذه العملة ──
+                        trace_builder = TraceBuilder(
+                            cycle=cycle, symbol=symbol, state=state,
+                            market_analyzer=market_analyzer, strategy_engine=strategy_engine,
+                            evidence_engine=evidence_engine, risk_engine=risk_engine,
+                            execution_engine=execution_engine,
+                        )
+                        trace_builder.capture_system_state()
+                        trace_builder.mark_time("Start")
 
-                        # STEP 2
-                        logger.info(f"[STEP 2] {coin.symbol}: استدعاء المحلل لكل إطار...")
+                        # STEP 1-2: التحليل
+                        logger.info(
+                            f"[STEP 1] {symbol}: بدء المسار — "
+                            f"أطر: {tfs} | مرحلة={state.phase} | مسموح_بالتداول={state.trading_allowed}"
+                        )
+                        primary_analysis = None
+                        
                         for tf in tfs:
                             try:
-                                analysis = await market_analyzer.analyze(coin.symbol, tf)
-                                # STEP 3
+                                with timer() as t:
+                                    analysis = await market_analyzer.analyze(symbol, tf)
+                                trace_builder.mark_time(f"Analyzer:{tf}")
+                                
                                 if analysis and getattr(analysis, 'current_price', 0) > 0:
-                                    logger.info(
-                                        f"[STEP 3] {coin.symbol} {tf}: ✅ محلل أرجع تحليل — "
-                                        f"نظام={analysis.regime} | اتجاه={analysis.trend_direction} | "
-                                        f"زخم={analysis.momentum:.0f} | تقلب={analysis.volatility:.0f} | "
-                                        f"سيولة={analysis.liquidity_score:.0f} | ثقة={analysis.confidence:.0f}"
-                                    )
                                     coin_prices[tf] = analysis.current_price
                                     coin_had_analysis = True
+                                    if primary_analysis is None:
+                                        primary_analysis = analysis
+                                        trace_builder.capture_market(analysis)
                                     state.analysis_ok += 1
-
-                                    # STEP 4
                                     logger.info(
-                                        f"[STEP 4] {coin.symbol} {tf}: استدعاء محرك الاستراتيجيات..."
+                                        f"[STEP 3] {symbol} {tf}: ✅ تحليل — "
+                                        f"نظام={analysis.regime} | اتجاه={analysis.trend_direction} | "
+                                        f"زخم={analysis.momentum:.0f} | تقلب={analysis.volatility:.0f} | "
+                                        f"سيولة={analysis.liquidity_score:.0f} | ثقة={analysis.confidence:.0f} | "
+                                        f"زمن={t.elapsed_ms:.0f}ms"
                                     )
-                                    await strategy_engine.run_strategies(coin.symbol, tf, analysis)
+
+                                    # STEP 4-5: الاستراتيجيات
+                                    with timer() as t:
+                                        await strategy_engine.run_strategies(symbol, tf, analysis)
+                                    trace_builder.mark_time(f"Strategies:{tf}")
                                     logger.info(
-                                        f"[STEP 5] {coin.symbol} {tf}: محرك الاستراتيجيات انتهى"
+                                        f"[STEP 5] {symbol} {tf}: استراتيجيات — زمن={t.elapsed_ms:.0f}ms"
                                     )
                                 else:
                                     state.analysis_miss += 1
                                     reason = "لا تحليل" if not analysis else "سعر=0"
-                                    candle_count = len(market_analyzer._candles.get(coin.symbol, {}).get(tf, []))
+                                    candle_count = len(market_analyzer._candles.get(symbol, {}).get(tf, []))
                                     logger.info(
-                                        f"[STEP 3-EARLY_EXIT] {coin.symbol} {tf}: ❌ {reason} | "
-                                        f"شموع={candle_count}/20 | سيتابع للإطار التالي"
+                                        f"[STEP 3-EARLY_EXIT] {symbol} {tf}: ❌ {reason} | "
+                                        f"شموع={candle_count}/20"
                                     )
                             except Exception as e:
                                 state.analysis_miss += 1
-                                logger.info(f"[STEP 3-ERROR] {coin.symbol} {tf}: استثناء={e}")
+                                logger.info(f"[STEP 3-ERROR] {symbol} {tf}: استثناء={e}")
 
-                        # STEP 6
+                        # STEP 6 — لا تحليلات
                         if not coin_had_analysis:
+                            final_rejection = reject("Analyzer", "Candles", ReasonCode.RC001_NO_CANDLES,
+                                                     details=f"لا شموع كافية لأي إطار زمني")
+                            trace_builder.trace.final_rejection = final_rejection
+                            trace_builder.finalize(executed=False)
                             logger.info(
-                                f"[STEP 6-EARLY_EXIT] {coin.symbol}: ❌ لا تحليلات ناجحة "
-                                f"من أي إطار — تخطي التداول لهذه العملة (continue)"
+                                f"[CYCLE #{cycle}] {symbol} ❌ REJECTED [{ReasonCode.RC001_NO_CANDLES.value}] "
+                                f"لا شموع كافية (Analyzer/Candles)"
                             )
-                        else:
-                            if coin_prices:
-                                price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
-                                state.price_lines.append(f"  {coin.symbol:<10} {price_str}")
+                            update_counters(trace_builder.trace)
+                            continue
 
-                            # STEP 7
-                            if not state.trading_allowed:
+                        # عرض الأسعار
+                        if coin_prices:
+                            price_str = " | ".join(f"{tf}: {p:.4f}" for tf, p in sorted(coin_prices.items()))
+                            state.price_lines.append(f"  {symbol:<10} {price_str}")
+
+                        # STEP 7 — التداول غير مسموح
+                        if not state.trading_allowed:
+                            final_rejection = reject("System", "State", ReasonCode.RC014_SYSTEM_NOT_READY,
+                                                     current=state.phase, required="TRADING_ACTIVE or READY_TO_TRADE")
+                            trace_builder.trace.final_rejection = final_rejection
+                            trace_builder.finalize(executed=False)
+                            logger.info(
+                                f"[CYCLE #{cycle}] {symbol} ❌ REJECTED [{ReasonCode.RC014_SYSTEM_NOT_READY.value}] "
+                                f"نظام غير جاهز (System/State: {state.phase})"
+                            )
+                            update_counters(trace_builder.trace)
+                            continue
+
+                        # STEP 8 — معالجة التداول
+                        with timer() as t:
+                            result = await trading_service.process_symbol(symbol, telegram_id)
+                        trace_builder.mark_time("Trading Service")
+
+                        # STEP 9
+                        if result:
+                            evidence, risk_decision, execution = result
+                            state.signals_found += 1
+                            
+                            # تجميع التتبع
+                            # signals from strategy engine last call
+                            all_signals = getattr(strategy_engine, '_last_signals', {})
+                            symbol_signals = all_signals.get(symbol, [])
+                            trace_builder.capture_strategies(symbol_signals)
+                            trace_builder.capture_evidence(evidence)
+                            trace_builder.capture_risk(risk_decision)
+                            trace_builder.capture_execution(execution)
+
+                            if execution:
+                                # صفقة منفذة
                                 logger.info(
-                                    f"[STEP 7-EARLY_EXIT] {coin.symbol}: ❌ التداول غير مسموح — "
-                                    f"السبب: المرحلة={state.phase} (يحتاج RUNNING) | "
-                                    f"الشرط: state.trading_allowed=False"
+                                    f"[EXECUTION] {symbol}: ✅ تم إرسال الأمر للتنفيذ | "
+                                    f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                    f"كمية: {execution.executed_quantity:.6f} | "
+                                    f"سعر: {execution.executed_price:.6f}"
                                 )
-                            else:
-                                # STEP 8
-                                logger.info(
-                                    f"[STEP 8] {coin.symbol}: استدعاء trading_service.process_symbol()..."
-                                )
+                                if state.phase == TradingState.READY_TO_TRADE:
+                                    state.transition(TradingState.TRADING_ACTIVE)
+                                
+                                tp = getattr(execution, 'take_profit', None)
+                                sl = getattr(execution, 'stop_loss', None)
                                 try:
-                                    result = await trading_service.process_symbol(coin.symbol, telegram_id)
-                                    # STEP 9
-                                    if result:
-                                        evidence, risk_decision, execution = result
-                                        state.signals_found += 1
-                                        logger.info(
-                                            f"[STEP 9] {coin.symbol}: ✅ trading_service أرجع نتيجة — "
-                                            f"قرار={evidence.decision} | نفذ={'نعم' if execution else 'لا'}"
-                                        )
-                                        if execution:
-                                            logger.info(
-                                                f"[EXECUTION] {coin.symbol}: ✅ تم إرسال الأمر للتنفيذ | "
-                                                f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
-                                                f"كمية: {execution.executed_quantity:.6f} | "
-                                                f"سعر: {execution.executed_price:.6f}"
-                                            )
-                                            logger.info(
-                                                f"[DATABASE] {coin.symbol}: ✅ تم حفظ الصفقة"
-                                            )
-                                            # الانتقال: READY_TO_TRADE → TRADING_ACTIVE (أول صفقة)
-                                            if state.phase == TradingState.READY_TO_TRADE:
-                                                state.transition(TradingState.TRADING_ACTIVE)
-                                            tp = getattr(execution, 'take_profit', None)
-                                            sl = getattr(execution, 'stop_loss', None)
-                                            try:
-                                                await notify_tg(
-                                                    f"🔔 **صفقة جديدة**\n━━━━━━━━━━━━━━\n"
-                                                    f"💰 {coin.symbol}\n📊 {evidence.decision}\n"
-                                                    f"💵 السعر: {execution.executed_price:.6f}\n"
-                                                    f"📦 الكمية: {execution.executed_quantity:.4f}\n"
-                                                    f"🎯 هدف: {tp:.6f if tp else '—'}\n"
-                                                    f"🛑 وقف: {sl:.6f if sl else '—'}\n"
-                                                    f"✅ ثقة: {evidence.final_score:.0f}%\n"
-                                                    f"🧠 {evidence.reasoning[:100]}"
-                                                )
-                                                logger.info(f"[TELEGRAM] {coin.symbol}: ✅ تم إرسال رسالة تيليجرام")
-                                            except Exception as e:
-                                                logger.error(f"[TELEGRAM] {coin.symbol}: ❌ خطأ في إرسال رسالة تيليجرام: {e}")
-                                        else:
-                                            logger.info(
-                                                f"[SIGNAL] {coin.symbol}: ❌ مرفوضة — "
-                                                f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
-                                                f"السبب: {evidence.reasoning[:80]}"
-                                            )
-                                    else:
-                                        # STEP 9-EARLY_EXIT
-                                        logger.info(
-                                            f"[STEP 9-EARLY_EXIT] {coin.symbol}: ❌ trading_service "
-                                            f"أرجع None — لا إشارات (انظر سجلات trading_service للتفاصيل)"
-                                        )
+                                    await notify_tg(
+                                        f"🔔 **صفقة جديدة**\n━━━━━━━━━━━━━━\n"
+                                        f"💰 {symbol}\n📊 {evidence.decision}\n"
+                                        f"💵 السعر: {execution.executed_price:.6f}\n"
+                                        f"📦 الكمية: {execution.executed_quantity:.4f}\n"
+                                        f"🎯 هدف: {tp:.6f if tp else '—'}\n"
+                                        f"🛑 وقف: {sl:.6f if sl else '—'}\n"
+                                        f"✅ ثقة: {evidence.final_score:.0f}%\n"
+                                        f"🧠 {evidence.reasoning[:100]}"
+                                    )
                                 except Exception as e:
-                                    logger.info(f"[STEP 9-ERROR] {coin.symbol}: استثناء={e}")
+                                    logger.error(f"[TELEGRAM] {symbol}: ❌ خطأ: {e}")
+                                trace_builder.mark_time("Telegram")
+                                
+                                trace_builder.finalize(executed=True)
+                                # طباعة ملخص مختصر (سطر واحد)
+                                logger.info(trace_builder.trace.format_one_line())
+                            else:
+                                # إشارة مرفوضة
+                                trace_builder.finalize(executed=False)
+                                logger.info(trace_builder.trace.format_one_line())
+                                
+                                reason = getattr(evidence, 'reasoning', '')
+                                logger.info(
+                                    f"[SIGNAL] {symbol}: ❌ مرفوضة — "
+                                    f"{evidence.decision} | ثقة: {evidence.final_score:.0f}% | "
+                                    f"السبب: {reason[:80]}"
+                                )
+                        else:
+                            # لا نتيجة من trading_service
+                            trace_builder.finalize(executed=False)
+                            logger.info(trace_builder.trace.format_one_line())
+                            logger.info(
+                                f"[STEP 9-EARLY_EXIT] {symbol}: ❌ trading_service أرجع None"
+                            )
 
-                        await asyncio.sleep(0.5)
+                        # حفظ التتبع الكامل في debug
+                        logger.debug(trace_builder.trace.format_full())
+                        update_counters(trace_builder.trace)
 
-                    # ── المرحلة 5: تشخيص (كل 10 دورات) ──
+                    # ── تقارير دورية ──
                     if cycle % 10 == 0:
                         diag = []
                         diag.append(f"🔌 WS={'متصل' if state.ws_connected else 'منفصل'} | ticks={state.ws_tick_count}")
@@ -979,6 +1028,16 @@ async def main():
                     logger.info(summary)
                     if state.price_lines:
                         logger.info(f"[أسعار #{cycle}]\n" + "\n".join(state.price_lines))
+
+                    # ── تقارير دورية ──
+                    # تقرير كل 5 دقائق (~10 دورات)
+                    if cycle % 10 == 0 and cycle > 0:
+                        logger.info(format_5min_report())
+                        reset_counters()
+
+                    # تقرير كل ساعة (~120 دورة)
+                    if cycle % 120 == 0 and cycle > 0:
+                        logger.info(format_hourly_report())
 
             except Exception as e:
                 logger.error(f"[دورة #{cycle}] ❌ خطأ: {e}", exc_info=True)
