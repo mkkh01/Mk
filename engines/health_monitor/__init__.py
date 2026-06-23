@@ -92,6 +92,8 @@ class HealthMonitor(BaseEngine):
         self._max_alerts = 100
         # عداد الأخطاء لكل خدمة
         self._error_counts: dict[str, int] = {}
+        # كبت التنبيهات أثناء الإقلاع
+        self._alert_suppressor: callable = lambda: False
 
     # ═════════════════════════════════════════════════════════
     #  دورة الحياة
@@ -239,6 +241,11 @@ class HealthMonitor(BaseEngine):
         تقييم الحالة العامة للنظام.
         القاعدة: لا نعلن "متدهورة" إلا بوجود فشل حقيقي في الخدمات.
         """
+        # كبت التنبيهات أثناء الإقلاع
+        if self._alert_suppressor():
+            self.system_state = SystemHealth.صحيحة
+            return
+
         service_states = [
             s.get("status", ServiceStatus.صحيحة)
             for s in self._service_statuses.values()

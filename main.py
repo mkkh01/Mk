@@ -109,9 +109,13 @@ class TradingState:
     WARMING_UP = "WARMING_UP"
     READY_TO_TRADE = "READY_TO_TRADE"      # جاهز لكن لم ينفذ بعد
     TRADING_ACTIVE = "TRADING_ACTIVE"      # تداول نشط
+    RUNNING = "TRADING_ACTIVE"             # توافق مع المراجع القديمة
     DEGRADED = "DEGRADED"                  # منحط — لا تداول
     BLOCKED = "BLOCKED"                     # إيقاف صارم
     ERROR = "ERROR"
+
+    # مراحل الإقلاع — لا تصدر إنذارات صحية خلالها
+    BOOT_STATES: set[str] = {"INIT", "CONNECTING_WS", "LOADING_HISTORY", "WARMING_UP"}
 
     # الانتقالات المسموحة
     _VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -137,6 +141,7 @@ class TradingState:
         self._transition_count: int = 0
         self._entered_phases: set[str] = {self.INIT}  # مراحل دُخلت فعلاً
         self._exited_phases: set[str] = set()          # مراحل خرج منها
+        self._lock = asyncio.Lock()                     # حماية الانتقالات
 
         # التداول
         self.open_positions: list = []
@@ -305,6 +310,28 @@ class TradingState:
         """تسجيل tick وارد — لا يُعاد تصفيره إلا في INIT."""
         self.ws_tick_count += 1
         self.ws_last_seen_at = _utcnow().timestamp()
+
+    # ═══════════════════════════════════════════════════════
+    #  Boot Barrier + Safe Transition
+    # ═══════════════════════════════════════════════════════
+
+    async def safe_transition(self, new_phase: str) -> None:
+        """انتقال آمن — محمي بـ asyncio.Lock."""
+        async with self._lock:
+            self.transition(new_phase)
+
+    def can_enter_trading(self, rest_candles: int, ws_connected: bool,
+                           buffer_validated: bool) -> bool:
+        """حاجز الإقلاع — لا تداول قبل تحقق كل الشروط."""
+        return (
+            rest_candles >= self.MIN_CANDLES and
+            ws_connected is True and
+            buffer_validated is True
+        )
+
+    def is_boot_state(self) -> bool:
+        """هل النظام في مرحلة إقلاع؟"""
+        return self.phase in self.BOOT_STATES
 
     @property
     def ws_is_stable(self) -> bool:
@@ -625,6 +652,7 @@ async def main():
     reporting_engine = ReportingEngine(event_bus)
     await reporting_engine.initialize(); await reporting_engine.start()
     health_monitor = HealthMonitor(event_bus)
+    health_monitor._alert_suppressor = state.is_boot_state  # كبت أثناء الإقلاع
     await health_monitor.initialize(); await health_monitor.start()
     logger.info("[النظام] ✅ جميع المحركات الـ 14 بدأت")
 
