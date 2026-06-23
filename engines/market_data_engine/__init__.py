@@ -232,14 +232,19 @@ class MarketDataEngine(BaseEngine):
             timestamp=candle_ts,
         ))
 
-        # تسجيل تشخيصي — مرة كل 10 شموع
+        # تسجيل تشخيصي — مرة كل شمعة مغلقة + كل 50 رسالة
         if not hasattr(self, '_kline_count'):
             self._kline_count = 0
         self._kline_count += 1
-        if self._kline_count % 10 == 0:
+        if self._kline_count % 50 == 0:
             self.logger.info(
-                f"[بيانات السوق] 📊 شمعة #{self._kline_count}: "
+                f"[بيانات السوق] 📊 رسالة kline #{self._kline_count}: "
                 f"{symbol} {interval} س={close_p:.6f} | مغلقة={'نعم' if is_closed else 'لا'}"
+            )
+        elif is_closed:
+            self.logger.info(
+                f"[بيانات السوق] 📊 شمعة مغلقة: {symbol} {interval} "
+                f"س={close_p:.6f} | إجمالي الرسائل={self._kline_count}"
             )
 
         # تخزين الشمعة المكتملة فقط في الهيكل

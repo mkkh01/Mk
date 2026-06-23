@@ -172,53 +172,76 @@ class MarketAnalyzer(BaseEngine):
 
     async def _on_candle_update(self, event: CandleUpdateEvent):
         """استقبال حدث الشمعة وتخزينها في الإطار الزمني الصحيح — بدون تلويث."""
-        symbol = event.symbol
-        timeframe = event.timeframe
+        try:
+            symbol = event.symbol
+            timeframe = event.timeframe
+            _ts = event.timestamp.timestamp() * 1000 if event.timestamp else 0
 
-        # إنشاء الحاويات إذا لزم الأمر
-        if symbol not in self._candles:
-            self._candles[symbol] = {}
-        if timeframe not in self._candles[symbol]:
-            self._candles[symbol][timeframe] = []
+            # إنشاء الحاويات إذا لزم الأمر
+            if symbol not in self._candles:
+                self._candles[symbol] = {}
+            if timeframe not in self._candles[symbol]:
+                self._candles[symbol][timeframe] = []
 
-        candle = {
-            "t": event.timestamp.timestamp() * 1000,
-            "o": event.open,
-            "h": event.high,
-            "l": event.low,
-            "c": event.close,
-            "v": event.volume,
-        }
+            candle = {
+                "t": _ts,
+                "o": event.open,
+                "h": event.high,
+                "l": event.low,
+                "c": event.close,
+                "v": event.volume,
+            }
 
-        bucket = self._candles[symbol][timeframe]
+            bucket = self._candles[symbol][timeframe]
+            prev_count = len(bucket)
 
-        if event.is_closed:
-            # شمعة مغلقة — أضفها أو حدّث الأخيرة إذا متطابقة
-            if bucket and bucket[-1]["t"] == candle["t"]:
-                bucket[-1] = candle  # تحديث الشمعة المغلقة
-            else:
-                bucket.append(candle)
-            if len(bucket) > MAX_CANDLES_HISTORY:
-                bucket.pop(0)
-        else:
-            # شمعة مفتوحة — حدّث الأخيرة أو أضف جديد
-            if bucket and bucket[-1]["t"] == candle["t"]:
-                bucket[-1] = candle  # تحديث الشمعة الحية
-            elif not bucket or bucket[-1]["t"] != candle["t"]:
-                bucket.append(candle)  # شمعة جديدة (حية)
+            if event.is_closed:
+                # شمعة مغلقة — أضفها أو حدّث الأخيرة إذا متطابقة
+                if bucket and abs(bucket[-1]["t"] - candle["t"]) < 100:
+                    bucket[-1] = candle  # تحديث الشمعة المغلقة
+                else:
+                    bucket.append(candle)
+                    self.logger.info(
+                        f"[🕯️ شمعة] ✅ مغلقة {symbol} {timeframe}: "
+                        f"فتح={candle['o']:.6f} إغلاق={candle['c']:.6f} | "
+                        f"مخزن={len(bucket)} (+1)"
+                    )
                 if len(bucket) > MAX_CANDLES_HISTORY:
                     bucket.pop(0)
+            else:
+                # شمعة مفتوحة — حدّث الأخيرة أو أضف جديد
+                if bucket and abs(bucket[-1]["t"] - candle["t"]) < 100:
+                    bucket[-1] = candle  # تحديث الشمعة الحية
+                elif not bucket or abs(bucket[-1]["t"] - candle["t"]) >= 100:
+                    bucket.append(candle)  # شمعة جديدة (حية)
+                    self.logger.info(
+                        f"[🕯️ شمعة] 🟡 مفتوحة {symbol} {timeframe}: "
+                        f"فتح={candle['o']:.6f} | مخزن={len(bucket)} (+1)"
+                    )
+                    if len(bucket) > MAX_CANDLES_HISTORY:
+                        bucket.pop(0)
 
-        # تسجيل — يظهر أن النظام حي (كل 30 ثانية لكل إطار)
-        count = len(bucket)
-        now = datetime.utcnow().timestamp()
-        last_key = f'_last_status_{symbol}_{timeframe}'
-        last_time = getattr(self, last_key, 0)
-        if now - last_time >= 30:
-            setattr(self, last_key, now)
-            status = "✅" if count >= MIN_CANDLES_FOR_ANALYSIS else f"⏳({count}/{MIN_CANDLES_FOR_ANALYSIS})"
-            self.logger.info(
-                f"[مراقب] {symbol} {timeframe}: {count} شمعة {status} | آخر={event.close:.6f}"
+            # أول شمعة لهذا الإطار
+            if prev_count == 0 and len(bucket) > 0:
+                self.logger.info(
+                    f"[🕯️ أول_شمعة] {symbol} {timeframe}: بدأ تجميع الشموع من WebSocket"
+                )
+
+            # تسجيل — يظهر أن النظام حي (كل 30 ثانية لكل إطار)
+            count = len(bucket)
+            now = datetime.utcnow().timestamp()
+            last_key = f'_last_status_{symbol}_{timeframe}'
+            last_time = getattr(self, last_key, 0)
+            if now - last_time >= 30:
+                setattr(self, last_key, now)
+                status = "✅" if count >= MIN_CANDLES_FOR_ANALYSIS else f"⏳({count}/{MIN_CANDLES_FOR_ANALYSIS})"
+                self.logger.info(
+                    f"[مراقب] {symbol} {timeframe}: {count} شمعة {status} | آخر={event.close:.6f}"
+                )
+        except Exception:
+            self.logger.error(
+                f"[مراقب] ❌ استثناء في _on_candle_update: "
+                f"{event.symbol} {event.timeframe}", exc_info=True
             )
 
     # ═══════════════════════════════════════════════════════════

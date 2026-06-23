@@ -25,12 +25,15 @@ class EventBus:
     async def publish(self, event):
         event_type = event.__class__.__name__
         callbacks = self._subscribers.get(event_type, [])
+        if not callbacks and event_type != "HealthEvent":
+            # صامت عن HealthEvents، سجل غياب المستمعين للباقي
+            logger.debug(f"[EventBus] ⚠️ لا مستمعين للحدث: {event_type}")
         results = []
         for cb in callbacks:
             try:
                 results.append(await cb(event))
             except Exception as e:
-                logger.error(f"Event handler error for {event_type}: {e}", exc_info=True)
+                logger.error(f"[EventBus] ❌ {event_type} → {cb.__qualname__ if hasattr(cb, '__qualname__') else cb}: {e}", exc_info=True)
         return results
 
 # ── Base Event ─────────────────────────────────────────────
