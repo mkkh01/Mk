@@ -142,6 +142,35 @@ class MarketAnalyzer(BaseEngine):
                     )
                     await asyncio.sleep(0.1)
 
+        # ── خطة بديلة: Supabase cache ──
+        if loaded < total_expected:
+            self.logger.info(
+                f"[تسخين] 🔄 تحميل {total_expected - loaded} إطار من Supabase cache..."
+            )
+            try:
+                from database.repositories import CandleCacheRepository, get_session
+                for symbol in symbols:
+                    for tf in sorted(timeframes):
+                        if symbol in self._candles and tf in self._candles.get(symbol, {}):
+                            continue
+                        async for session in get_session():
+                            candles = await CandleCacheRepository.get_candles(session, symbol, tf, 200)
+                            if candles and len(candles) >= 10:
+                                if symbol not in self._candles:
+                                    self._candles[symbol] = {}
+                                self._candles[symbol][tf] = candles
+                                loaded += 1
+                                self.logger.info(
+                                    f"[تسخين] ✅ {symbol} {tf}: {len(candles)} شمعة من Supabase"
+                                )
+                            else:
+                                self.logger.warning(
+                                    f"[تسخين] ⚠️ {symbol} {tf}: لا شموع في Supabase بعد"
+                                )
+                            break
+            except Exception as e:
+                self.logger.warning(f"[تسخين] ⚠️ خطأ في تحميل Supabase: {e}")
+
         self.logger.info(
             f"[تسخين] اكتمل: {loaded} ناجح | {failed} فشل | {total_expected} متوقع"
         )
@@ -206,6 +235,8 @@ class MarketAnalyzer(BaseEngine):
                         f"فتح={candle['o']:.6f} إغلاق={candle['c']:.6f} | "
                         f"مخزن={len(bucket)} (+1)"
                     )
+                    # حفظ في Supabase للاستخدام المستقبلي
+                    self._save_candle_to_db(symbol, timeframe, candle)
                 if len(bucket) > MAX_CANDLES_HISTORY:
                     bucket.pop(0)
             else:
@@ -243,6 +274,24 @@ class MarketAnalyzer(BaseEngine):
                 f"[مراقب] ❌ استثناء في _on_candle_update: "
                 f"{event.symbol} {event.timeframe}", exc_info=True
             )
+
+    def _save_candle_to_db(self, symbol: str, timeframe: str, candle: dict):
+        """حفظ شمعة مغلقة في Supabase — غير متزامن، لا يمنع التداول."""
+        try:
+            async def _save():
+                from database.repositories import CandleCacheRepository, get_session
+                async for session in get_session():
+                    await CandleCacheRepository.upsert_candle(
+                        session, symbol, timeframe,
+                        open_time=int(candle["t"]),
+                        open_p=candle["o"], high_p=candle["h"],
+                        low_p=candle["l"], close_p=candle["c"],
+                        volume_v=candle.get("v", 0),
+                    )
+                    break
+            asyncio.create_task(_save())
+        except Exception:
+            pass  # صامت — لا يؤثر على التداول
 
     # ═══════════════════════════════════════════════════════════
     # حلقة التحليل الدورية

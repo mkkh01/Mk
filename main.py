@@ -483,7 +483,7 @@ async def preflight_check_schema() -> tuple[bool, str]:
         async with _engine.connect() as conn:
             required_tables = ["users", "coins", "trades", "positions",
                               "market_data", "market_state", "signals",
-                              "risk_events", "portfolio_snapshots", "logs"]
+                              "risk_events", "portfolio_snapshots", "logs", "candle_cache"]
             for table in required_tables:
                 result = await conn.execute(
                     text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = :tname)"),

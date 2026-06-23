@@ -7,7 +7,7 @@ from typing import Optional
 
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean, DateTime, Text,
-    ForeignKey, JSON, Numeric, Index
+    ForeignKey, JSON, Numeric, Index, BigInteger, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import func
@@ -98,6 +98,32 @@ class MarketData(Base):
 
     __table_args__ = (
         Index("idx_market_data_symbol_tf_ts", "symbol", "timeframe", "timestamp"),
+    )
+
+
+# ── 3b. سجل الشموع (OHLCV Candle Cache) ────────────────────
+class CandleCache(Base):
+    """
+    تخزين الشموع المغلقة — بديل عن Binance REST عند الحظر.
+    يُملأ تلقائياً من WebSocket عند إغلاق كل شمعة.
+    """
+    __tablename__ = "candle_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(10), nullable=False)
+    open_time: Mapped[int] = mapped_column(BigInteger, nullable=False)  # ms timestamp
+    open: Mapped[float] = mapped_column(Float, default=0.0)
+    high: Mapped[float] = mapped_column(Float, default=0.0)
+    low: Mapped[float] = mapped_column(Float, default=0.0)
+    close: Mapped[float] = mapped_column(Float, default=0.0)
+    volume: Mapped[float] = mapped_column(Float, default=0.0)
+    stored_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_candle_cache_sym_tf", "symbol", "timeframe"),
+        Index("idx_candle_cache_ts", "open_time"),
+        UniqueConstraint("symbol", "timeframe", "open_time", name="uq_candle"),
     )
 
 

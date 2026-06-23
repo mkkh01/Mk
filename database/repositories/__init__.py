@@ -777,3 +777,71 @@ class MarketStateRepository:
             )
         )
         return list(result.scalars().all())
+
+
+# ═══════════════════════════════════════════════════════════════
+#  مستودع الشموع — Candle Cache (بديل REST)
+# ═══════════════════════════════════════════════════════════════
+
+class CandleCacheRepository:
+    """تخزين واسترجاع الشموع المغلقة — بديل عن Binance REST عند الحظر."""
+
+    @staticmethod
+    async def upsert_candle(session: AsyncSession, symbol: str, timeframe: str,
+                            open_time: int, open_p: float, high_p: float,
+                            low_p: float, close_p: float, volume_v: float):
+        """إدراج أو تحديث شمعة واحدة."""
+        from database.models import CandleCache
+        from sqlalchemy import select
+
+        existing = await session.execute(
+            select(CandleCache).where(
+                CandleCache.symbol == symbol,
+                CandleCache.timeframe == timeframe,
+                CandleCache.open_time == open_time,
+            )
+        )
+        row = existing.scalar_one_or_none()
+
+        if row:
+            row.open = open_p
+            row.high = high_p
+            row.low = low_p
+            row.close = close_p
+            row.volume = volume_v
+        else:
+            session.add(CandleCache(
+                symbol=symbol, timeframe=timeframe, open_time=open_time,
+                open=open_p, high=high_p, low=low_p, close=close_p, volume=volume_v,
+            ))
+        await session.commit()
+
+    @staticmethod
+    async def get_candles(session: AsyncSession, symbol: str, timeframe: str,
+                          limit: int = 200) -> list[dict]:
+        """استرجاع آخر N شمعة."""
+        from database.models import CandleCache
+        from sqlalchemy import select, desc
+
+        result = await session.execute(
+            select(CandleCache)
+            .where(
+                CandleCache.symbol == symbol,
+                CandleCache.timeframe == timeframe,
+            )
+            .order_by(desc(CandleCache.open_time))
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+
+        candles = []
+        for row in reversed(rows):
+            candles.append({
+                "t": row.open_time,
+                "o": row.open,
+                "h": row.high,
+                "l": row.low,
+                "c": row.close,
+                "v": row.volume,
+            })
+        return candles
