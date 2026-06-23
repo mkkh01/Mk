@@ -239,7 +239,7 @@ class TradingState:
             f"reconnects={self.ws_reconnect_count}"
         )
         logger.info(
-            f"[آلة_الحالات] المراحل المزارة: {' → '.join(sorted(self._entered_phases, key=lambda x: {'INIT':0,'CONNECTING_WS':1,'LOADING_HISTORY':2,'WARMING_UP':3,'RUNNING':4,'ERROR':5}.get(x,99)))}"
+            f"[آلة_الحالات] المراحل المزارة: {' → '.join(sorted(self._entered_phases, key=lambda x: {'INIT':0,'CONNECTING_WS':1,'LOADING_HISTORY':2,'WARMING_UP':3,'READY_TO_TRADE':4,'TRADING_ACTIVE':5,'ERROR':6}.get(x,99)))}"
         )
         logger.info("═" * 50)
 
@@ -340,8 +340,10 @@ class TradingState:
     def health(self) -> str:
         if self.errors:
             return "تحذير"
-        if self.phase == self.RUNNING:
+        if self.phase == self.TRADING_ACTIVE:
             return "صحيحة"
+        if self.phase == self.READY_TO_TRADE:
+            return "جاهز"
         return self.phase
 
     def check_stuck(self, cycle: int) -> None:
@@ -763,7 +765,7 @@ async def main():
                             f"reconnects={state.ws_reconnect_count}"
                         )
                     assert state.trading_allowed, (
-                        f"[تأكيد] RUNNING لكن trading_allowed=False! دورة #{cycle}"
+                        f"[تأكيد] TRADING_ACTIVE لكن trading_allowed=False! دورة #{cycle}"
                     )
 
                 # ── المرحلة 1: فحص السماح بالتداول ──
