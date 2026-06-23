@@ -146,8 +146,8 @@ class TelegramEngine:
         if not self.application:
             await self.initialize()
 
-        logger.info("[بوت] انتظار 8 ثوانٍ لتجنب تضارب النشر...")
-        await asyncio.sleep(8)
+        logger.info("[بوت] انتظار 30 ثانية لتجنب تضارب النشر + تنظيف الجلسة السابقة...")
+        await asyncio.sleep(30)
 
         attempt = 0
         while True:  # حلقة لانهائية — نستمر بالمحاولة حتى ننجح
