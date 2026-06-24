@@ -41,7 +41,6 @@ class TraceBuilder:
     def capture_system_state(self) -> "TraceBuilder":
         s = self._state
         self.trace.trading_allowed = s.trading_allowed
-        self.trace.trading_suspended = s.trading_suspended
         self.trace.system_state = s.phase
         self.trace.warmup_status = "OK" if s.warmup_complete else "INCOMPLETE"
         self.trace.active_strategies = list(
