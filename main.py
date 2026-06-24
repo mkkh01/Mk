@@ -92,7 +92,8 @@ class TradingState:
         أي مرحلة        → BLOCKED          (إيقاف طارئ)
 
     RULE: READY_TO_TRADE ≠ TRADING_ACTIVE
-    RULE: التداول مسموح فقط في TRADING_ACTIVE
+    RULE: READY_TO_TRADE يسمح بالتداول (ضروري لأول إشارة للانتقال إلى TRADING_ACTIVE)
+    RULE: TRADING_ACTIVE يسمح بالتداول (الوضع الطبيعي)
     RULE: BLOCKED لا يسمح بأي صفقة — لا استثناءات
 
     خصائص الضمان (Production Hardening):
@@ -275,8 +276,8 @@ class TradingState:
             assert self.analysis_allowed
         elif phase == self.READY_TO_TRADE:
             assert self.analysis_allowed
-            assert not self.trading_allowed, (
-                f"READY_TO_TRADE لا يجب أن يسمح بالتداول"
+            assert self.trading_allowed, (
+                f"READY_TO_TRADE يجب أن يسمح بالتداول (ضروري للانتقال إلى TRADING_ACTIVE)"
             )
 
     # ═══════════════════════════════════════════════════════
