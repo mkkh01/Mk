@@ -40,9 +40,9 @@ class TraceBuilder:
 
     def capture_system_state(self) -> "TraceBuilder":
         s = self._state
-        self.trace.trading_allowed = s.trading_allowed
-        self.trace.system_state = s.phase
-        self.trace.warmup_status = "OK" if s.warmup_complete else "INCOMPLETE"
+        self.trace.trading_allowed = getattr(s, 'trading_allowed', False)
+        self.trace.system_state = getattr(s, 'phase', 'UNKNOWN')
+        self.trace.warmup_status = "OK" if getattr(s, 'warmup_complete', False) else "INCOMPLETE"
         self.trace.active_strategies = list(
             self._strategy_engine._strategies.keys()
             if hasattr(self._strategy_engine, '_strategies')
