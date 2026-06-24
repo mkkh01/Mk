@@ -351,8 +351,8 @@ class TradingState:
 
     @property
     def trading_allowed(self) -> bool:
-        """التداول مسموح فقط في TRADING_ACTIVE."""
-        return self.phase == self.TRADING_ACTIVE
+        """التداول مسموح في READY_TO_TRADE و TRADING_ACTIVE."""
+        return self.phase in (self.READY_TO_TRADE, self.TRADING_ACTIVE)
 
     @property
     def ready_to_trade(self) -> bool:
