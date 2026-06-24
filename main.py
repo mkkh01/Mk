@@ -1061,6 +1061,17 @@ async def main():
                     if state.price_lines:
                         logger.info(f"[أسعار #{cycle}]\n" + "\n".join(state.price_lines))
 
+                    # ── ملخص البحث عن صفقات ──
+                    if state.trading_allowed and state.coins:
+                        if state.signals_found > 0:
+                            logger.info(f"[🔍 صفقات #{cycle}] ✅ وجدت {state.signals_found} إشارة")
+                        else:
+                            logger.info(f"[🔍 صفقات #{cycle}] ❌ لا إشارات — الأسواق لا تستوفي الشروط")
+                    elif not state.trading_allowed:
+                        logger.info(f"[🔍 صفقات #{cycle}] ⛔ التداول غير مسموح — المرحلة={state.phase}")
+                    else:
+                        logger.info(f"[🔍 صفقات #{cycle}] ⏳ لا عملات للمعالجة")
+
                     # ── تقارير دورية ──
                     # تقرير كل 5 دقائق (~10 دورات)
                     if cycle % 10 == 0 and cycle > 0:
