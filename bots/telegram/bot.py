@@ -69,6 +69,9 @@ class TelegramEngine:
 
     async def initialize(self):
         """Build and configure the Telegram application."""
+        if self.application:
+            return
+
         logger.info("[بوت] جاري تهيئة تطبيق البوت...")
         self.application = Application.builder().token(self.token).build()
 
@@ -77,7 +80,6 @@ class TelegramEngine:
         logger.info("[بوت] تم تسجيل معالج الأخطاء.")
 
         # ── Conversation Handler for adding coins ──
-        # NOTE: entry_point is the ONLY way to enter — NOT via handle_message route dict
         conv_handler = ConversationHandler(
             entry_points=[
                 MessageHandler(
@@ -128,27 +130,20 @@ class TelegramEngine:
         )
 
         # ── Register handlers ──
-        # Order matters: ConversationHandler BEFORE global handlers
         self.application.add_handler(CommandHandler("start", self.handlers.start))
         self.application.add_handler(CommandHandler("cancel", self.handlers.cancel_conversation))
         self.application.add_handler(conv_handler)
-        # Global MessageHandler — catches everything NOT in a conversation
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handlers.handle_message)
         )
-        # Global CallbackQueryHandler — ONLY for non-conversation callbacks
         self.application.add_handler(
             CallbackQueryHandler(self.handlers.handle_callback)
         )
 
-        logger.info("[بوت] تم تسجيل المعالجات (start, cancel, conv_handler, message, callback).")
+        logger.info("[بوت] تم تسجيل المعالجات.")
 
     async def _delete_existing_webhook(self) -> bool:
-        """حذف أي webhook موجود لضمان أن polling يعمل.
-        
-        Returns:
-            True إذا تم حذف webhook، False إذا لم يوجد أصلاً.
-        """
+        """حذف أي webhook موجود لضمان أن polling يعمل."""
         import httpx
         url = f"https://api.telegram.org/bot{self.token}/deleteWebhook"
         try:
@@ -156,12 +151,8 @@ class TelegramEngine:
                 resp = await client.post(url, json={"drop_pending_updates": True})
                 data = resp.json()
                 if data.get("ok"):
-                    if data.get("result"):
-                        logger.info("[بوت] 🧹 تم حذف webhook قديم + إسقاط التحديثات المعلقة")
-                        return True
-                    else:
-                        logger.info("[بوت] ℹ️ لا يوجد webhook قديم للحذف")
-                        return False
+                    logger.info("[بوت] 🧹 تم التأكد من عدم وجود webhook (Polling Mode Only)")
+                    return True
                 else:
                     logger.warning(f"[بوت] ⚠️ تعذر حذف webhook: {data}")
                     return False
@@ -170,123 +161,84 @@ class TelegramEngine:
             return False
 
     async def start(self):
-        """بدء استطلاع البوت — Singleton + Webhook Cleanup.
-        
-        الآليات:
-        1. قفل asyncio.Lock يمنع التشغيل المزدوج
-        2. حذف webhook قديم قبل بدء polling
-        3. حلقة إعادة محاولة لا نهائية مع backoff تكيفي
-        4. تمييز بين خطأ Webhook وخطأ تضارب الجلسات
-        """
-        # ── 🛡️ Singleton guard ──
+        """بدء استطلاع البوت — Singleton + Webhook Cleanup."""
         async with self._start_lock:
             if self._running:
-                logger.warning("[بوت] ⚠️ تم تجاهل محاولة تشغيل ثانية — البوت يعمل بالفعل")
+                logger.warning("[بوت] ⚠️ محاولة تشغيل ثانية مرفوضة — البوت يعمل بالفعل (Instance exists)")
                 return
             self._running = True
+            logger.info("[بوت] 🚀 بدء تشغيل Telegram Bot Instance...")
 
-        if not self.application:
-            await self.initialize()
+        await self.initialize()
 
-        # ── 🧹 حذف webhook قديم قبل أي شيء ──
-        logger.info("[بوت] 🧹 فحص وحذف webhook القديم...")
-        await self._delete_existing_webhook()
-
-        logger.info("[بوت] ⏳ انتظار 30 ثانية لتجنب تضارب النشر...")
-        await asyncio.sleep(30)
-
-        # ── تأكيد ثانٍ: قد يكون webhook عاد أثناء الانتظار (deploy سابق) ──
+        # ── 🧹 تنظيف الـ Webhook ──
         await self._delete_existing_webhook()
 
         attempt = 0
         while self._running:
             attempt += 1
             try:
-                logger.info(f"[بوت] 🚀 بدء استطلاع البوت (محاولة {attempt})...")
-                await self.application.initialize()
+                logger.info(f"[بوت] ⏳ محاولة بدء Polling #{attempt}...")
+                
+                # تهيئة التطبيق إذا لزم الأمر
+                if not self.application.base_updater:
+                    await self.application.initialize()
+                
                 await self.application.start()
+                
+                # بدء الاستطلاع
                 await self.application.updater.start_polling(
                     drop_pending_updates=True,
                     allowed_updates=["message", "callback_query"],
-                    poll_interval=2.0,
                 )
-                logger.info("[بوت] ✅ استطلاع البوت بدأ. في انتظار الرسائل.")
+                
+                logger.info("[بوت] ✅ Telegram Bot يعمل الآن بنظام Polling.")
 
-                # البقاء حياً
+                # حلقة الانتظار الرئيسية
                 while self._running:
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(10)
+                    if not self.application.updater.running:
+                        logger.warning("[بوت] ⚠️ Updater توقف بشكل غير متوقع!")
+                        break
 
             except Exception as e:
                 err_msg = str(e)
-                if "webhook" in err_msg.lower() and "delete" in err_msg.lower():
-                    # 🧹 Webhook ما زال نشط — نحذفه ونعيد المحاولة فوراً
-                    logger.warning(
-                        f"[بوت] ⚠️ Webhook ما زال نشطاً (محاولة {attempt}) — "
-                        f"جاري الحذف وإعادة المحاولة..."
-                    )
-                    await self._delete_existing_webhook()
-                    wait = 5
-                elif "terminated by other" in err_msg or "Conflict" in err_msg:
-                    # 🔄 تضارب جلسات — انتظار أطول
-                    wait = min(15 * attempt, 120)
-                    logger.warning(
-                        f"[بوت] ⚠️ تضارب جلسات (محاولة {attempt}) — "
-                        f"هل يوجد instance آخر يعمل؟ انتظار {wait}ث..."
-                    )
-                elif "already running" in err_msg or "Cannot close" in err_msg:
-                    wait = min(10 * attempt, 120)
-                    logger.warning(
-                        f"[بوت] ⚠️ تضارب event loop (محاولة {attempt}) — "
-                        f"انتظار {wait}ث..."
-                    )
+                if "Conflict" in err_msg or "terminated by other" in err_msg:
+                    wait = min(10 * attempt, 60)
+                    logger.error(f"[بوت] ❌ تعارض (Conflict): نسخة أخرى تعمل! إعادة المحاولة بعد {wait}ث...")
                 else:
-                    logger.critical(f"[بوت] ❌ خطأ غير متوقع: {e}", exc_info=True)
-                    raise
-
-                # تنظيف قبل إعادة المحاولة
-                try:
-                    await self.application.updater.stop()
-                except Exception:
-                    pass
-                try:
-                    await self.application.stop()
-                except Exception:
-                    pass
-                try:
-                    await self.application.shutdown()
-                except Exception:
-                    pass
+                    logger.error(f"[بوت] ❌ خطأ في الاستطلاع: {e}")
+                    wait = 5
+                
+                await self._cleanup()
                 await asyncio.sleep(wait)
-                await self.initialize()
+                
+        logger.info("[بوت] 🛑 توقف حلقة الاستطلاع.")
 
-        logger.info("[بوت] 🛑 تم الخروج من حلقة الاستطلاع")
+    async def _cleanup(self):
+        """تنظيف الموارد عند الخطأ أو التوقف."""
+        if self.application:
+            try:
+                if self.application.updater and self.application.updater.running:
+                    await self.application.updater.stop()
+                await self.application.stop()
+                await self.application.shutdown()
+            except Exception as e:
+                logger.debug(f"[بوت] خطأ أثناء التنظيف: {e}")
 
     async def stop(self):
-        """Stop bot gracefully — signals the polling loop to exit."""
+        """إيقاف البوت بشكل آمن."""
+        logger.info("[بوت] جاري إيقاف البوت...")
         self._running = False
-        if self.application:
-            logger.info("[بوت] جاري إيقاف البوت...")
-            try:
-                await self.application.updater.stop()
-            except Exception:
-                pass
-            try:
-                await self.application.stop()
-            except Exception:
-                pass
-            try:
-                await self.application.shutdown()
-            except Exception:
-                pass
-            logger.info("[بوت] ✅ تم إيقاف البوت.")
+        await self._cleanup()
+        logger.info("[بوت] ✅ تم إيقاف البوت بنجاح.")
 
     async def send_message(self, chat_id: int, text: str, parse_mode: str = "Markdown"):
-        """Send a message to a specific chat."""
+        """إرسال رسالة."""
         if self.application and self.application.bot:
             try:
                 await self.application.bot.send_message(
                     chat_id=chat_id, text=text, parse_mode=parse_mode
                 )
-                logger.debug(f"[بوت] تم إرسال رسالة إلى {chat_id}")
             except Exception as e:
-                logger.error(f"[بوت] فشل إرسال رسالة إلى {chat_id}: {e}")
+                logger.error(f"[بوت] فشل إرسال رسالة: {e}")
