@@ -13,8 +13,7 @@ def get_conn():
     try:
         if _conn is None or _conn.closed:
             _conn = psycopg.connect(DATABASE_URL, autocommit=True,
-                                    row_factory=psycopg.rows.DictRow,
-                                    prepare=False)
+                                    row_factory=psycopg.rows.DictRow)
         return _conn
     except Exception as e:
         logger.error(f"DB connection error: {e}")
@@ -26,7 +25,7 @@ def init_tables():
     # psycopg v3 raises "didn't produce records" on CREATE TABLE
     # when a row_factory is active.
     try:
-        ddl_conn = psycopg.connect(DATABASE_URL, autocommit=True, prepare=False)
+        ddl_conn = psycopg.connect(DATABASE_URL, autocommit=True)
     except Exception as e:
         logger.error(f"Cannot connect for DDL: {e}")
         raise
