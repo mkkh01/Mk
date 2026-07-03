@@ -149,23 +149,23 @@ def init_tables():
 def query(sql, params=None, fetch=True):
     """Execute a query and return results."""
     conn = get_conn()
-    cur = conn.cursor()
     try:
-        cur.execute(sql, params or ())
         if fetch:
+            # SELECT — use cursor with row_factory
+            cur = conn.cursor()
+            cur.execute(sql, params or ())
             result = cur.fetchall()
-            # Convert DictRow to list of dicts for compatibility
             result = [dict(row) for row in result]
+            cur.close()
         else:
+            # INSERT/UPDATE/DELETE — use connection.execute() to avoid
+            # "didn't produce records" error from row_factory
+            conn.execute(sql, params or ())
             result = None
-        conn.commit()
         return result
     except Exception as e:
-        conn.rollback()
         logger.error(f"Query error: {e}\nSQL: {sql}")
         raise
-    finally:
-        cur.close()
 
 def query_one(sql, params=None):
     """Execute a query and return a single row."""
