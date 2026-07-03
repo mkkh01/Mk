@@ -1,5 +1,5 @@
-import psycopg2
-import psycopg2.extras
+import psycopg
+import psycopg.rows
 import logging
 from config import DATABASE_URL
 
@@ -12,8 +12,8 @@ def get_conn():
     global _conn
     try:
         if _conn is None or _conn.closed:
-            _conn = psycopg2.connect(DATABASE_URL)
-            _conn.autocommit = True
+            _conn = psycopg.connect(DATABASE_URL, autocommit=True,
+                                    row_factory=psycopg.rows.DictRow)
         return _conn
     except Exception as e:
         logger.error(f"DB connection error: {e}")
@@ -126,11 +126,13 @@ def init_tables():
 def query(sql, params=None, fetch=True):
     """Execute a query and return results."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor()
     try:
         cur.execute(sql, params or ())
         if fetch:
             result = cur.fetchall()
+            # Convert DictRow to list of dicts for compatibility
+            result = [dict(row) for row in result]
         else:
             result = None
         conn.commit()
