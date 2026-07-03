@@ -399,13 +399,12 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pending["timeframes"] = tfs
             pending["action"] = "add_capital"
             pending["capital_pct"] = 10.0
-            pending["atr_mult"] = 3.0
-            pending["tp_ratio"] = 2.0
+            pending["risk_pct"] = 2.0
             pending_actions[chat_id] = pending
             
             await _show_capital_settings(query, pending)
 
-    # ── Capital & Risk Settings (during add) ──
+    # ── Capital Selection ──
     elif data == "cap_5":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
@@ -447,69 +446,52 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pending["action"] = "add_capital_input"
             pending_actions[chat_id] = pending
             await query.edit_message_text(
-                f"💰 *نسبة رأس المال المخصصة*\n\n"
-                f"أرسل الرقم (من 1 إلى 100):",
+                "💰 *نسبة رأس المال المخصصة*\n\n"
+                "أرسل الرقم (من 1 إلى 100):",
                 parse_mode="Markdown",
                 reply_markup=back_kb()
             )
 
-    # ── ATR Stop-Loss Multiplier ──
-    elif data == "atr_2":
+    # ── Risk Selection ──
+    elif data == "risk_1":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["atr_mult"] = 2.0
+            pending["risk_pct"] = 1.0
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    elif data == "atr_2_5":
+    elif data == "risk_2":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["atr_mult"] = 2.5
+            pending["risk_pct"] = 2.0
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    elif data == "atr_3":
+    elif data == "risk_3":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["atr_mult"] = 3.0
+            pending["risk_pct"] = 3.0
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    elif data == "atr_4":
+    elif data == "risk_5":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["atr_mult"] = 4.0
+            pending["risk_pct"] = 5.0
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    # ── TP Ratio ──
-    elif data == "tp_1_5":
+    elif data == "risk_custom":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["tp_ratio"] = 1.5
+            pending["action"] = "add_risk_input"
             pending_actions[chat_id] = pending
-            await _show_capital_settings(query, pending)
-
-    elif data == "tp_2":
-        pending = pending_actions.get(chat_id, {})
-        if pending.get("action") == "add_capital":
-            pending["tp_ratio"] = 2.0
-            pending_actions[chat_id] = pending
-            await _show_capital_settings(query, pending)
-
-    elif data == "tp_2_5":
-        pending = pending_actions.get(chat_id, {})
-        if pending.get("action") == "add_capital":
-            pending["tp_ratio"] = 2.5
-            pending_actions[chat_id] = pending
-            await _show_capital_settings(query, pending)
-
-    elif data == "tp_3":
-        pending = pending_actions.get(chat_id, {})
-        if pending.get("action") == "add_capital":
-            pending["tp_ratio"] = 3.0
-            pending_actions[chat_id] = pending
-            await _show_capital_settings(query, pending)
+            await query.edit_message_text(
+                "⚠️ *نسبة المخاطرة المخصصة*\n\n"
+                "أرسل الرقم (من 0.5 إلى 10):",
+                parse_mode="Markdown",
+                reply_markup=back_kb()
+            )
 
     # ── Final Confirm ──
     elif data == "add_final_confirm":
@@ -518,20 +500,18 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             symbol = pending["symbol"]
             tfs = pending["timeframes"]
             cap = pending["capital_pct"]
-            atr = pending["atr_mult"]
-            tp = pending["tp_ratio"]
+            risk = pending["risk_pct"]
 
             db.query(
-                """INSERT INTO assets (symbol, timeframes, capital_pct, is_active,
+                """INSERT INTO assets (symbol, timeframes, capital_pct, risk_pct, is_active,
                    donchian_period, atr_period, atr_sl_multiplier, tp_ratio)
-                   VALUES (%s, %s, %s, TRUE, 20, 14, %s, %s)
+                   VALUES (%s, %s, %s, %s, TRUE, 20, 14, 3.0, 2.0)
                    ON CONFLICT (symbol) DO UPDATE SET
                      timeframes = EXCLUDED.timeframes,
                      capital_pct = EXCLUDED.capital_pct,
-                     atr_sl_multiplier = EXCLUDED.atr_sl_multiplier,
-                     tp_ratio = EXCLUDED.tp_ratio,
+                     risk_pct = EXCLUDED.risk_pct,
                      is_active = TRUE""",
-                (symbol, tfs, cap, atr, tp),
+                (symbol, tfs, cap, risk),
                 fetch=False
             )
 
@@ -540,8 +520,7 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"✅ *تم إضافة `{symbol}` بنجاح!*\n\n"
                 f"⏱️ الأطر: `{', '.join(tfs)}`\n"
                 f"💰 رأس المال: `{cap}%`\n"
-                f"🛑 وقف الخسارة: `{atr}x ATR`\n"
-                f"🎯 جني الأرباح: `{tp}x`\n",
+                f"⚠️ المخاطرة: `{risk}%` من رأس المال",
                 parse_mode="Markdown",
                 reply_markup=back_kb()
             )
@@ -549,14 +528,13 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def _show_capital_settings(query, pending):
     """Show capital & risk settings keyboard during add flow."""
     cap = pending["capital_pct"]
-    atr = pending["atr_mult"]
-    tp = pending["tp_ratio"]
+    risk = pending["risk_pct"]
     tfs = pending["timeframes"]
     symbol = pending["symbol"]
 
     kb = InlineKeyboardMarkup([
         # Capital
-        [InlineKeyboardButton("💰 رأس المال (اضغط لاختيار):", callback_data="noop")],
+        [InlineKeyboardButton("💰 رأس المال:", callback_data="noop")],
         [
             InlineKeyboardButton("5%" if cap != 5.0 else "✅ 5%", callback_data="cap_5"),
             InlineKeyboardButton("10%" if cap != 10.0 else "✅ 10%", callback_data="cap_10"),
@@ -565,22 +543,15 @@ async def _show_capital_settings(query, pending):
             InlineKeyboardButton("25%" if cap != 25.0 else "✅ 25%", callback_data="cap_25"),
         ],
         [InlineKeyboardButton("✏️ مخصص", callback_data="cap_custom")],
-        # ATR
-        [InlineKeyboardButton("🛑 وقف الخسارة (ATR Multiplier):", callback_data="noop")],
+        # Risk
+        [InlineKeyboardButton("⚠️ نسبة المخاطرة:", callback_data="noop")],
         [
-            InlineKeyboardButton("2x" if atr != 2.0 else "✅ 2x", callback_data="atr_2"),
-            InlineKeyboardButton("2.5x" if atr != 2.5 else "✅ 2.5x", callback_data="atr_2_5"),
-            InlineKeyboardButton("3x" if atr != 3.0 else "✅ 3x", callback_data="atr_3"),
-            InlineKeyboardButton("4x" if atr != 4.0 else "✅ 4x", callback_data="atr_4"),
+            InlineKeyboardButton("1%" if risk != 1.0 else "✅ 1%", callback_data="risk_1"),
+            InlineKeyboardButton("2%" if risk != 2.0 else "✅ 2%", callback_data="risk_2"),
+            InlineKeyboardButton("3%" if risk != 3.0 else "✅ 3%", callback_data="risk_3"),
+            InlineKeyboardButton("5%" if risk != 5.0 else "✅ 5%", callback_data="risk_5"),
         ],
-        # TP
-        [InlineKeyboardButton("🎯 جني الأرباح (TP Ratio):", callback_data="noop")],
-        [
-            InlineKeyboardButton("1.5x" if tp != 1.5 else "✅ 1.5x", callback_data="tp_1_5"),
-            InlineKeyboardButton("2x" if tp != 2.0 else "✅ 2x", callback_data="tp_2"),
-            InlineKeyboardButton("2.5x" if tp != 2.5 else "✅ 2.5x", callback_data="tp_2_5"),
-            InlineKeyboardButton("3x" if tp != 3.0 else "✅ 3x", callback_data="tp_3"),
-        ],
+        [InlineKeyboardButton("✏️ مخصص", callback_data="risk_custom")],
         # Actions
         [InlineKeyboardButton("✅ تأكيد وحفظ", callback_data="add_final_confirm")],
         [InlineKeyboardButton("🔙 رجوع للأطر الزمنية", callback_data="menu_add_asset")],
@@ -588,8 +559,9 @@ async def _show_capital_settings(query, pending):
 
     await query.edit_message_text(
         f"⚙️ *إعدادات `{symbol}`*\n\n"
-        f"⏱️ الأطر المختارة: `{', '.join(tfs)}`\n\n"
-        f"اختر نسبة رأس المال ومستوى المخاطر:",
+        f"⏱️ الأطر: `{', '.join(tfs)}`\n\n"
+        f"💰 رأس المال: كم من محفظتك تخصص لهذه العملة\n"
+        f"⚠️ المخاطرة: أقصى خسارة مسموحة من رأس المال المخصص",
         parse_mode="Markdown",
         reply_markup=kb
     )
@@ -614,25 +586,35 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pending["capital_pct"] = val
             pending["action"] = "add_capital"
             pending_actions[chat_id] = pending
-            await update.message.reply_text(
-                f"✅ تم تعيين رأس المال: `{val}%`",
-                parse_mode="Markdown"
-            )
-            # Show the settings keyboard
-            from telegram import InlineKeyboardMarkup
-            # Re-use the callback-based display by sending a temp message
-            # Actually, redirect user to press a button - send settings as new message
-            # We need to show the inline keyboard, but we can't edit a user message.
-            # So we'll send a new message with the keyboard.
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚙️ متابعة الإعدادات", callback_data="show_cap_settings")],
             ])
             await update.message.reply_text(
-                f"اضغط للرجوع لإعدادات `{pending['symbol']}`:",
+                f"✅ رأس المال: `{val}%`",
+                parse_mode="Markdown",
                 reply_markup=kb
             )
         except ValueError:
             await update.message.reply_text("❌ أرسل رقماً صحيحاً (من 1 إلى 100).")
+
+    # ── Add Asset: Custom risk input ──
+    elif action == "add_risk_input":
+        try:
+            val = float(text)
+            val = max(0.5, min(10, val))
+            pending["risk_pct"] = val
+            pending["action"] = "add_capital"
+            pending_actions[chat_id] = pending
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ متابعة الإعدادات", callback_data="show_cap_settings")],
+            ])
+            await update.message.reply_text(
+                f"✅ المخاطرة: `{val}%`",
+                parse_mode="Markdown",
+                reply_markup=kb
+            )
+        except ValueError:
+            await update.message.reply_text("❌ أرسل رقماً صحيحاً (من 0.5 إلى 10).")
 
     # ── Add Asset: Step 1 - Symbol ──
     elif action == "add_symbol":
