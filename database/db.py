@@ -13,7 +13,8 @@ def get_conn():
     try:
         if _conn is None or _conn.closed:
             _conn = psycopg.connect(DATABASE_URL, autocommit=True,
-                                    row_factory=psycopg.rows.DictRow)
+                                    row_factory=psycopg.rows.DictRow,
+                                    prepare=False)
         return _conn
     except Exception as e:
         logger.error(f"DB connection error: {e}")
@@ -21,8 +22,15 @@ def get_conn():
 
 def init_tables():
     """Create all required tables if they don't exist."""
-    conn = get_conn()
-    cur = conn.cursor()
+    # Use a plain connection WITHOUT row_factory for DDL —
+    # psycopg v3 raises "didn't produce records" on CREATE TABLE
+    # when a row_factory is active.
+    try:
+        ddl_conn = psycopg.connect(DATABASE_URL, autocommit=True, prepare=False)
+    except Exception as e:
+        logger.error(f"Cannot connect for DDL: {e}")
+        raise
+    ddl_cur = ddl_conn.cursor()
     
     tables_sql = [
         """
@@ -113,14 +121,19 @@ def init_tables():
     
     for sql in tables_sql:
         try:
-            cur.execute(sql)
+            ddl_cur.execute(sql)
             logger.info("Table created/verified")
         except Exception as e:
             logger.error(f"Table creation error: {e}")
     
-    # Initialize system state if not exists
-    cur.execute("INSERT INTO system_state (id) VALUES (1) ON CONFLICT DO NOTHING;")
-    cur.close()
+    # Initialize system state row if not exists
+    try:
+        ddl_cur.execute("INSERT INTO system_state (id) VALUES (1) ON CONFLICT DO NOTHING;")
+    except Exception as e:
+        logger.error(f"System state init error: {e}")
+    
+    ddl_cur.close()
+    ddl_conn.close()
     logger.info("All database tables initialized")
 
 def query(sql, params=None, fetch=True):
