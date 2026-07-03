@@ -355,6 +355,23 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=back_kb()
         )
     
+    # ── Timeframe Done (MUST be before startswith("tf_") check) ──
+    elif data == "tf_done":
+        pending = pending_actions.get(chat_id, {})
+        if pending.get("action") == "add_timeframes":
+            tfs = pending.get("timeframes", ["5m", "15m", "1h", "4h"])
+            if not tfs:
+                tfs = ["5m", "15m", "1h", "4h"]
+            
+            # Move to capital & risk settings step
+            pending["timeframes"] = tfs
+            pending["action"] = "add_capital"
+            pending["capital_amount"] = 0
+            pending["risk_pct"] = 2.0
+            pending_actions[chat_id] = pending
+            
+            await _show_capital_settings(query, pending)
+
     # ── Timeframe selection (during add) ──
     elif data.startswith("tf_"):
         tf = data.replace("tf_", "")
@@ -390,22 +407,6 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
-    
-    elif data == "tf_done":
-        pending = pending_actions.get(chat_id, {})
-        if pending.get("action") == "add_timeframes":
-            tfs = pending.get("timeframes", ["5m", "15m", "1h", "4h"])
-            if not tfs:
-                tfs = ["5m", "15m", "1h", "4h"]
-            
-            # Move to capital & risk settings step
-            pending["timeframes"] = tfs
-            pending["action"] = "add_capital"
-            pending["capital_amount"] = 0
-            pending["risk_pct"] = 2.0
-            pending_actions[chat_id] = pending
-            
-            await _show_capital_settings(query, pending)
 
     # ── Capital Amount Selection ──
     elif data == "cap_50":
