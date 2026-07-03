@@ -11,12 +11,11 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "https://lvvcbqqtjygqlxyhiabm.supabase.
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 # ── Supabase Direct (Postgres) ──
-SUPABASE_HOST = os.getenv("SUPABASE_HOST", "db.lvvcbqqtjygqlxyhiabm.supabase.co")
-SUPABASE_PORT = int(os.getenv("SUPABASE_PORT", 5432))
-SUPABASE_DB = os.getenv("SUPABASE_DB", "postgres")
-SUPABASE_USER = os.getenv("SUPABASE_USER", "postgres")
-SUPABASE_PASSWORD = os.getenv("SUPABASE_PASSWORD", "")
-DATABASE_URL = f"postgresql://{SUPABASE_USER}:{SUPABASE_PASSWORD}@{SUPABASE_HOST}:{SUPABASE_PORT}/{SUPABASE_DB}"
+# Use Supabase Connection Pooler (IPv4 compatible — required for Render)
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres.lvvcbqqtjygqlxyhiabm:Mk_03065750@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
+)
 
 # ── Redis ──
 REDIS_HOST = os.getenv("REDIS_HOST", "moon-close-reaction-79072.db.redis.io")
