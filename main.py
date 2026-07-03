@@ -184,7 +184,7 @@ async def async_main():
     # ── 5. Keep running until shutdown signal ──
     stop_event = asyncio.Event()
 
-    def _signal_handler(sig, frame):
+    def _signal_handler(sig):
         logger.info(f"Received signal {sig} — shutting down gracefully...")
         stop_event.set()
 
