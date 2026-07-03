@@ -36,7 +36,7 @@ def run_analysis_cycle():
         if risk_manager.check_circuit_breaker():
             logger.warning("Circuit breaker activated!")
             chat_id = ADMIN_CHAT_IDS[0] if ADMIN_CHAT_IDS else None
-            if chat_id:
+            if chat_id and loop:
                 asyncio.run_coroutine_threadsafe(
                     alerts.send_alert(chat_id, "قاطع الدائرة مفعل!", "تم إيقاف التداول بسبب تجاوز حد الخسارة."),
                     loop
@@ -56,7 +56,7 @@ def run_analysis_cycle():
         closed_trades = trade_tracker.check_open_trades()
         for ct in closed_trades:
             chat_id = ADMIN_CHAT_IDS[0] if ADMIN_CHAT_IDS else None
-            if chat_id:
+            if chat_id and loop:
                 asyncio.run_coroutine_threadsafe(
                     alerts.send_trade_closed(chat_id, ct),
                     loop
@@ -72,15 +72,12 @@ def run_analysis_cycle():
         for asset in assets:
             for tf in asset["timeframes"]:
                 try:
-                    # Fetch data
                     candles = fetch_data.fetch_klines(asset["symbol"], tf, limit=200)
                     if not candles or len(candles) < 50:
                         continue
                     
-                    # Fetch order book for liquidity
                     order_book = fetch_data.fetch_order_book(asset["symbol"], limit=10)
                     
-                    # Build params from asset config
                     params = {
                         "donchian_period": asset.get("donchian_period", 20),
                         "atr_period": asset.get("atr_period", 14),
@@ -88,14 +85,10 @@ def run_analysis_cycle():
                         "tp_ratio": asset.get("tp_ratio", 2.0),
                     }
                     
-                    # Run strategy selection
                     signal, regime = choose(candles, order_book, params)
                     
                     if signal:
-                        # Log signal
                         trade_tracker.log_signal(signal, asset["symbol"], tf)
-                        
-                        # Auto-create paper trade
                         trade_id = trade_tracker.create_trade(signal, asset["symbol"], tf)
                         
                         if trade_id:
@@ -104,9 +97,8 @@ def run_analysis_cycle():
                                 f"Conf: {signal['confidence']}% | Trade #{trade_id}"
                             )
                             
-                            # Send notification
                             chat_id = ADMIN_CHAT_IDS[0] if ADMIN_CHAT_IDS else None
-                            if chat_id:
+                            if chat_id and loop:
                                 asyncio.run_coroutine_threadsafe(
                                     alerts.send_signal_notification(
                                         chat_id, signal, asset["symbol"], tf, regime
@@ -121,7 +113,6 @@ def run_analysis_cycle():
         # Update performance
         performance.update_performance()
         
-        # Update last check time
         db.query(
             "UPDATE system_state SET last_check_time = NOW() WHERE id = 1",
             fetch=False
@@ -133,7 +124,7 @@ def run_analysis_cycle():
         logger.error(f"Analysis cycle error: {e}", exc_info=True)
 
 def schedule_jobs():
-    """Setup periodic jobs."""
+    """Setup periodic analysis jobs."""
     from apscheduler.schedulers.background import BackgroundScheduler
     from config import CHECK_INTERVAL
     
@@ -151,7 +142,7 @@ def schedule_jobs():
     logger.info(f"Scheduler started - interval: {CHECK_INTERVAL}s")
 
 async def post_init(application):
-    """Called after bot is initialized."""
+    """Called after bot is initialized - set up event loop and resources."""
     global loop
     loop = asyncio.get_running_loop()
     
@@ -159,14 +150,15 @@ async def post_init(application):
     from monitoring.alerts import set_bot
     set_bot(application.bot)
     
-    # Initialize database
+    # Initialize database tables
     from database.db import init_tables
     init_tables()
     
-    # Get admin chat id from first user who starts the bot
     from config import ADMIN_CHAT_IDS
     if ADMIN_CHAT_IDS:
         logger.info(f"Admin IDs: {ADMIN_CHAT_IDS}")
+    
+    logger.info("Bot initialized successfully!")
 
 def start_bot():
     """Start the trading bot with Telegram interface."""
@@ -180,7 +172,10 @@ def start_bot():
         logger.error("Failed to build bot")
         return
     
-    # Start scheduler in a thread
+    # Register post-init hook
+    bot_app.post_init = post_init
+    
+    # Start scheduler in background
     schedule_thread = threading.Thread(target=schedule_jobs, daemon=True)
     schedule_thread.start()
     
