@@ -19,7 +19,7 @@ ADMIN_IDS = []
 def is_admin(chat_id):
     """Check if user is admin."""
     from config import ADMIN_CHAT_IDS
-    if not ADMIN_CHAT_IDS and not ADMIN_IDS:
+    if not ADMIN_IDS and not ADMIN_IDS:
         return True  # Allow all during setup
     return chat_id in ADMIN_IDS or chat_id in ADMIN_IDS
 
@@ -246,9 +246,12 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for a in assets:
             status = "🟢" if a["is_active"] else "🔴"
             tfs = ", ".join(a["timeframes"])
+            cap = a.get("capital_amount", 0) or 0
+            risk = a.get("risk_pct", 2.0) or 2.0
+            cap_str = f"${cap:.0f}" if cap > 0 else "لم يحدد"
             lines.append(
                 f"{status} `{a['symbol']}` | أطر: `{tfs}` | "
-                f"رأس مال: `{a['capital_pct']}%`"
+                f"رأس مال: `{cap_str}` | مخاطرة: `{risk}%`"
             )
         
         await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=back_kb())
@@ -398,45 +401,45 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Move to capital & risk settings step
             pending["timeframes"] = tfs
             pending["action"] = "add_capital"
-            pending["capital_pct"] = 10.0
+            pending["capital_amount"] = 0
             pending["risk_pct"] = 2.0
             pending_actions[chat_id] = pending
             
             await _show_capital_settings(query, pending)
 
-    # ── Capital Selection ──
-    elif data == "cap_5":
+    # ── Capital Amount Selection ──
+    elif data == "cap_50":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["capital_pct"] = 5.0
+            pending["capital_amount"] = 50
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    elif data == "cap_10":
+    elif data == "cap_100":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["capital_pct"] = 10.0
+            pending["capital_amount"] = 100
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    elif data == "cap_15":
+    elif data == "cap_200":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["capital_pct"] = 15.0
+            pending["capital_amount"] = 200
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    elif data == "cap_20":
+    elif data == "cap_500":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["capital_pct"] = 20.0
+            pending["capital_amount"] = 500
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
-    elif data == "cap_25":
+    elif data == "cap_1000":
         pending = pending_actions.get(chat_id, {})
         if pending.get("action") == "add_capital":
-            pending["capital_pct"] = 25.0
+            pending["capital_amount"] = 1000
             pending_actions[chat_id] = pending
             await _show_capital_settings(query, pending)
 
@@ -446,8 +449,8 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pending["action"] = "add_capital_input"
             pending_actions[chat_id] = pending
             await query.edit_message_text(
-                "💰 *نسبة رأس المال المخصصة*\n\n"
-                "أرسل الرقم (من 1 إلى 100):",
+                "💰 *رأس مال مخصص*\n\n"
+                "أرسل المبلغ بالدولار (مثال: 300):",
                 parse_mode="Markdown",
                 reply_markup=back_kb()
             )
@@ -499,16 +502,16 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if pending.get("action") == "add_capital":
             symbol = pending["symbol"]
             tfs = pending["timeframes"]
-            cap = pending["capital_pct"]
+            cap = pending["capital_amount"]
             risk = pending["risk_pct"]
 
             db.query(
-                """INSERT INTO assets (symbol, timeframes, capital_pct, risk_pct, is_active,
+                """INSERT INTO assets (symbol, timeframes, capital_amount, risk_pct, is_active,
                    donchian_period, atr_period, atr_sl_multiplier, tp_ratio)
                    VALUES (%s, %s, %s, %s, TRUE, 20, 14, 3.0, 2.0)
                    ON CONFLICT (symbol) DO UPDATE SET
                      timeframes = EXCLUDED.timeframes,
-                     capital_pct = EXCLUDED.capital_pct,
+                     capital_amount = EXCLUDED.capital_amount,
                      risk_pct = EXCLUDED.risk_pct,
                      is_active = TRUE""",
                 (symbol, tfs, cap, risk),
@@ -516,33 +519,35 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
             pending_actions.pop(chat_id, None)
+            cap_display = f"${cap:.0f}" if cap > 0 else "لم يحدد"
             await query.edit_message_text(
                 f"✅ *تم إضافة `{symbol}` بنجاح!*\n\n"
                 f"⏱️ الأطر: `{', '.join(tfs)}`\n"
-                f"💰 رأس المال: `{cap}%`\n"
-                f"⚠️ المخاطرة: `{risk}%` من رأس المال",
+                f"💰 رأس المال: `{cap_display}`\n"
+                f"⚠️ المخاطرة: `{risk}%`",
                 parse_mode="Markdown",
                 reply_markup=back_kb()
             )
 
+
 async def _show_capital_settings(query, pending):
     """Show capital & risk settings keyboard during add flow."""
-    cap = pending["capital_pct"]
+    cap = pending["capital_amount"]
     risk = pending["risk_pct"]
     tfs = pending["timeframes"]
     symbol = pending["symbol"]
 
     kb = InlineKeyboardMarkup([
-        # Capital
-        [InlineKeyboardButton("💰 رأس المال:", callback_data="noop")],
+        # Capital Amount
+        [InlineKeyboardButton("💰 رأس المال (USDT):", callback_data="noop")],
         [
-            InlineKeyboardButton("5%" if cap != 5.0 else "✅ 5%", callback_data="cap_5"),
-            InlineKeyboardButton("10%" if cap != 10.0 else "✅ 10%", callback_data="cap_10"),
-            InlineKeyboardButton("15%" if cap != 15.0 else "✅ 15%", callback_data="cap_15"),
-            InlineKeyboardButton("20%" if cap != 20.0 else "✅ 20%", callback_data="cap_20"),
-            InlineKeyboardButton("25%" if cap != 25.0 else "✅ 25%", callback_data="cap_25"),
+            InlineKeyboardButton("$50" if cap != 50 else "✅ $50", callback_data="cap_50"),
+            InlineKeyboardButton("$100" if cap != 100 else "✅ $100", callback_data="cap_100"),
+            InlineKeyboardButton("$200" if cap != 200 else "✅ $200", callback_data="cap_200"),
+            InlineKeyboardButton("$500" if cap != 500 else "✅ $500", callback_data="cap_500"),
+            InlineKeyboardButton("$1000" if cap != 1000 else "✅ $1000", callback_data="cap_1000"),
         ],
-        [InlineKeyboardButton("✏️ مخصص", callback_data="cap_custom")],
+        [InlineKeyboardButton("✏️ مبلغ آخر", callback_data="cap_custom")],
         # Risk
         [InlineKeyboardButton("⚠️ نسبة المخاطرة:", callback_data="noop")],
         [
@@ -560,8 +565,8 @@ async def _show_capital_settings(query, pending):
     await query.edit_message_text(
         f"⚙️ *إعدادات `{symbol}`*\n\n"
         f"⏱️ الأطر: `{', '.join(tfs)}`\n\n"
-        f"💰 رأس المال: كم من محفظتك تخصص لهذه العملة\n"
-        f"⚠️ المخاطرة: أقصى خسارة مسموحة من رأس المال المخصص",
+        f"💰 رأس المال: المبلغ المخصص لتداول هذه العملة\n"
+        f"⚠️ المخاطرة: أقصى خسارة مسموحة من رأس المال",
         parse_mode="Markdown",
         reply_markup=kb
     )
@@ -582,20 +587,20 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if action == "add_capital_input":
         try:
             val = float(text)
-            val = max(1, min(100, val))
-            pending["capital_pct"] = val
+            val = max(0, val)
+            pending["capital_amount"] = val
             pending["action"] = "add_capital"
             pending_actions[chat_id] = pending
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚙️ متابعة الإعدادات", callback_data="show_cap_settings")],
             ])
             await update.message.reply_text(
-                f"✅ رأس المال: `{val}%`",
+                f"✅ رأس المال: `${val:.0f}`",
                 parse_mode="Markdown",
                 reply_markup=kb
             )
         except ValueError:
-            await update.message.reply_text("❌ أرسل رقماً صحيحاً (من 1 إلى 100).")
+            await update.message.reply_text("❌ أرسل المبلغ (مثال: 100)")
 
     # ── Add Asset: Custom risk input ──
     elif action == "add_risk_input":
@@ -649,12 +654,17 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         
         tfs = ", ".join(asset["timeframes"])
+        cap = asset.get("capital_amount", 0) or 0
+        risk = asset.get("risk_pct", 2.0) or 2.0
+        cap_str = f"${cap:.0f}" if cap > 0 else "لم يحدد"
         await update.message.reply_text(
             f"✏️ *تعديل `{symbol}`*\n\n"
             f"الأطر الحالية: `{tfs}`\n"
-            f"رأس المال: `{asset['capital_pct']}%`\n\n"
+            f"رأس المال: `{cap_str}`\n"
+            f"المخاطرة: `{risk}%`\n\n"
             f"أرسل القيمة الجديدة:\n"
-            f"• `رأس مال: 20` — لتغيير نسبة رأس المال\n"
+            f"• `رأس مال: 200` — لتغيير المبلغ (USDT)\n"
+            f"• `مخاطرة: 3` — لتغيير نسبة المخاطرة\n"
             f"• `أطر: 5m,15m,1h` — لتغيير الأطر\n"
             f"• `تفعيل` أو `تعطيل`",
             parse_mode="Markdown",
@@ -670,18 +680,33 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         
         if msg.startswith("رأس مال"):
             try:
-                pct = float(msg.split(":")[1].strip().replace("%", ""))
-                pct = max(1, min(100, pct))
+                amt = float(msg.split(":")[1].strip().replace("$", "").replace("USDT", ""))
+                amt = max(0, amt)
                 db.query(
-                    "UPDATE assets SET capital_pct = %s WHERE symbol = %s",
-                    (pct, symbol), fetch=False
+                    "UPDATE assets SET capital_amount = %s WHERE symbol = %s",
+                    (amt, symbol), fetch=False
                 )
                 await update.message.reply_text(
-                    f"✅ تم تحديث رأس مال `{symbol}` إلى `{pct}%`",
+                    f"✅ تم تحديث رأس مال `{symbol}` إلى `${amt:.0f}`",
                     parse_mode="Markdown", reply_markup=back_kb()
                 )
             except:
-                await update.message.reply_text("❌ صيغة خاطئة. مثال: `رأس مال: 20`", parse_mode="Markdown")
+                await update.message.reply_text("❌ صيغة خاطئة. مثال: `رأس مال: 200`", parse_mode="Markdown")
+        
+        elif msg.startswith("مخاطرة"):
+            try:
+                r = float(msg.split(":")[1].strip().replace("%", ""))
+                r = max(0.5, min(10, r))
+                db.query(
+                    "UPDATE assets SET risk_pct = %s WHERE symbol = %s",
+                    (r, symbol), fetch=False
+                )
+                await update.message.reply_text(
+                    f"✅ تم تحديث مخاطرة `{symbol}` إلى `{r}%`",
+                    parse_mode="Markdown", reply_markup=back_kb()
+                )
+            except:
+                await update.message.reply_text("❌ صيغة خاطئة. مثال: `مخاطرة: 3`", parse_mode="Markdown")
         
         elif msg.startswith("أطر"):
             try:

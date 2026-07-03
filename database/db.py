@@ -37,7 +37,7 @@ def init_tables():
             id SERIAL PRIMARY KEY,
             symbol TEXT NOT NULL UNIQUE,
             timeframes TEXT[] NOT NULL DEFAULT '{"5m","15m","1h","4h"}',
-            capital_pct REAL DEFAULT 10.0,
+            capital_amount REAL DEFAULT 0,
             risk_pct REAL DEFAULT 2.0,
             is_active BOOLEAN DEFAULT TRUE,
             donchian_period INT DEFAULT 20,
@@ -132,11 +132,15 @@ def init_tables():
     except Exception as e:
         logger.error(f"System state init error: {e}")
 
-    # Add risk_pct column if missing (for existing tables)
+    # Migrate: add new columns if missing (for existing tables)
     try:
         ddl_cur.execute("ALTER TABLE assets ADD COLUMN IF NOT EXISTS risk_pct REAL DEFAULT 2.0;")
     except Exception:
-        pass  # Column may already exist or ALTER not supported
+        pass
+    try:
+        ddl_cur.execute("ALTER TABLE assets ADD COLUMN IF NOT EXISTS capital_amount REAL DEFAULT 0;")
+    except Exception:
+        pass
     
     ddl_cur.close()
     ddl_conn.close()
