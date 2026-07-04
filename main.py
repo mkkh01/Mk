@@ -1,9 +1,7 @@
 """
-CTM Bot — Main Entry Point
-Bot runs in main thread (needs signal handlers), analysis in daemon thread.
+CTM Bot — Main Entry Point (webhook mode for Render)
 """
-import time
-import threading
+import os, time, threading, asyncio
 from config import MONITOR_INTERVAL_SECONDS, SUPABASE_DB_URL
 from data.binance_api import get_klines, get_order_book, get_current_price
 from db.supabase_client import (
@@ -14,12 +12,10 @@ from signals.monitor import check_trade
 from utils.logger import (
     init_logger, system_start, binance_connected, supabase_connected,
     coins_loaded, analysis_start, fetch_data_start, fetch_data_done,
-    no_signal,
-    signal_generated, signal_sent, monitoring, tp_hit, sl_hit,
+    no_signal, signal_generated, signal_sent, monitoring, tp_hit, sl_hit,
     error, cron_tick, cron_complete
 )
-from utils.health import start_health_server
-from bot.telegram_bot import run_bot
+from bot.telegram_bot import build_application, run_webhook
 
 
 def analysis_cycle():
@@ -85,13 +81,14 @@ def analysis_cycle():
     cron_complete(time.time() - start_time)
 
 
-def main():
+async def main_async():
     init_db()
     init_logger(SUPABASE_DB_URL)
     system_start()
     binance_connected()
     supabase_connected()
 
+    print("Running initial analysis...")
     analysis_cycle()
 
     def analysis_loop():
@@ -105,11 +102,18 @@ def main():
 
     threading.Thread(target=analysis_loop, daemon=True).start()
 
-    # Health check server for Render Web Service (daemon thread, no signal handlers)
-    threading.Thread(target=start_health_server, daemon=True).start()
+    app = build_application()
 
-    print("Starting Telegram bot (main thread)...")
-    run_bot()
+    port = int(os.environ.get('PORT', 10000))
+    base = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{port}')
+    webhook_url = f"{base}/webhook"
+
+    print(f"Starting webhook on port {port}, url={webhook_url}")
+    await run_webhook(app, webhook_url, port)
+
+
+def main():
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

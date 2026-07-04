@@ -274,17 +274,8 @@ def build_application() -> Application:
 
     return app
 
-def run_bot():
-    import time as _time
-    app = build_application()
-    while True:
-        try:
-            app.run_polling(drop_pending_updates=True)
-        except Exception as e:
-            err = str(e)
-            print(f"[BOT] Crashed: {err[:120]}")
-            if 'Conflict' in err:
-                _time.sleep(5)
-                app = build_application()
-                continue
-            _time.sleep(3)
+async def run_webhook(app: Application, url: str, port: int):
+    """Run bot with webhook — no polling conflicts."""
+    await app.bot.set_webhook(url=url, drop_pending_updates=True)
+    print(f"[WEBHOOK] Set to {url}")
+    await app.run_webhook(listen="0.0.0.0", port=port, webhook_url=url, drop_pending_updates=True)
