@@ -14,6 +14,7 @@ _FALLBACKS = {
     "TELEGRAM_BOT_TOKEN": "8881069774:AAGGbcemdV6_6fobmw04Pd6gA40PKG7rD3A",
     "SUPABASE_URL": "https://lvvcbqqtjygqlxyhiabm.supabase.co",
     "SUPABASE_DB_URL": "postgresql://postgres.lvvcbqqtjygqlxyhiabm:1392e9djdhwjdjjdnw@aws-1-eu-central-1.pooler.supabase.com:5432/postgres",
+    "WEBHOOK_BASE_URL": "https://ct-copytrading-bot.onrender.com",
 }
 
 # Load local .env overrides (not committed, for dev convenience)
@@ -52,6 +53,9 @@ SUPABASE_DB_URL = _get("SUPABASE_DB_URL")
 
 # === Binance (Public API) ===
 BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
+
+# === Webhook (Render deployment URL) ===
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", os.getenv("RENDER_EXTERNAL_URL", ""))
 
 # === Strategy Parameters ===
 DONCHIAN_PERIOD = 20

@@ -3,7 +3,7 @@ CTM Bot — Main Entry Point (webhook mode for Render)
 v2.0 — unified indicators, live prices, risk engine, pause/resume
 """
 import os, time, threading
-from config import MONITOR_INTERVAL_SECONDS, SUPABASE_DB_URL
+from config import MONITOR_INTERVAL_SECONDS, SUPABASE_DB_URL, WEBHOOK_BASE_URL
 from data.binance_api import get_klines, get_order_book, get_live_price
 from db.supabase_client import (
     init_db, get_active_coins, save_signal, get_active_signals, close_signal
@@ -214,8 +214,12 @@ def main():
     app = build_application()
 
     port = int(os.environ.get('PORT', 10000))
-    base = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{port}')
+    base = WEBHOOK_BASE_URL or f'http://localhost:{port}'
     webhook_url = f"{base}/webhook"
+
+    if not WEBHOOK_BASE_URL:
+        print(f"⚠️  WEBHOOK_BASE_URL not set — using {webhook_url}")
+        print(f"   Set RENDER_EXTERNAL_URL or WEBHOOK_BASE_URL for production")
 
     print(f"Starting webhook on port {port}, url={webhook_url}")
     run_webhook(app, webhook_url, port)
