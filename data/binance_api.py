@@ -9,18 +9,24 @@ def get_current_price(symbol: str) -> dict:
     return resp.json()
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
-    """Get kline/candlestick data.
-    Returns list of [open_time, open, high, low, close, volume, close_time, quote_vol, trades, taker_buy_vol, taker_buy_quote_vol, ignore]
-    All values are strings, convert to float as needed."""
+    """Get kline/candlestick data."""
     url = f"{BINANCE_BASE_URL}/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit={limit}"
     resp = requests.get(url, timeout=10)
-    return resp.json()
+    data = resp.json()
+    if isinstance(data, dict) and 'code' in data:
+        print(f"[BINANCE klines] Error for {symbol}: {data}")
+        return []
+    return data
 
 def get_order_book(symbol: str, limit: int = 20) -> dict:
-    """Get order book. Returns {'bids': [[price, qty],...], 'asks': [[price, qty],...]}"""
+    """Get order book."""
     url = f"{BINANCE_BASE_URL}/api/v3/depth?symbol={symbol.upper()}&limit={limit}"
     resp = requests.get(url, timeout=10)
-    return resp.json()
+    data = resp.json()
+    if isinstance(data, dict) and 'code' in data:
+        print(f"[BINANCE orderbook] Error for {symbol}: {data}")
+        return {'bids': [], 'asks': []}
+    return data
 
 def get_24hr_ticker(symbol: str) -> dict:
     """Get 24hr ticker. Falls back to simple price, then errors."""
@@ -64,15 +70,22 @@ def get_all_prices(symbols: list) -> dict:
 
 def extract_ohlcv(klines: list) -> dict:
     """Extract OHLCV arrays from raw kline data. Returns dict with lists of floats."""
+    if not klines or not isinstance(klines, list) or not isinstance(klines[0], list):
+        print(f"[BINANCE] Invalid kline data: {str(klines)[:200]}")
+        return {'open': [], 'high': [], 'low': [], 'close': [], 'volume': [], 'timestamps': []}
     opens, highs, lows, closes, volumes = [], [], [], [], []
     for k in klines:
-        opens.append(float(k[1]))
-        highs.append(float(k[2]))
-        lows.append(float(k[3]))
-        closes.append(float(k[4]))
-        volumes.append(float(k[5]))
+        try:
+            opens.append(float(k[1]))
+            highs.append(float(k[2]))
+            lows.append(float(k[3]))
+            closes.append(float(k[4]))
+            volumes.append(float(k[5]))
+        except (IndexError, ValueError, TypeError) as e:
+            print(f"[BINANCE] Kline parse error: {e} row={k}")
+            continue
     return {
         'open': opens, 'high': highs, 'low': lows,
         'close': closes, 'volume': volumes,
-        'timestamps': [int(k[0]) for k in klines]
+        'timestamps': [int(k[0]) for k in klines[:len(opens)]]
     }

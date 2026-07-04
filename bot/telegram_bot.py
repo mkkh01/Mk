@@ -247,4 +247,4 @@ def build_application() -> Application:
 
 def run_bot():
     app = build_application()
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
