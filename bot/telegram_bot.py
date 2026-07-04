@@ -275,5 +275,5 @@ def build_application() -> Application:
     return app
 
 def run_webhook(app: Application, url: str, port: int):
-    """Run bot with webhook. app.run_webhook handles set_webhook internally."""
-    app.run_webhook(listen="0.0.0.0", port=port, webhook_url=url, drop_pending_updates=True)
+    """Run bot with webhook."""
+    app.run_webhook(listen="0.0.0.0", port=port, url_path="webhook", webhook_url=url, drop_pending_updates=True)
