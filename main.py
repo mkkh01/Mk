@@ -70,6 +70,7 @@ def analysis_cycle():
 
                     # ── LIVE PRICE (ticker priority) ──
                     fetch_data_start(symbol)
+                    t_data_start = time.time()
                     live = get_live_price(symbol)
                     if live['price'] > 0:
                         update_price(symbol, live['price'])
@@ -83,6 +84,7 @@ def analysis_cycle():
 
                     # ── ORDER BOOK ──
                     order_book = get_order_book(symbol)
+                    t_data_ms = (time.time() - t_data_start) * 1000
                     fetch_data_done(symbol, len(klines) if isinstance(klines, list) else 0)
 
                     if not klines or len(klines) < 20:
@@ -90,7 +92,9 @@ def analysis_cycle():
                         continue
 
                     # ── PRECOMPUTE INDICATORS (once per coin/timeframe) ──
+                    t_ind_start = time.time()
                     indicators = precompute_indicators(klines)
+                    t_ind_ms = (time.time() - t_ind_start) * 1000
                     if indicators.get('atr', 0) > 0:
                         _log("📐", "INDICATOR",
                              f"{symbol}/{tf}: ATR={indicators['atr']:.8f} "
@@ -100,20 +104,25 @@ def analysis_cycle():
                     # Use live price in regime metrics if available
                     if live['price'] > 0:
                         from analysis.market_regime import classify_regime
-                        # classify_regime still uses kline prices for indicators;
-                        # live price updates the cache for display purposes
 
-                    # ── GENERATE SIGNAL ──
+                    # ── GENERATE SIGNAL (includes regime + strategies) ──
+                    t_gen_start = time.time()
                     result = generate_signal(symbol, tf, klines, order_book, dict(coin), indicators)
+                    t_gen_ms = (time.time() - t_gen_start) * 1000
 
                     # ── DETAILED REPORT (console only) ──
                     try:
+                        timing = {
+                            'Data Loading': t_data_ms,
+                            'Indicators': t_ind_ms,
+                            'Signal Generation': t_gen_ms,
+                        }
                         dbg = result.get('_debug', {})
                         report = generate_report(symbol, tf, klines, order_book,
                                                 result.get('regime', {}),
                                                 dbg.get('donchian_signal'),
                                                 dbg.get('order_flow_signal'),
-                                                dbg.get('decision', {}), {})
+                                                dbg.get('decision', {}), timing)
                         print(f"\n{report}")
                     except Exception:
                         pass
