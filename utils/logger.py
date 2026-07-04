@@ -7,8 +7,8 @@ Logs stored in Supabase + printed to console.
 import json
 import time
 from datetime import datetime
-import psycopg2
-import psycopg2.extras
+import psycopg
+import psycopg.extras
 
 # Will be imported after config
 DB_URL = None
@@ -29,7 +29,7 @@ def _log(level: str, component: str, message: str, details: dict = None):
 
     if DB_URL:
         try:
-            conn = psycopg2.connect(DB_URL)
+            conn = psycopg.connect(DB_URL)
             cur = conn.cursor()
             cur.execute(
                 """INSERT INTO logs (timestamp, level, component, message, details)

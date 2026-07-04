@@ -3,15 +3,15 @@ CTM Bot - Supabase Database Client
 Handles all CRUD operations for coins, signals, trades, and logs.
 """
 
-import psycopg2
-import psycopg2.extras
+import psycopg
+import psycopg.extras
 import json
 from datetime import datetime
 from config import SUPABASE_DB_URL
 
 def get_conn():
     """Get a database connection."""
-    return psycopg2.connect(SUPABASE_DB_URL)
+    return psycopg.connect(SUPABASE_DB_URL)
 
 def init_db():
     """Create all required tables if they don't exist."""
@@ -96,7 +96,7 @@ def init_db():
 def get_active_coins():
     """Get all active tracked coins."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor(row_factory=psycopg.rows.dict_row)
     cur.execute("SELECT * FROM tracked_coins WHERE is_active = TRUE")
     rows = cur.fetchall()
     cur.close()
@@ -160,7 +160,7 @@ def save_signal(signal_data: dict):
 def get_active_signals():
     """Get all active signals being monitored."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor(row_factory=psycopg.rows.dict_row)
     cur.execute("SELECT * FROM signals WHERE signal_status = 'ACTIVE' ORDER BY created_at DESC")
     rows = cur.fetchall()
     cur.close()
@@ -170,7 +170,7 @@ def get_active_signals():
 def close_signal(signal_id: int, status: str, exit_price: float):
     """Close a signal (TP/SL hit or cancelled)."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor(row_factory=psycopg.rows.dict_row)
 
     # Get signal data
     cur.execute("SELECT * FROM signals WHERE id = %s", (signal_id,))
@@ -213,7 +213,7 @@ def close_signal(signal_id: int, status: str, exit_price: float):
 def get_recent_signals(limit: int = 5):
     """Get recently generated signals."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor(row_factory=psycopg.rows.dict_row)
     cur.execute("SELECT * FROM signals ORDER BY created_at DESC LIMIT %s", (limit,))
     rows = cur.fetchall()
     cur.close()
@@ -223,7 +223,7 @@ def get_recent_signals(limit: int = 5):
 def get_recent_results(limit: int = 10):
     """Get recent trade results."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor(row_factory=psycopg.rows.dict_row)
     cur.execute("SELECT * FROM trade_results ORDER BY closed_at DESC LIMIT %s", (limit,))
     rows = cur.fetchall()
     cur.close()
@@ -233,7 +233,7 @@ def get_recent_results(limit: int = 10):
 def get_recent_logs(limit: int = 30):
     """Get recent system logs."""
     conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur = conn.cursor(row_factory=psycopg.rows.dict_row)
     cur.execute("SELECT * FROM logs ORDER BY timestamp DESC LIMIT %s", (limit,))
     rows = cur.fetchall()
     cur.close()
