@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 from config import TELEGRAM_BOT_TOKEN, TIMEFRAMES
 from db.supabase_client import (
-    get_active_coins, add_coin, remove_coin, get_all_coins,
+    get_active_coins, add_coin, remove_coin,
     get_recent_signals, get_active_signals as db_get_active_signals,
     get_recent_results, get_recent_logs
 )
