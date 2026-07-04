@@ -38,8 +38,9 @@ def _log(level: str, component: str, message: str, details: dict = None):
             conn.commit()
             cur.close()
             conn.close()
+            return log_entry
         except Exception as e:
-            print(f"[LOGGER ERROR] Failed to write to DB: {e}")
+            print(f"[LOGGER DB ERROR] {e}")
 
     return log_entry
 

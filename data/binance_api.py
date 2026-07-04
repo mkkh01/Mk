@@ -23,32 +23,36 @@ def get_order_book(symbol: str, limit: int = 20) -> dict:
     return resp.json()
 
 def get_24hr_ticker(symbol: str) -> dict:
-    """Get 24hr ticker + price. Falls back to simple price if 24hr fails."""
+    """Get 24hr ticker. Falls back to simple price, then errors."""
+    errors = []
+    for base in ['https://api.binance.com', 'https://api1.binance.com', 'https://api2.binance.com']:
+        try:
+            url = f"{base}/api/v3/ticker/24hr?symbol={symbol.upper()}"
+            resp = requests.get(url, timeout=8)
+            data = resp.json()
+            if 'lastPrice' in data:
+                return {
+                    'symbol': data['symbol'], 'price': float(data['lastPrice']),
+                    'change_pct': float(data.get('priceChangePercent', 0)),
+                    'high': float(data.get('highPrice', 0)),
+                    'low': float(data.get('lowPrice', 0)), 'volume': float(data.get('volume', 0)),
+                    '_ok': True
+                }
+            errors.append(f"{base}: HTTP={resp.status_code} msg={data.get('msg','?')}")
+        except Exception as e:
+            errors.append(f"{base}: {e}")
+    # Try simple price as last resort
     try:
-        url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr?symbol={symbol.upper()}"
-        resp = requests.get(url, timeout=10)
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}"
+        resp = requests.get(url, timeout=8)
         data = resp.json()
-        if 'lastPrice' in data:
-            return {
-                'symbol': data['symbol'],
-                'price': float(data['lastPrice']),
-                'change_pct': float(data.get('priceChangePercent', 0)),
-                'high': float(data.get('highPrice', 0)),
-                'low': float(data.get('lowPrice', 0)),
-                'volume': float(data.get('volume', 0))
-            }
-        print(f"[BINANCE 24hr] {symbol}: HTTP={resp.status_code} body={data}")
+        if 'price' in data:
+            return {'symbol': symbol.upper(), 'price': float(data['price']),
+                    'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0, '_ok': True}
     except Exception as e:
-        print(f"[BINANCE 24hr] {symbol}: error={e}")
-    # Fallback: simple price endpoint
-    try:
-        p = get_current_price(symbol)
-        if 'price' in p:
-            return {'symbol': symbol.upper(), 'price': float(p['price']),
-                    'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0}
-    except Exception as e:
-        print(f"[BINANCE price] {symbol}: error={e}")
-    return {'symbol': symbol.upper(), 'price': 0, 'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0}
+        errors.append(f"price: {e}")
+    return {'symbol': symbol.upper(), 'price': 0, 'change_pct': 0,
+            'high': 0, 'low': 0, 'volume': 0, '_ok': False, '_errors': ' | '.join(errors[-3:])}
 
 def get_all_prices(symbols: list) -> dict:
     """Get current prices for multiple symbols. Returns {symbol: price}"""
