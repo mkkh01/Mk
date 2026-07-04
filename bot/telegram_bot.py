@@ -93,7 +93,7 @@ async def show_my_coins(update: Update):
     msg = "📋 **عملاتي**\n\n"
     for c in coins:
         tfs = ', '.join(c['timeframes']) if c['timeframes'] else '1h'
-        msg += f"**{c['symbol']}**\n  ⏱ {tfs}\n  💰 رأس المال: {c['capital_percent']}%\n  ⚠️ المخاطرة: {c['risk_percent']}%\n\n"
+        msg += f"**{c['symbol']}**\n  ⏱ {tfs}\n  💰 رأس المال: {c['capital_value']} USDT\n  ⚠️ المخاطرة: {c['risk_percent']}%\n\n"
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_signals(update: Update):
@@ -179,19 +179,19 @@ async def add_coin_timeframes(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ أطر غير صالحة. حاول مجددًا:")
         return TIMEFRAMES_STATE
     context.user_data['new_coin']['timeframes'] = valid_tfs
-    await update.message.reply_text(f"✅ الأطر: {', '.join(valid_tfs)}\n\nأدخل نسبة رأس المال (مثال: 30):")
+    await update.message.reply_text(f"✅ الأطر: {', '.join(valid_tfs)}\n\nأدخل قيمة رأس المال بالـ USDT (مثال: 100):")
     return CAPITAL
 
 async def add_coin_capital(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         capital = float(update.message.text)
-        if capital <= 0 or capital > 100:
+        if capital <= 0 or capital > 100000:
             raise ValueError
     except:
         await update.message.reply_text("❌ أدخل رقمًا بين 1 و 100:")
         return CAPITAL
-    context.user_data['new_coin']['capital_percent'] = capital
-    await update.message.reply_text(f"✅ رأس المال: {capital}%\n\nأدخل نسبة المخاطرة (مثال: 2):")
+    context.user_data['new_coin']['capital_value'] = capital
+    await update.message.reply_text(f"✅ رأس المال: {capital} USDT\n\nأدخل نسبة المخاطرة (مثال: 2):")
     return RISK
 
 async def add_coin_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,12 +204,12 @@ async def add_coin_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return RISK
     coin = context.user_data['new_coin']
     coin['risk_percent'] = risk
-    add_coin(coin['symbol'], coin['timeframes'], coin['capital_percent'], coin['risk_percent'])
+    add_coin(coin['symbol'], coin['timeframes'], coin['capital_value'], coin['risk_percent'])
     await update.message.reply_text(
         f"✅ **تمت إضافة العملة!**\n\n"
         f"🔹 **{coin['symbol']}**\n"
         f"🔹 الأطر: {', '.join(coin['timeframes'])}\n"
-        f"🔹 رأس المال: {coin['capital_percent']}%\n"
+        f"🔹 رأس المال: {coin['capital_value']} USDT\n"
         f"🔹 المخاطرة: {coin['risk_percent']}%",
         reply_markup=get_main_keyboard(), parse_mode='Markdown')
     return ConversationHandler.END

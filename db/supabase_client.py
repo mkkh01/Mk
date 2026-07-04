@@ -22,13 +22,19 @@ def init_db():
             id SERIAL PRIMARY KEY,
             symbol VARCHAR(20) NOT NULL UNIQUE,
             timeframes TEXT[] NOT NULL DEFAULT '{"1h"}',
-            capital_percent REAL NOT NULL DEFAULT 30.0,
+            capital_value REAL NOT NULL DEFAULT 100.0,
             risk_percent REAL NOT NULL DEFAULT 2.0,
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
+    # Migration: rename capital_percent to capital_value if old schema exists
+    try:
+        cur.execute("ALTER TABLE tracked_coins RENAME COLUMN capital_percent TO capital_value")
+        conn.commit()
+    except:
+        conn.rollback()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS signals (
@@ -42,7 +48,7 @@ def init_db():
             take_profit2 REAL,
             position_size REAL NOT NULL,
             risk_percent REAL NOT NULL,
-            capital_percent REAL NOT NULL,
+            capital_value REAL NOT NULL,
             signal_status VARCHAR(20) DEFAULT 'PENDING',
             market_regime VARCHAR(30),
             regime_details JSONB DEFAULT '{}',
@@ -102,20 +108,20 @@ def get_active_coins():
     conn.close()
     return rows
 
-def add_coin(symbol: str, timeframes: list, capital_percent: float, risk_percent: float):
+def add_coin(symbol: str, timeframes: list, capital_value: float, risk_percent: float):
     """Add or update a tracked coin."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO tracked_coins (symbol, timeframes, capital_percent, risk_percent)
+        INSERT INTO tracked_coins (symbol, timeframes, capital_value, risk_percent)
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (symbol) DO UPDATE SET
             timeframes = EXCLUDED.timeframes,
-            capital_percent = EXCLUDED.capital_percent,
+            capital_value = EXCLUDED.capital_value,
             risk_percent = EXCLUDED.risk_percent,
             is_active = TRUE,
             updated_at = NOW()
-    """, (symbol.upper(), timeframes, capital_percent, risk_percent))
+    """, (symbol.upper(), timeframes, capital_value, risk_percent))
     conn.commit()
     cur.close()
     conn.close()
@@ -137,7 +143,7 @@ def save_signal(signal_data: dict):
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO signals (symbol, timeframe, strategy, entry_price, stop_loss,
-            take_profit1, take_profit2, position_size, risk_percent, capital_percent,
+            take_profit1, take_profit2, position_size, risk_percent, capital_value,
             signal_status, market_regime, regime_details)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
@@ -146,7 +152,7 @@ def save_signal(signal_data: dict):
         signal_data['entry_price'], signal_data['stop_loss'],
         signal_data['take_profit1'], signal_data.get('take_profit2'),
         signal_data['position_size'], signal_data['risk_percent'],
-        signal_data['capital_percent'], 'ACTIVE',
+        signal_data['capital_value'], 'ACTIVE',
         signal_data.get('market_regime', 'UNKNOWN'),
         json.dumps(signal_data.get('regime_details', {}))
     ))

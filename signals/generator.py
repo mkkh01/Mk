@@ -15,7 +15,7 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
         timeframe: Kline interval
         klines: Raw Binance kline data
         order_book: Raw Binance order book data
-        coin_config: {'symbol', 'capital_percent', 'risk_percent'}
+        coin_config: {'symbol', 'capital_value', 'risk_percent'}
     
     Returns:
         Full signal dict or None
@@ -41,19 +41,16 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
     
     signal = decision['signal']
     risk_percent = coin_config.get('risk_percent', 2.0)
-    capital_percent = coin_config.get('capital_percent', 30.0)
+    capital_value = coin_config.get('capital_value', 100.0)
     
     # Step 4: Position sizing (ATR-based)
     entry = signal['entry_price']
     stop_loss = signal['stop_loss']
     risk_per_trade = abs(entry - stop_loss)
     
-    # Position size = (capital * capital_percent% * risk_percent%) / risk_per_trade
-    # Assuming account balance from config or default
-    account_size = 1000  # TODO: make configurable
-    capital_amount = account_size * (capital_percent / 100)
-    risk_amount = capital_amount * (risk_percent / 100)
-    position_size = risk_amount / risk_per_trade if risk_per_trade > 0 else 0
+    # Position size = (capital_value * risk_percent%) / risk_per_trade
+    risk_amount_usd = capital_value * (risk_percent / 100)
+    position_size = risk_amount_usd / risk_per_trade if risk_per_trade > 0 else 0
     
     return {
         'symbol': symbol,
@@ -67,8 +64,8 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
         'take_profit2': round(signal['take_profit2'], 8) if signal.get('take_profit2') else None,
         'position_size': round(position_size, 8),
         'risk_percent': risk_percent,
-        'capital_percent': capital_percent,
-        'risk_amount': round(risk_amount, 2),
+        'capital_value': capital_value,
+        'risk_amount': round(risk_amount_usd, 2),
         'atr': round(signal.get('atr', 0), 8),
         'reason': signal.get('reason', ''),
         'regime': regime_data,

@@ -47,7 +47,7 @@ def analysis_cycle():
                             'take_profit2': result.get('take_profit2'),
                             'position_size': result['position_size'],
                             'risk_percent': result['risk_percent'],
-                            'capital_percent': result['capital_percent'],
+                            'capital_value': result['capital_value'],
                             'market_regime': result['regime']['regime'],
                             'regime_details': result['regime_details']
                         })
