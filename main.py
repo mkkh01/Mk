@@ -43,15 +43,17 @@ def analysis_cycle():
                     t0 = _time_module.time()
                     result = generate_signal(symbol, tf, klines, order_book, dict(coin))
                     timing = {'analysis': (_time_module.time() - t0) * 1000}
-                    # Generate detailed report
-                    dbg = result.get('_debug', {})
-                    report = generate_report(symbol, tf, klines, order_book,
-                                            result.get('regime', {}),
-                                            dbg.get('donchian_signal'),
-                                            dbg.get('order_flow_signal'),
-                                            dbg.get('decision', {}),
-                                            timing)
-                    _log("📋", "REPORT", f"\n{report}")
+                    try:
+                        dbg = result.get('_debug', {})
+                        report = generate_report(symbol, tf, klines, order_book,
+                                                result.get('regime', {}),
+                                                dbg.get('donchian_signal'),
+                                                dbg.get('order_flow_signal'),
+                                                dbg.get('decision', {}),
+                                                timing)
+                        _log("📋", "REPORT", f"\n{report}")
+                    except Exception as _re:
+                        error("REPORT", str(_re))
                     if result.get('has_signal'):
                         save_signal({
                             'symbol': symbol, 'timeframe': tf,

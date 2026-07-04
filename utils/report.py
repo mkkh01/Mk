@@ -26,9 +26,9 @@ def generate_report(symbol: str, timeframe: str, klines: list, order_book: dict,
 
     atr = calculate_atr(highs, lows, closes) if closes else 0
     adx_data = calculate_adx(highs, lows, closes) if closes else {}
-    ema20 = calculate_ema(closes, 20)[-1] if closes else 0
-    ema50 = calculate_ema(closes, 50)[-1] if len(closes) >= 50 else ema20
-    ema200 = calculate_ema(closes, 200)[-1] if len(closes) >= 200 else ema50
+    ema20 = (calculate_ema(closes, 20) or [0])[-1] if closes else 0
+    ema50 = (calculate_ema(closes, 50) or [0])[-1] if len(closes) >= 50 else ema20
+    ema200 = (calculate_ema(closes, 200) or [0])[-1] if len(closes) >= 200 else ema50
     rsi = calculate_rsi(closes)
     momentum = calculate_momentum(closes)
     volatility = calculate_volatility(closes)

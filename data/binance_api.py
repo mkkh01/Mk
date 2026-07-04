@@ -64,9 +64,12 @@ def get_all_prices(symbols: list) -> dict:
     """Get current prices for multiple symbols. Returns {symbol: price}"""
     url = f"{BINANCE_BASE_URL}/api/v3/ticker/price"
     resp = requests.get(url, timeout=10)
-    all_data = resp.json()
+    data = resp.json()
+    if not isinstance(data, list):
+        print(f"[BINANCE prices] Error: {data}")
+        return {}
     target_symbols = set(s.upper() for s in symbols)
-    return {item['symbol']: float(item['price']) for item in all_data if item['symbol'] in target_symbols}
+    return {item['symbol']: float(item['price']) for item in data if item['symbol'] in target_symbols}
 
 def extract_ohlcv(klines: list) -> dict:
     """Extract OHLCV arrays from raw kline data. Returns dict with lists of floats."""
