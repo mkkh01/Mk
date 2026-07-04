@@ -17,6 +17,7 @@ from utils.logger import (
     signal_generated, signal_sent, monitoring, tp_hit, sl_hit,
     error, cron_tick, cron_complete
 )
+from utils.health import start_health_server
 from bot.telegram_bot import run_bot
 
 
@@ -97,6 +98,9 @@ def main():
                 time.sleep(10)
 
     threading.Thread(target=analysis_loop, daemon=True).start()
+
+    # Health check server for Render Web Service (daemon thread, no signal handlers)
+    threading.Thread(target=start_health_server, daemon=True).start()
 
     print("Starting Telegram bot (main thread)...")
     run_bot()
