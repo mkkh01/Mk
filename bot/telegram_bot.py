@@ -35,18 +35,24 @@ def get_main_keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from utils.price_cache import get_all_cached_prices as _cp
+    from data.binance_api import get_api_status
     s = _sys_state()
     prices = _cp()
+    api = get_api_status()
     active_status = "🟢 نشط" if is_system_active() else "⏸️ متوقف"
+    api_status = "🟢 متصل" if api.get('online') else "🔴 محجوب"
     await update.message.reply_text(
-        f"🫡 **CTM Bot v2.0**\n\n"
+        f"🫡 **CTM Bot v2.2**\n\n"
+        f"⚡ الحالة: {active_status}\n"
+        f"📡 Binance API: {api_status}\n"
+        f"🛡️ قاطع: {'🔴 نشط' if s.get('circuit_breaker') else '🟢 معطل'}\n"
         f"📊 الدورات: {s['cycles']}\n"
         f"⏱️ آخر دورة: منذ {s['last_cycle_ago']}s\n"
         f"🪙 عملات: {s['coins']}\n"
         f"💵 أسعار مخزنة: {len(prices)}\n"
         f"⚠️ أخطاء: {s['errors']}\n"
-        f"⚡ الحالة: {active_status}\n"
-        f"🛡️ قاطع: {'🔴 نشط' if s.get('circuit_breaker') else '🟢 معطل'}\n\n"
+        f"🔄 فشل متتالي API: {api.get('consecutive_failures', 0)}\n"
+        f"🔗 API Base: {api.get('working_base', 'N/A')[-25:]}\n\n"
         f"اختر من القائمة:",
         reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
@@ -97,13 +103,20 @@ async def test_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """System health check."""
+    from data.binance_api import get_api_status
     st = _sys_state()
+    api = get_api_status()
     active = "🟢 نشط" if is_system_active() else "⏸️ متوقف"
+    api_ok = "🟢 متصل" if api.get('online') else "🔴 محجوب"
     cb = "🔴 مفعل" if st.get('circuit_breaker') else "🟢 معطل"
     reason = st.get('circuit_breaker_reason', '')
     await update.message.reply_text(
         f"🏥 **حالة النظام**\n\n"
         f"⚡ التشغيل: {active}\n"
+        f"📡 Binance API: {api_ok}\n"
+        f"🔄 فشل API متتالي: {api.get('consecutive_failures', 0)}\n"
+        f"🔗 API Base: {api.get('working_base', 'N/A')[-30:]}\n"
+        f"📊 طلبات: {api.get('total_requests', 0)} | فشل: {api.get('total_failures', 0)}\n"
         f"🛡️ قاطع الدائرة: {cb}\n"
         f"{'  ↳ ' + reason if reason else ''}\n"
         f"📊 الدورات: {st['cycles']}\n"
@@ -111,7 +124,7 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⚠️ أخطاء: {st['errors']}\n"
         f"⏱️ آخر دورة: منذ {st['last_cycle_ago']}s\n"
         f"⏱️ مدة الدورة: {st['duration']}s\n"
-        f"\nالإصدار: v2.1",
+        f"\nالإصدار: v2.2",
         parse_mode='Markdown'
     )
 

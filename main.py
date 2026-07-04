@@ -39,6 +39,13 @@ def analysis_cycle():
         tick_cycle(time.time() - start_time)
         return
 
+    # ── BINANCE API STATUS ──
+    from data.binance_api import get_api_status
+    api_status = get_api_status()
+    if api_status.get('consecutive_failures', 0) > 0:
+        _log("⚠️", "API", f"Binance API فشل متتالي: {api_status['consecutive_failures']} | "
+             f"آخر نجاح: {api_status.get('seconds_since_success', '?')}s")
+
     try:
         coins = get_active_coins()
         if not coins:
