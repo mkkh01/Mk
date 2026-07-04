@@ -10,9 +10,11 @@ import asyncio
 # Patch before importing telegram.ext to prevent AttributeError at runtime.
 if sys.version_info >= (3, 14):
     from telegram.ext._updater import Updater as _Updater
-    _slots = tuple(_Updater.__slots__) if hasattr(_Updater, '__slots__') else ()
-    if '__dict__' not in _slots:
-        _Updater.__slots__ = _slots + ('__dict__',)
+    _original_init = _Updater.__init__
+    def _patched_init(self, *args, **kwargs):
+        object.__setattr__(self, '__dict__', {})
+        _original_init(self, *args, **kwargs)
+    _Updater.__init__ = _patched_init
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
