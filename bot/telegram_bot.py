@@ -14,7 +14,7 @@ from db.supabase_client import (
     get_recent_signals, get_active_signals as db_get_active_signals,
     get_recent_results, get_recent_logs
 )
-from data.binance_api import get_all_prices as fetch_all_prices, get_24hr_ticker
+from data.binance_api import get_all_prices as fetch_all_prices
 
 (SYMBOL, TIMEFRAMES_STATE, CAPITAL, RISK) = range(4)
 
@@ -39,6 +39,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
+
+async def test_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test DB connectivity."""
+    import psycopg
+    from config import SUPABASE_DB_URL
+    results = []
+    try:
+        conn = psycopg.connect(SUPABASE_DB_URL)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM logs")
+        log_count = cur.fetchone()[0]
+        results.append(f"📜 سجلات: {log_count}")
+        cur.execute("SELECT COUNT(*) FROM tracked_coins")
+        coin_count = cur.fetchone()[0]
+        results.append(f"🪙 عملات: {coin_count}")
+        cur.execute("SELECT COUNT(*) FROM signals")
+        sig_count = cur.fetchone()[0]
+        results.append(f"📊 إشارات: {sig_count}")
+        cur.close()
+        conn.close()
+        results.append("✅ اتصال DB ناجح")
+    except Exception as e:
+        results.append(f"❌ DB: {e}")
+    await update.message.reply_text("\n".join(results))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -73,21 +97,17 @@ async def show_live_prices(update: Update):
         return
     symbols = [c['symbol'] for c in coins]
     try:
+        prices = fetch_all_prices(symbols)
         msg = "💰 **الأسعار الحية**\n\n"
         for sym in symbols:
-            try:
-                t = get_24hr_ticker(sym)
-                if t.get('_ok'):
-                    emoji = "🟢" if t['change_pct'] >= 0 else "🔴"
-                    msg += f"{emoji} **{t['symbol']}**: ${t['price']:.4f} ({t['change_pct']:+.2f}%)\n"
-                else:
-                    err = t.get('_errors', 'Unknown')
-                    msg += f"❓ **{sym}**: {err[:80]}\n"
-            except Exception as e:
-                msg += f"❓ **{sym}**: {str(e)[:80]}\n"
+            price = prices.get(sym.upper())
+            if price:
+                msg += f"🟢 **{sym}**: ${price:.4f}\n"
+            else:
+                msg += f"❓ **{sym}**: غير متاح\n"
         await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"❌ خطأ: {e}", reply_markup=get_main_keyboard())
+        await update.message.reply_text(f"❌ {e}", reply_markup=get_main_keyboard())
 
 async def show_my_coins(update: Update):
     coins = get_active_coins()
@@ -238,6 +258,7 @@ def build_application() -> Application:
     )
 
     app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('test', test_db))
     app.add_handler(conv_handler)
     app.add_handler(MessageHandler(filters.Regex(r"^حذف .+$"), handle_delete))
     app.add_handler(MessageHandler(filters.Regex("^رجوع$"), lambda u, c: start(u, c)))
