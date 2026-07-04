@@ -2,7 +2,18 @@
 CTM Bot - Telegram Interface
 10-button menu with conversations for adding coins.
 """
+import sys
 import asyncio
+
+# Python 3.14 fix: PTB v20.x Updater.__slots__ is missing __polling_cleanup_cb.
+# Python 3.14 enforces __slots__ strictly — annotated attrs not in slots fail.
+# Patch before importing telegram.ext to prevent AttributeError at runtime.
+if sys.version_info >= (3, 14):
+    from telegram.ext._updater import Updater as _Updater
+    _slots = tuple(_Updater.__slots__) if hasattr(_Updater, '__slots__') else ()
+    if '__polling_cleanup_cb' not in _slots:
+        _Updater.__slots__ = _slots + ('__polling_cleanup_cb',)
+
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, ConversationHandler,
