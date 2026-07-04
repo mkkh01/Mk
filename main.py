@@ -93,7 +93,7 @@ def analysis_cycle():
                     indicators = precompute_indicators(klines)
                     if indicators.get('atr', 0) > 0:
                         _log("📐", "INDICATOR",
-                             f"{symbol}/{tf}: ATR={indicators['atr']:.4f} "
+                             f"{symbol}/{tf}: ATR={indicators['atr']:.8f} "
                              f"RSI={indicators.get('rsi', 0):.1f} "
                              f"ADX={indicators.get('adx', {}).get('adx', 0):.1f}")
 

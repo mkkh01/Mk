@@ -50,7 +50,12 @@ def calculate_atr(highs: list, lows: list, closes: list, period: int = ATR_PERIO
         high_close = abs(highs[i] - closes[i-1])
         low_close = abs(lows[i] - closes[i-1])
         tr_values.append(max(high_low, high_close, low_close))
-    return _mean(tr_values[-period:])
+
+    # Safety floor: never return literal 0 (breaks position sizing)
+    atr = _mean(tr_values[-period:])
+    if atr <= 0 and closes:
+        atr = closes[-1] * 0.00001  # 0.001% of price as absolute floor
+    return atr
 
 def calculate_adx(highs: list, lows: list, closes: list, period: int = 14) -> dict:
     """Calculate ADX and DI+/DI-. Returns {adx, plus_di, minus_di, trending}"""
