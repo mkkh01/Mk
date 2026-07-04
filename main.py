@@ -172,6 +172,21 @@ def analysis_cycle():
                                                 dbg.get('order_flow_signal'),
                                                 dbg.get('decision', {}), timing)
                         print(f"\n{report}")
+
+                        # Also log analysis summary to Telegram buffer
+                        regime = result.get('regime', {}).get('regime', '?')
+                        metrics = result.get('regime', {}).get('metrics', {})
+                        has_sig = result.get('has_signal', False)
+                        d_status = '✅' if dbg.get('donchian_signal') else '❌'
+                        of_status = '✅' if dbg.get('order_flow_signal') else '❌'
+                        sig_line = '🎯 إشارة!' if has_sig else '⏳ لا إشارة'
+                        _log("📊", "REPORT",
+                             f"{symbol} {tf} | "
+                             f"سعر={metrics.get('price', 0):.4f} | "
+                             f"{regime} | "
+                             f"RSI={metrics.get('rsi', 0):.0f} ADX={metrics.get('adx', 0):.0f} | "
+                             f"Donchian={d_status} OrderFlow={of_status} | "
+                             f"{sig_line}")
                     except Exception:
                         pass
 
