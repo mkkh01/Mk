@@ -363,5 +363,87 @@ def build_application() -> Application:
 
 
 def run_webhook(app: Application, url: str, port: int):
-    app.run_webhook(listen="0.0.0.0", port=port, url_path="webhook",
-                    webhook_url=url, drop_pending_updates=True)
+    """Run bot with built-in HTTP server — webhook + root page + health."""
+    import asyncio, json, threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from telegram import Update
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, f, *a): pass
+        def _send(self, body, ct, code=200):
+            b = body.encode() if isinstance(body, str) else json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", len(b))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def do_GET(self):
+            if self.path in ("/", "/index.html"):
+                from utils.state import get_state as _gs
+                from data.binance_api import get_api_status as _as
+                st, api = _gs(), _as()
+                ok = api.get('online', False)
+                self._send(
+                    '<!DOCTYPE html><html dir=rtl><head><meta charset=utf-8>'
+                    '<meta name=viewport content="width=device-width,initial-scale=1">'
+                    '<title>CTM Bot v2.3</title>'
+                    '<style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:20px;background:#0d1117;color:#c9d1d9}'
+                    'h1{color:#58a6ff}.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin:12px 0}'
+                    '.g{color:#3fb950}.r{color:#f85149}.dim{color:#8b949e}td{padding:4px 8px}'
+                    '</style></head><body><h1>🫡 CTM Bot v2.3</h1>'
+                    '<div class=card><table>'
+                    f'<tr><td class=dim>الحالة</td><td class=g>🟢 يعمل</td></tr>'
+                    f'<tr><td class=dim>Binance API</td><td class={"g" if ok else "r"}>{"🟢 متصل" if ok else "🔴 محجوب"}</td></tr>'
+                    f'<tr><td class=dim>مصدر البيانات</td><td>{api.get("working_base","?")[-30:]}</td></tr>'
+                    f'<tr><td class=dim>فشل متتالي</td><td>{api.get("consecutive_failures",0)}</td></tr>'
+                    f'<tr><td class=dim>الدورات</td><td>{st["cycles"]}</td></tr>'
+                    f'<tr><td class=dim>العملات</td><td>{st["coins"]}</td></tr>'
+                    f'<tr><td class=dim>أخطاء</td><td>{st["errors"]}</td></tr>'
+                    f'<tr><td class=dim>آخر دورة</td><td>منذ {st["last_cycle_ago"]}s | {st["duration"]}s</td></tr>'
+                    '</table></div>'
+                    '<p class=dim style=text-align:center>Telegram: @CTM_CopyTrading_bot | Health: /health</p>'
+                    '</body></html>',
+                    "text/html; charset=utf-8")
+            elif self.path == "/health":
+                from utils.state import get_state as _gs
+                st = _gs()
+                self._send({"status":"ok","v":"2.3","cycles":st["cycles"],"coins":st["coins"]}, "application/json")
+            else:
+                self.send_response(404); self.end_headers()
+
+        def do_POST(self):
+            if self.path == "/webhook":
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = self.rfile.read(length)
+                    update = Update.de_json(json.loads(body), app.bot)
+                    app.update_queue.put_nowait(update)
+                except Exception:
+                    pass
+                self.send_response(200); self.end_headers()
+            else:
+                self.send_response(404); self.end_headers()
+
+    server = HTTPServer(("0.0.0.0", port), Handler)
+
+    async def start():
+        await app.initialize()
+        await app.bot.set_webhook(url=url, drop_pending_updates=True)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start())
+
+    async def process():
+        while True:
+            try:
+                update = await app.update_queue.get()
+                await app.process_update(update)
+            except Exception:
+                pass
+    loop.create_task(process())
+
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print(f"🌐 http://0.0.0.0:{port}/ | /health | /webhook")
+    loop.run_forever()
