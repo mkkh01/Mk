@@ -87,6 +87,29 @@ def cryptocompare_price(symbol: str) -> float | None:
 
 
 # ═══════════════════════════════════════════════
+#  ORDER BOOK PROVIDER
+# ═══════════════════════════════════════════════
+
+def bybit_orderbook(symbol: str, limit: int = 20) -> dict | None:
+    """Bybit order book — returns Binance-compatible format."""
+    try:
+        data = _get(
+            f"https://api.bybit.com/v5/market/orderbook?category=spot&symbol={symbol.upper()}&limit={limit}",
+            timeout=5
+        )
+        if data and data.get('retCode') == 0:
+            result = data['result']
+            # Convert Bybit format to Binance format
+            return {
+                'bids': [[b[0], b[1]] for b in result.get('b', [])],
+                'asks': [[a[0], a[1]] for a in result.get('a', [])],
+            }
+    except Exception:
+        pass
+    return None
+
+
+# ═══════════════════════════════════════════════
 #  CANDLE / KLINES PROVIDERS
 # ═══════════════════════════════════════════════
 

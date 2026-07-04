@@ -41,9 +41,12 @@ def analysis_cycle():
         return
 
     # ── BINANCE API STATUS ──
-    from data.binance_api import get_api_status
-    api_status = get_api_status()
-    if api_status.get('consecutive_failures', 0) > 0:
+    from data.binance_api import get_api_status as _api_check
+    api_status = _api_check()
+    binance_dead = api_status.get('consecutive_failures', 0) >= 3
+    if binance_dead:
+        _log("⚠️", "API", f"Binance ميت (فشل {api_status['consecutive_failures']} مرة) — استخدام Bybit/KuCoin مباشرة")
+    elif api_status.get('consecutive_failures', 0) > 0:
         _log("⚠️", "API", f"Binance API فشل متتالي: {api_status['consecutive_failures']} | "
              f"آخر نجاح: {api_status.get('seconds_since_success', '?')}s")
 
@@ -76,26 +79,36 @@ def analysis_cycle():
                 try:
                     analysis_start(symbol, tf)
 
-                    # ── LIVE PRICE (multi-source fallback) ──
+                    # ── LIVE PRICE (multi-source, skip dead Binance) ──
                     fetch_data_start(symbol)
                     t_data_start = time.time()
                     
-                    # Try Binance first, fall back to Bybit/KuCoin/CoinGecko/CryptoCompare
-                    live = get_price_any_source(symbol, binance_fn=get_live_price)
+                    binance_price_fn = None if binance_dead else get_live_price
+                    live = get_price_any_source(symbol, binance_fn=binance_price_fn)
                     if live['price'] > 0:
                         update_price(symbol, live['price'])
                         _log("💵", "DATA",
                              f"{symbol}: سعر حي {live['price']:.6f} (المصدر: {live['source']})")
                     else:
                         _log("⚠️", "DATA", f"{symbol}: فشل جميع مصادر الأسعار")
-                    time.sleep(0.1)
+                    time.sleep(0.05)
 
-                    # ── KLINES (multi-source fallback) ──
-                    klines = get_klines_any_source(symbol, tf, limit=100, binance_fn=get_klines)
-                    time.sleep(0.1)
+                    # ── KLINES (multi-source, skip dead Binance) ──
+                    binance_klines_fn = None if binance_dead else get_klines
+                    klines = get_klines_any_source(symbol, tf, limit=100, binance_fn=binance_klines_fn)
+                    time.sleep(0.05)
 
-                    # ── ORDER BOOK ──
+                    # ── ORDER BOOK (multi-source) ──
                     order_book = get_order_book(symbol)
+                    # If empty, try Bybit
+                    if (not order_book.get('bids') or not order_book.get('asks')) and not binance_dead:
+                        pass  # Binance might recover
+                    if not order_book.get('bids') or not order_book.get('asks'):
+                        from data.price_providers import bybit_orderbook
+                        ob_alt = bybit_orderbook(symbol)
+                        if ob_alt:
+                            order_book = ob_alt
+                            _log("📖", "DATA", f"{symbol}: Order book من Bybit")
                     t_data_ms = (time.time() - t_data_start) * 1000
 
                     # Log data integrity

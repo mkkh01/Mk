@@ -81,8 +81,16 @@ def select_strategy(regime_data: dict, donchian_signal: dict | None,
             print(f"[SELECTOR] {entry.name} evaluator failed: {e}")
             continue
 
-    # Default: No trade
-    reason = f'No trade: regime={regime}, Donchian={"Yes" if donchian_signal else "No"}, OrderFlow={"Yes" if order_flow_signal else "No"}'
+    # Default: No trade — show data quality info
+    d_status = 'No'
+    of_status = 'No'
+    if donchian_signal:
+        d_status = 'Yes' if not donchian_signal.get('data_error') else 'ERR'
+    if order_flow_signal:
+        of_status = 'Yes' if not order_flow_signal.get('data_error') else 'ERR'
+    reason = f'No trade: regime={regime}, Donchian={d_status}, OrderFlow={of_status}'
+    if d_status == 'ERR' or of_status == 'ERR':
+        reason += ' (data error — check API connectivity)'
     if regime == MarketRegime.LOW_VOLATILITY:
         reason += f', confidence={confidence:.2f}'
     return {'selected_strategy': None, 'signal': None, 'reason': reason}
