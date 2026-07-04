@@ -1,16 +1,19 @@
 # CTM Bot - Configuration
+# v2.0 — secrets loaded from environment variables
 import os
+from dotenv import load_dotenv
+
+load_dotenv()  # Load .env file if present
 
 # === Telegram ===
-TELEGRAM_BOT_TOKEN = "8881069774:AAGGbcemdV6_6fobmw04Pd6gA40PKG7rD3A"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # === Supabase ===
-SUPABASE_URL = "https://lvvcbqqtjygqlxyhiabm.supabase.co"
-SUPABASE_DB_URL = "postgresql://postgres.lvvcbqqtjygqlxyhiabm:1392e9djdhwjdjjdnw@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "")
 
 # === Binance (Public API - no auth needed) ===
-BINANCE_BASE_URL = "https://api.binance.com"
-BINANCE_FUTURES_URL = "https://fapi.binance.com"
+BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
 
 # === Strategy Parameters ===
 DONCHIAN_PERIOD = 20          # Donchian channel lookback

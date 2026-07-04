@@ -1,68 +1,88 @@
-"""Strategy Selection Engine - Decides optimal strategy based on market conditions."""
+"""Strategy Selection Engine — priority-chain pattern for extensibility."""
 from config import MarketRegime
 
-def select_strategy(regime_data: dict, donchian_signal: dict | None, order_flow_signal: dict | None) -> dict | None:
+
+class StrategyEntry:
+    """A strategy with a priority and evaluation function."""
+
+    def __init__(self, name: str, priority: int, evaluator, condition=None):
+        self.name = name
+        self.priority = priority  # lower = higher priority
+        self.evaluator = evaluator  # fn(regime, donchian_signal, order_flow_signal, indicators) -> signal|None
+        self.condition = condition  # optional fn(regime_data) -> bool
+
+
+# ── Strategy definitions ──
+
+def _trend_following_long(regime, donchian, order_flow, indicators):
+    if regime in [MarketRegime.TREND_UP, MarketRegime.BREAKOUT] and donchian:
+        return donchian
+
+
+def _trend_following_short(regime, donchian, order_flow, indicators):
+    if regime == MarketRegime.TREND_DOWN and donchian:
+        return donchian
+
+
+def _order_flow_range(regime, donchian, order_flow, indicators):
+    if regime in [MarketRegime.HIGH_VOLATILITY, MarketRegime.RANGE] and order_flow:
+        return order_flow
+
+
+def _order_flow_override(regime, donchian, order_flow, indicators):
+    if regime == MarketRegime.TREND_UP and order_flow and not donchian:
+        of = order_flow.get('order_flow', {})
+        if of.get('volume_ratio', 1) > 2.5:
+            return order_flow
+
+
+# Ordered by priority (lower = checked first)
+STRATEGY_CHAIN = [
+    StrategyEntry('trend_following_long',  10, _trend_following_long),
+    StrategyEntry('trend_following_short', 20, _trend_following_short),
+    StrategyEntry('order_flow_range',      30, _order_flow_range),
+    StrategyEntry('order_flow_override',   40, _order_flow_override),
+]
+
+# Blocked regimes
+BLOCKED_REGIMES = {MarketRegime.CAPITULATION, MarketRegime.DISTRIBUTION}
+
+
+def select_strategy(regime_data: dict, donchian_signal: dict | None,
+                    order_flow_signal: dict | None) -> dict:
     """
-    Select the best strategy for current market conditions.
-    
-    Decision tree:
-    - TREND_UP/BREAKOUT + Donchian breakout → Trend Following (highest priority)
-    - TREND_UP with no Donchian + strong Order Flow → Liquidity
-    - CAPITULATION → No trade (wait for stabilization)
-    - RANGE/HIGH_VOLATILITY → Order Flow only
-    - TREND_DOWN + Donchian → Trend Following (SHORT)
-    - LOW_VOLATILITY → Wait for clearer signals
+    Select the best strategy using priority-chain pattern.
+    Easily extensible: add a new StrategyEntry to STRATEGY_CHAIN.
     """
     regime = regime_data.get('regime', '')
     confidence = regime_data.get('confidence', 0)
-    
-    decision = {
-        'selected_strategy': None,
-        'signal': None,
-        'reason': ''
-    }
-    
-    # Blocker: extreme conditions
-    if regime == MarketRegime.CAPITULATION:
-        decision['reason'] = f"No trade: CAPITULATION detected. Waiting for stabilization."
-        return decision
-    
-    if regime == MarketRegime.DISTRIBUTION:
-        decision['reason'] = f"No trade: DISTRIBUTION phase. Bearish divergence."
-        return decision
-    
-    # Priority 1: Trend Following in trending markets
-    if regime in [MarketRegime.TREND_UP, MarketRegime.BREAKOUT] and donchian_signal:
-        decision['selected_strategy'] = donchian_signal['strategy']
-        decision['signal'] = donchian_signal
-        decision['reason'] = f"Priority 1 — Trend Following selected: {regime} with confirmed Donchian breakout."
-        return decision
-    
-    if regime == MarketRegime.TREND_DOWN and donchian_signal:
-        decision['selected_strategy'] = donchian_signal['strategy']
-        decision['signal'] = donchian_signal
-        decision['reason'] = f"Trend Following (SHORT) selected: {regime} with Donchian breakdown."
-        return decision
-    
-    # Priority 2: Order Flow for range/high vol
-    if regime in [MarketRegime.HIGH_VOLATILITY, MarketRegime.RANGE] and order_flow_signal:
-        decision['selected_strategy'] = order_flow_signal['strategy']
-        decision['signal'] = order_flow_signal
-        decision['reason'] = f"Priority 2 — Order Flow selected: {regime} with confirmed order flow signal."
-        return decision
-    
-    # Priority 3: Order Flow as secondary in trending
-    if regime == MarketRegime.TREND_UP and order_flow_signal and not donchian_signal:
-        if order_flow_signal.get('order_flow', {}).get('volume_ratio', 1) > 2.5:
-            decision['selected_strategy'] = order_flow_signal['strategy']
-            decision['signal'] = order_flow_signal
-            decision['reason'] = f"Strong order flow override in TREND_UP (no Donchian breakout)."
-            return decision
-    
+
+    # Guard: blocked regimes
+    if regime in BLOCKED_REGIMES:
+        return {
+            'selected_strategy': None, 'signal': None,
+            'reason': f'No trade: {regime} regime — waiting for stabilization.'
+        }
+
+    # Evaluate chain in priority order
+    sorted_chain = sorted(STRATEGY_CHAIN, key=lambda s: s.priority)
+    for entry in sorted_chain:
+        if entry.condition and not entry.condition(regime_data):
+            continue
+        try:
+            signal = entry.evaluator(regime, donchian_signal, order_flow_signal, None)
+            if signal:
+                return {
+                    'selected_strategy': signal.get('strategy', entry.name),
+                    'signal': signal,
+                    'reason': f'Strategy "{entry.name}" matched (priority {entry.priority}) — regime: {regime}'
+                }
+        except Exception as e:
+            print(f"[SELECTOR] {entry.name} evaluator failed: {e}")
+            continue
+
     # Default: No trade
+    reason = f'No trade: regime={regime}, Donchian={"Yes" if donchian_signal else "No"}, OrderFlow={"Yes" if order_flow_signal else "No"}'
     if regime == MarketRegime.LOW_VOLATILITY:
-        decision['reason'] = f"No trade: LOW_VOLATILITY. Insufficient signal strength. Confidence: {confidence:.2f}"
-    else:
-        decision['reason'] = f"No trade: No strategy matched for regime {regime}. Donchian: {'Yes' if donchian_signal else 'No'}, OrderFlow: {'Yes' if order_flow_signal else 'No'}"
-    
-    return decision
+        reason += f', confidence={confidence:.2f}'
+    return {'selected_strategy': None, 'signal': None, 'reason': reason}

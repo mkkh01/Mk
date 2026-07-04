@@ -1,6 +1,7 @@
 """
 CTM Bot - Telegram Interface
 10-button menu with conversations for adding coins.
+Uses centralized state from utils/state.
 """
 import asyncio
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -10,6 +11,7 @@ from telegram.ext import (
 )
 from config import TELEGRAM_BOT_TOKEN, TIMEFRAMES
 from utils.logger import get_buffer_logs
+from utils.state import pause_system, resume_system, is_system_active, get_state as _sys_state
 from db.supabase_client import (
     get_active_coins, add_coin, remove_coin,
     get_recent_signals, get_active_signals as db_get_active_signals,
@@ -23,33 +25,35 @@ MAIN_KEYBOARD = [
     ["📋 عملاتي", "🗑️ حذف عملة"],
     ["📊 الإشارات", "📈 الصفقات"],
     ["📉 النتائج", "📜 السجلات"],
-    ["⏸️ إيقاف", "▶️ تشغيل"]
+    ["⏸️ إيقاف", "▶️ تشغيل"],
 ]
+
 
 def get_main_keyboard():
     return ReplyKeyboardMarkup(MAIN_KEYBOARD, resize_keyboard=True)
 
-system_active = True
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from utils.state import get_state as _gs
     from utils.price_cache import get_all_cached_prices as _cp
-    s = _gs()
+    s = _sys_state()
     prices = _cp()
+    active_status = "🟢 نشط" if is_system_active() else "⏸️ متوقف"
     await update.message.reply_text(
-        f"🫡 **CTM Bot v1.0**\n\n"
+        f"🫡 **CTM Bot v2.0**\n\n"
         f"📊 الدورات: {s['cycles']}\n"
         f"⏱️ آخر دورة: منذ {s['last_cycle_ago']}s\n"
         f"🪙 عملات: {s['coins']}\n"
         f"💵 أسعار مخزنة: {len(prices)}\n"
-        f"⚠️ أخطاء: {s['errors']}\n\n"
+        f"⚠️ أخطاء: {s['errors']}\n"
+        f"⚡ الحالة: {active_status}\n"
+        f"🛡️ قاطع: {'🔴 نشط' if s.get('circuit_breaker') else '🟢 معطل'}\n\n"
         f"اختر من القائمة:",
         reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
 
+
 async def test_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Test DB connectivity."""
     import psycopg
     from config import SUPABASE_DB_URL
     results = []
@@ -70,7 +74,26 @@ async def test_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results.append("✅ اتصال DB ناجح")
     except Exception as e:
         results.append(f"❌ DB: {e}")
+
+    # Add risk summary
+    try:
+        from utils.risk_manager import get_portfolio_summary
+        ps = get_portfolio_summary()
+        results.append(f"\n📊 **ملخص المخاطر:**")
+        results.append(f"🪙 عملات: {ps['coins_count']}")
+        results.append(f"💵 رأس المال: ${ps['total_capital']:.0f}")
+        results.append(f"📈 صفقات نشطة: {ps['active_trades']}")
+        results.append(f"⚠️ تعرض: {ps['exposure_pct']}%")
+        daily = ps.get('daily_pnl')
+        if daily is not None:
+            results.append(f"📅 ربح يومي: ${daily:+.2f}")
+        results.append(f"🔻 خسائر متتالية: {ps['consecutive_losses']}")
+        results.append(f"🎯 Win Rate: {ps['win_rate']}%")
+    except Exception as e:
+        results.append(f"⚠️ ملخص المخاطر: {e}")
+
     await update.message.reply_text("\n".join(results))
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -89,14 +112,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "🗑️ حذف عملة":
         await show_delete_menu(update)
     elif text == "⏸️ إيقاف":
-        global system_active
-        system_active = False
-        await update.message.reply_text("⏸️ تم إيقاف توليد الإشارات.", reply_markup=get_main_keyboard())
+        pause_system()
+        await update.message.reply_text("⏸️ تم إيقاف توليد الإشارات وتحليل السوق.",
+                                        reply_markup=get_main_keyboard())
     elif text == "▶️ تشغيل":
-        system_active = True
-        await update.message.reply_text("▶️ تم تشغيل النظام.", reply_markup=get_main_keyboard())
+        resume_system()
+        await update.message.reply_text("▶️ تم تشغيل النظام — جاري استئناف التحليل.",
+                                        reply_markup=get_main_keyboard())
     elif text == "رجوع":
         await update.message.reply_text("القائمة الرئيسية:", reply_markup=get_main_keyboard())
+
 
 async def show_live_prices(update: Update):
     from utils.price_cache import get_price
@@ -116,6 +141,7 @@ async def show_live_prices(update: Update):
             msg += f"⏳ **{sym}**: انتظار أول تحليل...\n"
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
+
 async def show_my_coins(update: Update):
     coins = get_active_coins()
     if not coins:
@@ -126,6 +152,7 @@ async def show_my_coins(update: Update):
         tfs = ', '.join(c['timeframes']) if c['timeframes'] else '1h'
         msg += f"**{c['symbol']}**\n  ⏱ {tfs}\n  💰 رأس المال: {c['capital_value']} USDT\n  ⚠️ المخاطرة: {c['risk_percent']}%\n\n"
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+
 
 async def show_signals(update: Update):
     signals = get_recent_signals(10)
@@ -138,6 +165,7 @@ async def show_signals(update: Update):
         msg += f"{status_emoji} **{s['symbol']}** ({s['timeframe']})\n  دخول: {s['entry_price']:.4f} | وقف: {s['stop_loss']:.4f}\n  هدف: {s['take_profit1']:.4f}\n\n"
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
+
 async def show_active_trades(update: Update):
     trades = db_get_active_signals()
     if not trades:
@@ -147,6 +175,7 @@ async def show_active_trades(update: Update):
     for t in trades:
         msg += f"🔵 **{t['symbol']}** ({t['timeframe']})\n  دخول: {t['entry_price']:.4f}\n  🛑 SL: {t['stop_loss']:.4f}\n  🎯 TP: {t['take_profit1']:.4f}\n\n"
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+
 
 async def show_results(update: Update):
     results = get_recent_results(10)
@@ -165,6 +194,7 @@ async def show_results(update: Update):
     win_rate = (wins / len(results) * 100) if results else 0
     msg += f"📊 Win Rate: {win_rate:.0f}% | Total PnL: ${total_pnl:+.2f}"
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+
 
 async def show_logs(update: Update):
     logs = get_buffer_logs(50)
@@ -185,6 +215,7 @@ async def show_logs(update: Update):
         msg = msg[:3800] + "\n..."
     await update.message.reply_text(msg, reply_markup=get_main_keyboard())
 
+
 async def show_delete_menu(update: Update):
     coins = get_active_coins()
     if not coins:
@@ -192,22 +223,33 @@ async def show_delete_menu(update: Update):
         return
     keyboard = [[KeyboardButton(f"حذف {c['symbol']}")] for c in coins]
     keyboard.append([KeyboardButton("رجوع")])
-    await update.message.reply_text("اختر العملة المراد حذفها:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    await update.message.reply_text("اختر العملة المراد حذفها:",
+                                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+
 
 async def handle_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = update.message.text.replace("حذف ", "").strip()
     remove_coin(symbol)
-    await update.message.reply_text(f"🗑️ تم حذف **{symbol}**", reply_markup=get_main_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text(f"🗑️ تم حذف **{symbol}**", reply_markup=get_main_keyboard(),
+                                    parse_mode='Markdown')
+
+
+# ── Add Coin Conversation ──
 
 async def add_coin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("➕ **إضافة عملة جديدة**\n\nأرسل رمز العملة (مثال: BTCUSDT):", parse_mode='Markdown')
+    await update.message.reply_text("➕ **إضافة عملة جديدة**\n\nأرسل رمز العملة (مثال: BTCUSDT):",
+                                    parse_mode='Markdown')
     return SYMBOL
+
 
 async def add_coin_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = update.message.text.strip().upper()
     context.user_data['new_coin'] = {'symbol': symbol}
-    await update.message.reply_text(f"✅ الرمز: **{symbol}**\n\nاختر الأطر الزمنية (مفصولة بفواصل):\nمثال: `15m, 1h, 4h`", parse_mode='Markdown')
+    await update.message.reply_text(
+        f"✅ الرمز: **{symbol}**\n\nاختر الأطر الزمنية (مفصولة بفواصل):\nمثال: `15m, 1h, 4h`",
+        parse_mode='Markdown')
     return TIMEFRAMES_STATE
+
 
 async def add_coin_timeframes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tfs = [t.strip() for t in update.message.text.split(',')]
@@ -216,8 +258,10 @@ async def add_coin_timeframes(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ أطر غير صالحة. حاول مجددًا:")
         return TIMEFRAMES_STATE
     context.user_data['new_coin']['timeframes'] = valid_tfs
-    await update.message.reply_text(f"✅ الأطر: {', '.join(valid_tfs)}\n\nأدخل قيمة رأس المال بالـ USDT (مثال: 100):")
+    await update.message.reply_text(
+        f"✅ الأطر: {', '.join(valid_tfs)}\n\nأدخل قيمة رأس المال بالـ USDT (مثال: 100):")
     return CAPITAL
+
 
 async def add_coin_capital(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -228,8 +272,10 @@ async def add_coin_capital(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ أدخل رقمًا بين 1 و 100:")
         return CAPITAL
     context.user_data['new_coin']['capital_value'] = capital
-    await update.message.reply_text(f"✅ رأس المال: {capital} USDT\n\nأدخل نسبة المخاطرة (مثال: 2):")
+    await update.message.reply_text(
+        f"✅ رأس المال: {capital} USDT\n\nأدخل نسبة المخاطرة (مثال: 2):")
     return RISK
+
 
 async def add_coin_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -251,12 +297,13 @@ async def add_coin_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard(), parse_mode='Markdown')
     return ConversationHandler.END
 
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تم الإلغاء.", reply_markup=get_main_keyboard())
     return ConversationHandler.END
 
+
 def build_application() -> Application:
-    """Build and return the Telegram Application."""
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -279,6 +326,7 @@ def build_application() -> Application:
 
     return app
 
+
 def run_webhook(app: Application, url: str, port: int):
-    """Run bot with webhook."""
-    app.run_webhook(listen="0.0.0.0", port=port, url_path="webhook", webhook_url=url, drop_pending_updates=True)
+    app.run_webhook(listen="0.0.0.0", port=port, url_path="webhook",
+                    webhook_url=url, drop_pending_updates=True)

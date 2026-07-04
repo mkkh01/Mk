@@ -1,29 +1,37 @@
-"""Signal Generator - Creates trade signals with position sizing calculation."""
-from config import DEFAULT_RR_RATIO
+"""Signal Generator — uses pre-computed indicators for efficiency."""
 from strategies.trend_following import check_donchian_signal
 from strategies.liquidity import check_order_flow_signal
 from strategies.selector import select_strategy
 from analysis.market_regime import classify_regime
 from utils.logger import market_regime as _log_regime, strategy_check, strategy_selected
 
+
 def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
-                    coin_config: dict) -> dict | None:
+                    coin_config: dict, indicators: dict = None) -> dict:
+    """
+    Generate trade signal. Uses pre-computed indicators if provided.
+    
+    Args:
+        indicators: Pre-computed {'donchian', 'atr', 'adx', 'rsi', 'ema20', 'ema50', ...}
+    """
     if not klines:
-        return {'symbol': symbol, 'timeframe': timeframe, 'has_signal': False,
-                'regime': {'regime': 'NO_DATA'}, 'reason': 'No kline data'}
+        return {
+            'symbol': symbol, 'timeframe': timeframe, 'has_signal': False,
+            'regime': {'regime': 'NO_DATA'}, 'reason': 'No kline data'
+        }
 
     # Step 1: Classify market regime
     regime_data = classify_regime(klines, order_book)
     _log_regime(symbol, regime_data['regime'], regime_data)
 
-    # Step 2: Check individual strategies
+    # Step 2: Check strategies with pre-computed indicators
     strategy_check(symbol, 'Trend Following (Donchian)')
-    donchian_signal = check_donchian_signal(klines, regime_data)
+    donchian_signal = check_donchian_signal(klines, regime_data, indicators)
 
     strategy_check(symbol, 'Liquidity (Order Flow)')
-    order_flow_signal = check_order_flow_signal(order_book, regime_data, klines)
+    order_flow_signal = check_order_flow_signal(order_book, regime_data, klines, indicators)
 
-    # Step 3: Strategy selection
+    # Step 3: Strategy selection (priority-chain pattern)
     decision = select_strategy(regime_data, donchian_signal, order_flow_signal)
     if decision.get('selected_strategy'):
         strategy_selected(symbol, decision['selected_strategy'], decision['reason'])
@@ -70,4 +78,34 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
             'order_flow_signal': order_flow_signal,
             'decision': decision
         }
+    }
+
+
+# ── Pre-compute indicators once per coin ──
+
+def precompute_indicators(klines: list) -> dict:
+    """Calculate all indicators once, pass to strategies."""
+    from analysis.indicators import (
+        calculate_donchian, calculate_atr, calculate_adx,
+        calculate_ema, calculate_rsi, calculate_volatility, calculate_momentum
+    )
+    from data.binance_api import extract_ohlcv
+
+    ohlcv = extract_ohlcv(klines)
+    closes = ohlcv['close']
+    highs = ohlcv['high']
+    lows = ohlcv['low']
+
+    if not closes:
+        return {}
+
+    return {
+        'donchian': calculate_donchian(highs, lows),
+        'atr': calculate_atr(highs, lows, closes),
+        'adx': calculate_adx(highs, lows, closes),
+        'rsi': calculate_rsi(closes),
+        'volatility': calculate_volatility(closes),
+        'momentum': calculate_momentum(closes),
+        'ema20': (calculate_ema(closes, 20) or [0])[-1] if closes else 0,
+        'ema50': (calculate_ema(closes, 50) or [0])[-1] if len(closes) >= 50 else 0,
     }
