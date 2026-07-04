@@ -20,6 +20,8 @@ from db.supabase_client import (
 
 (SYMBOL, TIMEFRAMES_STATE, CAPITAL, RISK) = range(4)
 
+(SYMBOL, TIMEFRAMES_STATE, CAPITAL, RISK) = range(4)
+
 MAIN_KEYBOARD = [
     ["💰 أسعار حية", "➕ إضافة عملة"],
     ["📋 عملاتي", "🗑️ حذف عملة"],

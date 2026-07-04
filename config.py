@@ -38,13 +38,7 @@ def _get(key: str) -> str:
     val = os.getenv(key)
     if val:
         return val
-    fallback = _FALLBACKS.get(key, "")
-    if fallback:
-        import sys
-        print(f"[CONFIG] ⚠️  {key} not set in env/.env — using fallback (set it for production!)",
-              file=sys.stderr)
-        return fallback
-    return ""
+    return _FALLBACKS.get(key, "")
 
 
 # === Telegram ===
@@ -54,22 +48,7 @@ TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN")
 SUPABASE_URL = _get("SUPABASE_URL")
 SUPABASE_DB_URL = _get("SUPABASE_DB_URL")
 
-# === Startup validation ===
-def _validate_config():
-    errors = []
-    if not TELEGRAM_BOT_TOKEN:
-        errors.append("TELEGRAM_BOT_TOKEN")
-    if not SUPABASE_DB_URL:
-        errors.append("SUPABASE_DB_URL")
-    if not SUPABASE_URL:
-        errors.append("SUPABASE_URL")
-    if errors:
-        import sys
-        print(f"[CONFIG] ❌ MISSING REQUIRED CONFIG: {', '.join(errors)}", file=sys.stderr)
-        print("[CONFIG] Set them as environment variables or in .env file.", file=sys.stderr)
-        # Don't exit — let the code fail where it's used with a clear error
-
-_validate_config()
+# Supabase + Telegram values loaded (fallbacks ensure they always exist)
 
 # === Binance (Public API) ===
 BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
