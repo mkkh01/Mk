@@ -29,7 +29,7 @@ def _log(level: str, component: str, message: str, details: dict = None):
         'timestamp': datetime.now(), 'level': level,
         'component': component, 'message': message
     })
-    if len(_LOGS_BUFFER) > 200:
+    if len(_LOGS_BUFFER) > 2000:
         _LOGS_BUFFER.pop(0)
 
     if details is None:

@@ -167,23 +167,23 @@ async def show_results(update: Update):
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_logs(update: Update):
-    logs = get_buffer_logs(20)
+    logs = get_buffer_logs(50)
     if not logs:
         await update.message.reply_text("📜 لا توجد سجلات بعد. جاري التحميل...", reply_markup=get_main_keyboard())
         return
-    msg = "📜 **سجلات النظام** (آخر 20)\n\n"
+    msg = "📜 سجلات النظام (آخر 50)\n\n"
     for l in logs:
         ts = l.get('timestamp', '')
         if hasattr(ts, 'strftime'):
             ts = ts.strftime('%H:%M:%S')
         elif isinstance(ts, str):
             ts = ts[-8:] if len(ts) >= 8 else ts
-        m = str(l.get('message', ''))
+        m = str(l.get('message', '')).replace('_', r'\_').replace('*', r'\*').replace('`', r'\`')
         first = m.split('\n')[0][:90]
         msg += f"`{ts}` {l.get('level','')} {l.get('component','')} — {first}\n"
     if len(msg) > 3800:
         msg = msg[:3800] + "\n..."
-    await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+    await update.message.reply_text(msg, reply_markup=get_main_keyboard())
 
 async def show_delete_menu(update: Update):
     coins = get_active_coins()
