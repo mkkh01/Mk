@@ -294,8 +294,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("تم الإلغاء.", reply_markup=get_main_keyboard())
     return ConversationHandler.END
 
-def run_bot():
-    """Start the Telegram bot."""
+def build_application() -> Application:
+    """Build and return the Telegram Application (does not start it)."""
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Add coin conversation
@@ -320,6 +320,12 @@ def run_bot():
     # Handle all other menu button presses
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
+    return app
+
+
+def run_bot():
+    """Legacy entry point — prefer build_application() + async lifecycle."""
+    app = build_application()
     app.run_polling()
 
 async def handle_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
