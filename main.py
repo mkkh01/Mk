@@ -35,7 +35,9 @@ def analysis_cycle():
             for tf in coin['timeframes']:
                 try:
                     analysis_start(symbol, tf)
+                    time.sleep(0.3)
                     klines = get_klines(symbol, tf, limit=100)
+                    time.sleep(0.2)
                     order_book = get_order_book(symbol)
                     result = generate_signal(symbol, tf, klines, order_book, dict(coin))
                     if result.get('has_signal'):
@@ -60,6 +62,7 @@ def analysis_cycle():
                     error(f"{symbol}/{tf}", str(e))
         for signal in get_active_signals():
             try:
+                time.sleep(0.2)
                 price_data = get_current_price(signal['symbol'])
                 current_price = float(price_data['price'])
                 result = check_trade(dict(signal), current_price)
