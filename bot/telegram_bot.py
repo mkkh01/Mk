@@ -274,8 +274,11 @@ def build_application() -> Application:
 
     return app
 
-async def run_webhook(app: Application, url: str, port: int):
-    """Run bot with webhook — no polling conflicts."""
-    await app.bot.set_webhook(url=url, drop_pending_updates=True)
-    print(f"[WEBHOOK] Set to {url}")
-    await app.run_webhook(listen="0.0.0.0", port=port, webhook_url=url, drop_pending_updates=True)
+def run_webhook(app: Application, url: str, port: int):
+    """Run bot with webhook (sync, blocks, manages own event loop)."""
+    import asyncio as _aio
+    async def _setup():
+        await app.bot.set_webhook(url=url, drop_pending_updates=True)
+        print(f"[WEBHOOK] Set to {url}")
+    _aio.run(_setup())
+    app.run_webhook(listen="0.0.0.0", port=port, webhook_url=url, drop_pending_updates=True)

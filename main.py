@@ -1,7 +1,7 @@
 """
 CTM Bot — Main Entry Point (webhook mode for Render)
 """
-import os, time, threading, asyncio
+import os, time, threading
 from config import MONITOR_INTERVAL_SECONDS, SUPABASE_DB_URL
 from data.binance_api import get_klines, get_order_book, get_current_price
 from db.supabase_client import (
@@ -81,7 +81,7 @@ def analysis_cycle():
     cron_complete(time.time() - start_time)
 
 
-async def main_async():
+def main():
     init_db()
     init_logger(SUPABASE_DB_URL)
     system_start()
@@ -109,11 +109,7 @@ async def main_async():
     webhook_url = f"{base}/webhook"
 
     print(f"Starting webhook on port {port}, url={webhook_url}")
-    await run_webhook(app, webhook_url, port)
-
-
-def main():
-    asyncio.run(main_async())
+    run_webhook(app, webhook_url, port)
 
 
 if __name__ == "__main__":
