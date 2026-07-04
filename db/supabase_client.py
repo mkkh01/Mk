@@ -4,7 +4,6 @@ Handles all CRUD operations for coins, signals, trades, and logs.
 """
 
 import psycopg
-import psycopg.extras
 import json
 from datetime import datetime
 from config import SUPABASE_DB_URL
