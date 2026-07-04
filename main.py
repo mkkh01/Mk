@@ -213,27 +213,6 @@ def main():
 
     app = build_application()
 
-    # Health check endpoint (Render zero-downtime + monitoring)
-    from tornado.web import RequestHandler
-    class HealthHandler(RequestHandler):
-        def get(self):
-            st = get_state()
-            self.set_header("Content-Type", "application/json")
-            self.write({
-                "status": "ok",
-                "version": "2.1",
-                "cycles": st['cycles'],
-                "coins": st['coins'],
-                "errors": st['errors'],
-                "active": is_system_active(),
-                "circuit_breaker": st.get('circuit_breaker', False),
-            })
-    try:
-        # Register on tornado's underlying Application
-        app._native_app.add_handlers(r".*", [(r"/health", HealthHandler)])
-    except Exception:
-        pass  # non-critical
-
     port = int(os.environ.get('PORT', 10000))
     base = os.environ.get('RENDER_EXTERNAL_URL', f'http://localhost:{port}')
     webhook_url = f"{base}/webhook"

@@ -20,8 +20,6 @@ from db.supabase_client import (
 
 (SYMBOL, TIMEFRAMES_STATE, CAPITAL, RISK) = range(4)
 
-(SYMBOL, TIMEFRAMES_STATE, CAPITAL, RISK) = range(4)
-
 MAIN_KEYBOARD = [
     ["💰 أسعار حية", "➕ إضافة عملة"],
     ["📋 عملاتي", "🗑️ حذف عملة"],
@@ -95,6 +93,27 @@ async def test_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results.append(f"⚠️ ملخص المخاطر: {e}")
 
     await update.message.reply_text("\n".join(results))
+
+
+async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """System health check."""
+    st = _sys_state()
+    active = "🟢 نشط" if is_system_active() else "⏸️ متوقف"
+    cb = "🔴 مفعل" if st.get('circuit_breaker') else "🟢 معطل"
+    reason = st.get('circuit_breaker_reason', '')
+    await update.message.reply_text(
+        f"🏥 **حالة النظام**\n\n"
+        f"⚡ التشغيل: {active}\n"
+        f"🛡️ قاطع الدائرة: {cb}\n"
+        f"{'  ↳ ' + reason if reason else ''}\n"
+        f"📊 الدورات: {st['cycles']}\n"
+        f"🪙 عملات: {st['coins']}\n"
+        f"⚠️ أخطاء: {st['errors']}\n"
+        f"⏱️ آخر دورة: منذ {st['last_cycle_ago']}s\n"
+        f"⏱️ مدة الدورة: {st['duration']}s\n"
+        f"\nالإصدار: v2.1",
+        parse_mode='Markdown'
+    )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -321,6 +340,7 @@ def build_application() -> Application:
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('test', test_db))
+    app.add_handler(CommandHandler('health', health))
     app.add_handler(conv_handler)
     app.add_handler(MessageHandler(filters.Regex(r"^حذف .+$"), handle_delete))
     app.add_handler(MessageHandler(filters.Regex("^رجوع$"), lambda u, c: start(u, c)))
