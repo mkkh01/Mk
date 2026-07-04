@@ -11,8 +11,8 @@ import asyncio
 if sys.version_info >= (3, 14):
     from telegram.ext._updater import Updater as _Updater
     _slots = tuple(_Updater.__slots__) if hasattr(_Updater, '__slots__') else ()
-    if '__polling_cleanup_cb' not in _slots:
-        _Updater.__slots__ = _slots + ('__polling_cleanup_cb',)
+    if '__dict__' not in _slots:
+        _Updater.__slots__ = _slots + ('__dict__',)
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
