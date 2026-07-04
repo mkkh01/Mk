@@ -21,7 +21,7 @@ def init_db():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS tracked_coins (
             id SERIAL PRIMARY KEY,
-            symbol VARCHAR(20) NOT NULL,
+            symbol VARCHAR(20) NOT NULL UNIQUE,
             timeframes TEXT[] NOT NULL DEFAULT '{"1h"}',
             capital_percent REAL NOT NULL DEFAULT 30.0,
             risk_percent REAL NOT NULL DEFAULT 2.0,

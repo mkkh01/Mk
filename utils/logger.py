@@ -8,7 +8,7 @@ import json
 import time
 from datetime import datetime
 import psycopg
-import psycopg.extras
+import psycopg.rows
 
 # Will be imported after config
 DB_URL = None
