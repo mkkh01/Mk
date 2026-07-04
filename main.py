@@ -13,7 +13,8 @@ from signals.generator import generate_signal
 from signals.monitor import check_trade
 from utils.logger import (
     init_logger, system_start, binance_connected, supabase_connected,
-    coins_loaded, analysis_start, no_signal,
+    coins_loaded, analysis_start, fetch_data_start, fetch_data_done,
+    no_signal,
     signal_generated, signal_sent, monitoring, tp_hit, sl_hit,
     error, cron_tick, cron_complete
 )
@@ -35,10 +36,12 @@ def analysis_cycle():
             for tf in coin['timeframes']:
                 try:
                     analysis_start(symbol, tf)
+                    fetch_data_start(symbol)
                     time.sleep(0.3)
                     klines = get_klines(symbol, tf, limit=100)
                     time.sleep(0.2)
                     order_book = get_order_book(symbol)
+                    fetch_data_done(symbol, len(klines) if isinstance(klines, list) else 0)
                     result = generate_signal(symbol, tf, klines, order_book, dict(coin))
                     if result.get('has_signal'):
                         save_signal({

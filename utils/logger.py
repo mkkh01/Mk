@@ -1,29 +1,33 @@
 """
 CTM Bot - Logging System
-Logs everything: startup, analysis, strategy decisions, signals, monitoring, results.
-Logs stored in Supabase + printed to console.
+Logs everything to console + DB. Falls back to memory buffer if DB fails.
 """
-
 import json
 import time
 from datetime import datetime
 import psycopg
 
-# Will be imported after config
 DB_URL = None
+_LOGS_BUFFER = []  # fallback if DB fails
 
 def init_logger(db_url: str):
-    """Initialize logger with DB connection URL."""
     global DB_URL
     DB_URL = db_url
 
 def _log(level: str, component: str, message: str, details: dict = None):
-    """Core log function — writes to console and Supabase."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"[{timestamp}] {level} {component} — {message}"
     print(log_entry)
 
-    if DB_URL and details is None:
+    # Always keep in memory buffer (for Telegram)
+    _LOGS_BUFFER.append({
+        'timestamp': datetime.now(), 'level': level,
+        'component': component, 'message': message
+    })
+    if len(_LOGS_BUFFER) > 200:
+        _LOGS_BUFFER.pop(0)
+
+    if details is None:
         details = {}
 
     if DB_URL:
@@ -40,61 +44,76 @@ def _log(level: str, component: str, message: str, details: dict = None):
             conn.close()
             return log_entry
         except Exception as e:
-            print(f"[LOGGER DB ERROR] {e}")
-
+            print(f"[LOGGER DB] {e}")
     return log_entry
 
+def get_buffer_logs(limit: int = 30):
+    """Get recent logs from memory buffer (for Telegram fallback)."""
+    return list(reversed(_LOGS_BUFFER[-limit:]))
+
 def system_start():
-    """Log system startup."""
-    _log("⚡", "SYSTEM", "CTM Bot v1.0 — Starting up")
-    _log("✅", "SYSTEM", "Configuration loaded")
+    _log("⚡", "SYSTEM", "CTM Bot v1.0 — بدء التشغيل")
+    _log("✅", "SYSTEM", "تم تحميل الإعدادات")
 
 def binance_connected():
-    _log("📡", "DATA", "Binance Public API — connected")
+    _log("📡", "DATA", "Binance API — متصل")
 
 def supabase_connected():
-    _log("🗄️", "DB", "Supabase — connected")
+    _log("🗄️", "DB", "Supabase — متصل")
 
 def coins_loaded(count: int, coins: list):
-    _log("✅", "SYSTEM", f"Loaded {count} tracked coins: {', '.join(coins)}")
+    _log("✅", "SYSTEM", f"تم تحميل {count} عملات: {', '.join(coins)}")
 
 def analysis_start(symbol: str, tf: str):
-    _log("🔍", "ANALYSIS", f"Analyzing {symbol} | Timeframe: {tf}")
+    _log("🔍", "ANALYSIS", f"جاري تحليل {symbol} | الإطار: {tf}")
+
+def fetch_data_start(symbol: str):
+    _log("📥", "DATA", f"جاري جلب بيانات {symbol} من Binance...")
+
+def fetch_data_done(symbol: str, klines_count: int):
+    _log("📥", "DATA", f"تم جلب {klines_count} شمعة لـ {symbol}")
 
 def market_regime(symbol: str, regime: str, details: dict):
-    _log("📊", "ANALYSIS", f"{symbol}: Market Regime = {regime}", details)
+    metrics = details.get('metrics', {})
+    _log("📊", "ANALYSIS",
+         f"{symbol}: نظام السوق = {regime} | ADX={metrics.get('adx',0):.1f} "
+         f"تقلب={metrics.get('volatility',0):.1f}% زخم={metrics.get('momentum',0):.1f}%",
+         details)
+
+def strategy_check(symbol: str, strategy: str):
+    _log("🧠", "STRATEGY", f"{symbol}: فحص استراتيجية {strategy}...")
 
 def strategy_selected(symbol: str, strategy: str, reason: str):
-    _log("🧠", "STRATEGY", f"{symbol}: Selected {strategy} — {reason}")
+    _log("🧠", "STRATEGY", f"{symbol}: تم اختيار {strategy} — {reason}")
 
 def no_signal(symbol: str, reason: str):
-    _log("⏳", "SIGNAL", f"{symbol}: No entry signal — {reason}")
+    _log("⏳", "SIGNAL", f"{symbol}: لا توجد إشارة دخول — {reason}")
 
 def signal_generated(signal_data: dict):
     _log("🎯", "SIGNAL",
-         f"{signal_data['symbol']}: SIGNAL — Entry={signal_data['entry']:.4f} "
-         f"SL={signal_data['stop_loss']:.4f} TP={signal_data['take_profit1']:.4f} "
-         f"Size={signal_data['position_size']:.4f}")
+         f"{signal_data['symbol']}: إشـــــارة! دخول={signal_data['entry_price']:.4f} "
+         f"وقف={signal_data['stop_loss']:.4f} هدف={signal_data['take_profit1']:.4f} "
+         f"حجم={signal_data['position_size']:.4f}")
 
 def signal_sent(symbol: str):
-    _log("📨", "BOT", f"Signal sent to Telegram for {symbol}")
+    _log("📨", "BOT", f"تم إرسال الإشارة إلى Telegram لـ {symbol}")
 
 def monitoring(symbol: str, current_price: float, entry: float, sl: float, tp: float):
     dist_sl = abs(current_price - sl) / entry * 100
     dist_tp = abs(tp - current_price) / entry * 100
-    _log("👁️", "MONITOR", f"{symbol}: Price={current_price:.4f} | SL distance: {dist_sl:.1f}% | TP distance: {dist_tp:.1f}%")
+    _log("👁️", "MONITOR", f"{symbol}: السعر={current_price:.4f} | بعد عن الوقف: {dist_sl:.1f}% | بعد عن الهدف: {dist_tp:.1f}%")
 
 def tp_hit(symbol: str, price: float, profit_pct: float, profit_usd: float):
-    _log("🎯", "RESULT", f"{symbol}: TP HIT @ {price:.4f} | Profit: {profit_pct:.2f}% (${profit_usd:.2f})")
+    _log("🎯", "RESULT", f"{symbol}: هدف محقق @ {price:.4f} | ربح: {profit_pct:.2f}% (${profit_usd:.2f})")
 
 def sl_hit(symbol: str, price: float, loss_pct: float, loss_usd: float):
-    _log("🛑", "RESULT", f"{symbol}: SL HIT @ {price:.4f} | Loss: {loss_pct:.2f}% (${loss_usd:.2f})")
+    _log("🛑", "RESULT", f"{symbol}: وقف خسارة @ {price:.4f} | خسارة: {loss_pct:.2f}% (${loss_usd:.2f})")
 
 def error(component: str, message: str):
     _log("❌", "ERROR", f"{component}: {message}")
 
 def cron_tick():
-    _log("⏰", "SYSTEM", "Cron tick — starting analysis cycle")
+    _log("⏰", "SYSTEM", "بدء دورة تحليل جديدة")
 
 def cron_complete(duration_seconds: float):
-    _log("✅", "SYSTEM", f"Analysis cycle complete — {duration_seconds:.1f}s")
+    _log("✅", "SYSTEM", f"انتهت دورة التحليل — {duration_seconds:.1f} ثانية")

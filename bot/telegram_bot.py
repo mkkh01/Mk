@@ -9,6 +9,7 @@ from telegram.ext import (
     ContextTypes, filters
 )
 from config import TELEGRAM_BOT_TOKEN, TIMEFRAMES
+from utils.logger import get_buffer_logs
 from db.supabase_client import (
     get_active_coins, add_coin, remove_coin,
     get_recent_signals, get_active_signals as db_get_active_signals,
@@ -160,14 +161,21 @@ async def show_results(update: Update):
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_logs(update: Update):
-    logs = get_recent_logs(15)
+    logs = get_recent_logs(30)
+    if not logs:
+        logs = get_buffer_logs(30)
     if not logs:
         await update.message.reply_text("📜 لا توجد سجلات بعد.", reply_markup=get_main_keyboard())
         return
-    msg = "📜 **آخر السجلات**\n\n"
-    for l in logs:
-        ts = l['timestamp'].strftime('%H:%M:%S') if hasattr(l['timestamp'], 'strftime') else str(l['timestamp'])[11:19]
-        msg += f"`[{ts}]` {l['level']} {l['component']} — {l['message'][:100]}\n"
+    msg = "📜 **سجلات النظام**\n\n"
+    for l in logs[:20]:
+        ts = l['timestamp']
+        if hasattr(ts, 'strftime'):
+            ts = ts.strftime('%H:%M:%S')
+        elif isinstance(ts, str):
+            ts = ts[11:19] if len(ts) > 19 else ts
+        m = l['message'][:120] if l['message'] else ''
+        msg += f"`[{ts}]` {l['level']} {l['component']} — {m}\n"
     if len(msg) > 3500:
         msg = msg[:3500] + "\n..."
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
