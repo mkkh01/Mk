@@ -363,5 +363,79 @@ def build_application() -> Application:
 
 
 def run_webhook(app: Application, url: str, port: int):
-    app.run_webhook(listen="0.0.0.0", port=port, url_path="webhook",
-                    webhook_url=url, drop_pending_updates=True)
+    """Run bot webhook WITH root page + health — stable approach."""
+    import asyncio, json
+    from tornado.web import Application as TApp, RequestHandler
+    from tornado.httpserver import HTTPServer
+    from tornado.ioloop import IOLoop
+
+    class Root(RequestHandler):
+        def get(self):
+            from utils.state import get_state as _gs
+            from data.binance_api import get_api_status as _as
+            st, api = _gs(), _as()
+            ok = api.get('online')
+            self.set_header("Content-Type", "text/html; charset=utf-8")
+            self.write(
+                '<!DOCTYPE html><html dir=rtl><head><meta charset=utf-8><title>CTM Bot</title>'
+                '<style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:20px;background:#0d1117;color:#c9d1d9}'
+                'h1{color:#58a6ff}.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin:12px 0}'
+                '.g{color:#3fb950}.r{color:#f85149}.dim{color:#8b949e}'
+                '</style></head><body><h1>🫡 CTM Bot v2.3</h1><div class=card>'
+                f'<p>⚡ <span class=g>يعمل</span> | Binance: <span class={"g" if ok else "r"}>{"🟢" if ok else "🔴"}</span>'
+                f' | دورات: {st["cycles"]} | عملات: {st["coins"]} | أخطاء: {st["errors"]}'
+                f' | آخر دورة: منذ {st["last_cycle_ago"]}s</p></div>'
+                '<p class=dim style=text-align:center>Webhook: <code>POST /webhook</code> | Health: <code>/health</code></p>'
+                '</body></html>'
+            )
+
+    class Health(RequestHandler):
+        def get(self):
+            from utils.state import get_state as _gs
+            st = _gs()
+            self.set_header("Content-Type", "application/json")
+            self.write(json.dumps({"status":"ok","v":"2.3","cycles":st["cycles"],"coins":st["coins"]}))
+
+    # Simple webhook handler — converts Telegram JSON to Update objects
+    class Webhook(RequestHandler):
+        def post(self):
+            body = self.request.body
+            try:
+                data = json.loads(body)
+                from telegram import Update
+                update = Update.de_json(data, app.bot)
+                app.update_queue.put_nowait(update)
+                self.set_status(200)
+            except Exception as e:
+                self.set_status(200)
+            self.write("OK")
+
+    tornado_app = TApp([
+        (r"/webhook", Webhook),
+        (r"/", Root),
+        (r"/health", Health),
+    ])
+    
+    server = HTTPServer(tornado_app)
+    server.listen(port, address="0.0.0.0")
+
+    async def start():
+        await app.initialize()
+        await app.bot.set_webhook(url=url, drop_pending_updates=True)
+        print(f"🌐 http://0.0.0.0:{port}/ | health: /health | webhook: {url}")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start())
+    
+    # Start PTB's internal polling of the update queue
+    async def _process_updates():
+        while True:
+            try:
+                update = await app.update_queue.get()
+                await app.process_update(update)
+            except Exception:
+                pass
+    loop.create_task(_process_updates())
+    
+    IOLoop.current().start()
