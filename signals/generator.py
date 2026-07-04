@@ -1,4 +1,6 @@
-"""Signal Generator — uses pre-computed indicators for efficiency."""
+"""
+Signal Generator — uses pre-computed indicators + live price for decisions.
+"""
 from strategies.trend_following import check_donchian_signal
 from strategies.liquidity import check_order_flow_signal
 from strategies.selector import select_strategy
@@ -7,12 +9,13 @@ from utils.logger import market_regime as _log_regime, strategy_check, strategy_
 
 
 def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
-                    coin_config: dict, indicators: dict = None) -> dict:
+                    coin_config: dict, indicators: dict = None,
+                    live_price: float = 0) -> dict:
     """
-    Generate trade signal. Uses pre-computed indicators if provided.
+    Generate trade signal using pre-computed indicators + live price.
     
     Args:
-        indicators: Pre-computed {'donchian', 'atr', 'adx', 'rsi', 'ema20', 'ema50', ...}
+        live_price: Real-time ticker price (used for entry decisions, not kline close)
     """
     if not klines:
         return {
@@ -20,8 +23,8 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
             'regime': {'regime': 'NO_DATA'}, 'reason': 'No kline data'
         }
 
-    # Step 1: Classify market regime
-    regime_data = classify_regime(klines, order_book)
+    # Step 1: Classify market regime (pass pre-computed + live price)
+    regime_data = classify_regime(klines, order_book, indicators, live_price)
     _log_regime(symbol, regime_data['regime'], regime_data)
 
     # Step 2: Check strategies with pre-computed indicators
@@ -81,13 +84,12 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
     }
 
 
-# ── Pre-compute indicators once per coin ──
-
 def precompute_indicators(klines: list) -> dict:
-    """Calculate all indicators once, pass to strategies."""
+    """Calculate all indicators once, pass to classify_regime and strategies."""
     from analysis.indicators import (
         calculate_donchian, calculate_atr, calculate_adx,
-        calculate_ema, calculate_rsi, calculate_volatility, calculate_momentum
+        calculate_ema, calculate_rsi, calculate_volatility, calculate_momentum,
+        calculate_slope,
     )
     from data.binance_api import extract_ohlcv
 
@@ -95,6 +97,7 @@ def precompute_indicators(klines: list) -> dict:
     closes = ohlcv['close']
     highs = ohlcv['high']
     lows = ohlcv['low']
+    volumes = ohlcv['volume']
 
     if not closes:
         return {}
@@ -106,6 +109,12 @@ def precompute_indicators(klines: list) -> dict:
         'rsi': calculate_rsi(closes),
         'volatility': calculate_volatility(closes),
         'momentum': calculate_momentum(closes),
+        'slope': calculate_slope(closes, 5),
         'ema20': (calculate_ema(closes, 20) or [0])[-1] if closes else 0,
         'ema50': (calculate_ema(closes, 50) or [0])[-1] if len(closes) >= 50 else 0,
+        'ema200': (calculate_ema(closes, 200) or [0])[-1] if len(closes) >= 200 else 0,
+        'closes': closes,
+        'highs': highs,
+        'lows': lows,
+        'volumes': volumes,
     }

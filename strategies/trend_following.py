@@ -31,6 +31,10 @@ def check_donchian_signal(klines: list, regime_data: dict, indicators: dict = No
     if not donchian or atr == 0:
         return None
 
+    # Validate Donchian channel width — reject impossibly narrow channels
+    if donchian.get('width_pct', 0) < 0.05:
+        return None  # Channel too narrow, likely flat/stable market
+
     # Only enter in trending markets
     if regime not in [MarketRegime.TREND_UP, MarketRegime.BREAKOUT, MarketRegime.TREND_DOWN]:
         return None

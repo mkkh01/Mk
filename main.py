@@ -85,11 +85,36 @@ def analysis_cycle():
                     # ── ORDER BOOK ──
                     order_book = get_order_book(symbol)
                     t_data_ms = (time.time() - t_data_start) * 1000
-                    fetch_data_done(symbol, len(klines) if isinstance(klines, list) else 0)
 
-                    if not klines or len(klines) < 20:
-                        no_signal(symbol, f"بيانات غير كافية ({len(klines) if klines else 0} شمعة)")
+                    # Log data integrity
+                    kline_count = len(klines) if isinstance(klines, list) else 0
+                    ob_bids = len(order_book.get('bids', []))
+                    ob_asks = len(order_book.get('asks', []))
+                    fetch_data_done(symbol, kline_count)
+
+                    # Check order book health
+                    if ob_bids == 0 or ob_asks == 0:
+                        _log("⚠️", "DATA", f"{symbol}: Order book empty — bids={ob_bids} asks={ob_asks}")
+
+                    if not klines or kline_count < 20:
+                        no_signal(symbol, f"بيانات غير كافية ({kline_count} شمعة)")
+                        _log("⚠️", "DATA", f"{symbol}/{tf}: بيانات شموع غير كافية — {kline_count}/100 مطلوب ≥20")
                         continue
+
+                    # Log candle summary for Telegram
+                    try:
+                        from data.binance_api import extract_ohlcv
+                        ohlcv = extract_ohlcv(klines)
+                        c = ohlcv['close']
+                        if c:
+                            _log("🕯️", "CANDLES",
+                                 f"{symbol}/{tf}: {kline_count} شمعة | "
+                                 f"سعر {c[-1]:.6f} | "
+                                 f"أعلى {max(ohlcv['high']):.6f} | "
+                                 f"أدنى {min(ohlcv['low']):.6f} | "
+                                 f"حجم {sum(ohlcv['volume'][-5:]):,.0f}")
+                    except Exception:
+                        pass
 
                     # ── PRECOMPUTE INDICATORS (once per coin/timeframe) ──
                     t_ind_start = time.time()
@@ -101,13 +126,11 @@ def analysis_cycle():
                              f"RSI={indicators.get('rsi', 0):.1f} "
                              f"ADX={indicators.get('adx', {}).get('adx', 0):.1f}")
 
-                    # Use live price in regime metrics if available
-                    if live['price'] > 0:
-                        from analysis.market_regime import classify_regime
-
-                    # ── GENERATE SIGNAL (includes regime + strategies) ──
+                    # Pass live price to signal generator for real-time decisions
                     t_gen_start = time.time()
-                    result = generate_signal(symbol, tf, klines, order_book, dict(coin), indicators)
+                    # Pass live price so trading decisions use real-time data, not stale kline close
+                    result = generate_signal(symbol, tf, klines, order_book, dict(coin),
+                                            indicators, live['price'])
                     t_gen_ms = (time.time() - t_gen_start) * 1000
 
                     # ── DETAILED REPORT (console only) ──

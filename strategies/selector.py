@@ -71,7 +71,7 @@ def select_strategy(regime_data: dict, donchian_signal: dict | None,
             continue
         try:
             signal = entry.evaluator(regime, donchian_signal, order_flow_signal, None)
-            if signal:
+            if signal and not signal.get('data_error'):
                 return {
                     'selected_strategy': signal.get('strategy', entry.name),
                     'signal': signal,

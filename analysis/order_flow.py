@@ -17,12 +17,24 @@ def analyze_order_flow(order_book: dict) -> dict:
     if not order_book or 'bids' not in order_book or 'asks' not in order_book:
         return {
             'buy_pressure': 0, 'sell_pressure': 0,
-            'ratio': 1.0, 'signal': 'NEUTRAL',
-            'order_flow_signal': False
+            'ratio': 1.0, 'signal': 'NO_DATA',
+            'order_flow_signal': False,
+            'data_error': True,
+            'analysis': 'Order book data unavailable — API may be blocked'
         }
     
     bids = order_book['bids']
     asks = order_book['asks']
+
+    # Empty order book = data error, not neutral
+    if not bids or not asks:
+        return {
+            'buy_pressure': 0, 'sell_pressure': 0,
+            'ratio': 1.0, 'signal': 'NO_DATA',
+            'order_flow_signal': False,
+            'data_error': True,
+            'analysis': 'Empty order book — API returned no bids/asks'
+        }
     
     # Calculate total bid/ask volume (first 20 levels)
     bid_volume = sum(float(b[1]) for b in bids[:20])
@@ -61,11 +73,11 @@ def analyze_order_flow(order_book: dict) -> dict:
         analysis = f"Buying pressure: bid/ask vol={volume_ratio:.2f}"
     elif volume_ratio < (1.0 / ORDER_FLOW_RATIO) and wall_ratio < 0.67:
         signal = 'STRONG_SELL'
-        order_flow_signal = False
+        order_flow_signal = True  # FIXED: was False, preventing all sell signals
         analysis = f"Strong selling pressure: bid/ask vol={volume_ratio:.2f}, wall ratio={wall_ratio:.2f}"
     elif volume_ratio < 0.77:
         signal = 'SELL'
-        order_flow_signal = False
+        order_flow_signal = True  # FIXED: was False, preventing sell signals
         analysis = f"Selling pressure: bid/ask vol={volume_ratio:.2f}"
     else:
         signal = 'NEUTRAL'
@@ -83,5 +95,6 @@ def analyze_order_flow(order_book: dict) -> dict:
         'ask_walls': [[float(a[0]), float(a[1])] for a in ask_walls],
         'signal': signal,
         'order_flow_signal': order_flow_signal,
+        'data_error': False,
         'analysis': analysis
     }
