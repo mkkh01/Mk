@@ -5,6 +5,7 @@ v2.0 — unified indicators, live prices, risk engine, pause/resume
 import os, time, threading
 from config import MONITOR_INTERVAL_SECONDS, SUPABASE_DB_URL, WEBHOOK_BASE_URL
 from data.binance_api import get_klines, get_order_book, get_live_price
+from data.price_providers import get_price_any_source, get_klines_any_source
 from db.supabase_client import (
     init_db, get_active_coins, save_signal, get_active_signals, close_signal
 )
@@ -75,19 +76,23 @@ def analysis_cycle():
                 try:
                     analysis_start(symbol, tf)
 
-                    # ── LIVE PRICE (ticker priority) ──
+                    # ── LIVE PRICE (multi-source fallback) ──
                     fetch_data_start(symbol)
                     t_data_start = time.time()
-                    live = get_live_price(symbol)
+                    
+                    # Try Binance first, fall back to Bybit/KuCoin/CoinGecko/CryptoCompare
+                    live = get_price_any_source(symbol, binance_fn=get_live_price)
                     if live['price'] > 0:
                         update_price(symbol, live['price'])
                         _log("💵", "DATA",
-                             f"{symbol}: سعر حي {live['price']:.4f} (المصدر: {live['source']})")
-                    time.sleep(0.15)
+                             f"{symbol}: سعر حي {live['price']:.6f} (المصدر: {live['source']})")
+                    else:
+                        _log("⚠️", "DATA", f"{symbol}: فشل جميع مصادر الأسعار")
+                    time.sleep(0.1)
 
-                    # ── KLINES ──
-                    klines = get_klines(symbol, tf, limit=100)
-                    time.sleep(0.15)
+                    # ── KLINES (multi-source fallback) ──
+                    klines = get_klines_any_source(symbol, tf, limit=100, binance_fn=get_klines)
+                    time.sleep(0.1)
 
                     # ── ORDER BOOK ──
                     order_book = get_order_book(symbol)
