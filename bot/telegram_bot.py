@@ -77,10 +77,13 @@ async def show_live_prices(update: Update):
         for sym in symbols:
             try:
                 t = get_24hr_ticker(sym)
-                emoji = "🟢" if t['change_pct'] >= 0 else "🔴"
-                msg += f"{emoji} **{t['symbol']}**: ${t['price']:.4f} ({t['change_pct']:+.2f}%)\n"
+                if t and t.get('price', 0) > 0:
+                    emoji = "🟢" if t['change_pct'] >= 0 else "🔴"
+                    msg += f"{emoji} **{t['symbol']}**: ${t['price']:.4f} ({t['change_pct']:+.2f}%)\n"
+                else:
+                    msg += f"❓ **{sym}**: رمز غير صالح\n"
             except:
-                msg += f"❓ **{sym}**: خطأ في الجلب\n"
+                msg += f"❓ **{sym}**: خطأ في جلب السعر\n"
         await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}", reply_markup=get_main_keyboard())
