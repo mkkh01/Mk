@@ -16,6 +16,7 @@ from utils.logger import (
     error, cron_tick, cron_complete
 )
 from utils.price_cache import update_price
+from utils.state import mark_ready, tick_cycle, set_coin_count, inc_error, is_ready, get_state
 from bot.telegram_bot import build_application, run_webhook
 
 
@@ -28,6 +29,7 @@ def analysis_cycle():
             cron_complete(time.time() - start_time)
             return
         coins_loaded(len(coins), [c['symbol'] for c in coins])
+        set_coin_count(len(coins))
         for coin in coins:
             symbol = coin['symbol']
             for tf in coin['timeframes']:
@@ -87,7 +89,12 @@ def analysis_cycle():
                 error(f"Monitor/{signal['symbol']}", str(e))
     except Exception as e:
         error("SYSTEM", f"Analysis cycle failed: {e}")
-    cron_complete(time.time() - start_time)
+        inc_error()
+    duration = time.time() - start_time
+    tick_cycle(duration)
+    cron_complete(duration)
+    if not is_ready():
+        mark_ready()
 
 
 def main():
@@ -99,6 +106,7 @@ def main():
 
     print("Running initial analysis...")
     analysis_cycle()
+    print(f"Initial analysis done. Cycles: {get_state()['cycles']}, Coins: {get_state()['coins']}")
 
     def analysis_loop():
         while True:
@@ -107,6 +115,7 @@ def main():
                 analysis_cycle()
             except Exception as e:
                 error("MAIN", str(e))
+                inc_error()
                 time.sleep(10)
 
     threading.Thread(target=analysis_loop, daemon=True).start()

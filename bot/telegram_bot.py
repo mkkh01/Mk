@@ -32,10 +32,18 @@ def get_main_keyboard():
 system_active = True
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from utils.state import get_state as _gs
+    from utils.price_cache import get_all_cached_prices as _cp
+    s = _gs()
+    prices = _cp()
     await update.message.reply_text(
-        "🫡 **CTM Bot v1.0 — Crypto Trading Monitor**\n\n"
-        "محلل فني ذكي لتوليد إشارات التداول ومراقبة الصفقات.\n"
-        "اختر من القائمة:",
+        f"🫡 **CTM Bot v1.0**\n\n"
+        f"📊 الدورات: {s['cycles']}\n"
+        f"⏱️ آخر دورة: منذ {s['last_cycle_ago']}s\n"
+        f"🪙 عملات: {s['coins']}\n"
+        f"💵 أسعار مخزنة: {len(prices)}\n"
+        f"⚠️ أخطاء: {s['errors']}\n\n"
+        f"اختر من القائمة:",
         reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
