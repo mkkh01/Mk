@@ -363,18 +363,25 @@ def build_application() -> Application:
 
 
 def run_webhook(app: Application, url: str, port: int):
-    """Run bot with built-in HTTP server — webhook + root page + health."""
+    """Run bot with built-in HTTP server — pages + webhook on same port."""
     import asyncio, json, threading
     from http.server import HTTPServer, BaseHTTPRequestHandler
     from telegram import Update
 
+    # Initialize PTB app FIRST (creates bot, queue, etc)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(app.initialize())
+    loop.run_until_complete(app.bot.set_webhook(url=url, drop_pending_updates=True))
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, f, *a): pass
+
         def _send(self, body, ct, code=200):
-            b = body.encode() if isinstance(body, str) else json.dumps(body).encode()
+            b = body.encode() if isinstance(body, str) else json.dumps(body, ensure_ascii=False).encode()
             self.send_response(code)
             self.send_header("Content-Type", ct)
-            self.send_header("Content-Length", len(b))
+            self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             self.wfile.write(b)
 
@@ -402,7 +409,7 @@ def run_webhook(app: Application, url: str, port: int):
                     f'<tr><td class=dim>أخطاء</td><td>{st["errors"]}</td></tr>'
                     f'<tr><td class=dim>آخر دورة</td><td>منذ {st["last_cycle_ago"]}s | {st["duration"]}s</td></tr>'
                     '</table></div>'
-                    '<p class=dim style=text-align:center>Telegram: @CTM_CopyTrading_bot | Health: /health</p>'
+                    '<p class=dim style=text-align:center>Telegram: @CTM_CopyTrading_bot | /health | /webhook</p>'
                     '</body></html>',
                     "text/html; charset=utf-8")
             elif self.path == "/health":
@@ -417,8 +424,12 @@ def run_webhook(app: Application, url: str, port: int):
                 try:
                     length = int(self.headers.get("Content-Length", 0))
                     body = self.rfile.read(length)
-                    update = Update.de_json(json.loads(body), app.bot)
-                    app.update_queue.put_nowait(update)
+                    data = json.loads(body)
+                    update_obj = Update.de_json(data, app.bot)
+                    # Process in a fresh event loop (thread-safe)
+                    _loop = asyncio.new_event_loop()
+                    _loop.run_until_complete(app.process_update(update_obj))
+                    _loop.close()
                 except Exception:
                     pass
                 self.send_response(200); self.end_headers()
@@ -426,24 +437,13 @@ def run_webhook(app: Application, url: str, port: int):
                 self.send_response(404); self.end_headers()
 
     server = HTTPServer(("0.0.0.0", port), Handler)
-
-    async def start():
-        await app.initialize()
-        await app.bot.set_webhook(url=url, drop_pending_updates=True)
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start())
-
-    async def process():
-        while True:
-            try:
-                update = await app.update_queue.get()
-                await app.process_update(update)
-            except Exception:
-                pass
-    loop.create_task(process())
-
+    print(f"🌐 http://0.0.0.0:{port}/ | /health | /webhook → {url}")
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"🌐 http://0.0.0.0:{port}/ | /health | /webhook")
-    loop.run_forever()
+
+    # Keep main thread alive for analysis cycle
+    try:
+        while True:
+            import time
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
