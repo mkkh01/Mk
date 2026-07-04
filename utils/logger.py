@@ -37,7 +37,7 @@ def _log(level: str, component: str, message: str, details: dict = None):
 
     if DB_URL:
         try:
-            conn = psycopg.connect(DB_URL)
+            conn = psycopg.connect(DB_URL, sslmode="require")
             cur = conn.cursor()
             cur.execute(
                 """INSERT INTO logs (timestamp, level, component, message, details)

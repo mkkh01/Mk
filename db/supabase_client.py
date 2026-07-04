@@ -10,7 +10,7 @@ from config import SUPABASE_DB_URL
 
 def get_conn():
     """Get a database connection."""
-    return psycopg.connect(SUPABASE_DB_URL)
+    return psycopg.connect(SUPABASE_DB_URL, sslmode="require")
 
 def init_db():
     """Create all required tables if they don't exist."""
