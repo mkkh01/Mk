@@ -1,5 +1,34 @@
-import numpy as np
+import math
 from config import DONCHIAN_PERIOD, ATR_PERIOD, ADX_THRESHOLD, MOMENTUM_PERIOD
+
+# === Pure Python Math Helpers (no numpy/pandas needed) ===
+
+def _mean(values: list) -> float:
+    """Arithmetic mean."""
+    return sum(values) / len(values) if values else 0.0
+
+def _std(values: list) -> float:
+    """Sample standard deviation."""
+    if len(values) < 2:
+        return 0.0
+    m = _mean(values)
+    variance = sum((v - m) ** 2 for v in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+def _linreg(x: list, y: list) -> tuple:
+    """Simple linear regression: returns (slope, intercept)."""
+    n = len(x)
+    if n < 2:
+        return 0.0, 0.0
+    sx, sy = sum(x), sum(y)
+    sxy = sum(xi * yi for xi, yi in zip(x, y))
+    sxx = sum(xi * xi for xi in x)
+    denom = n * sxx - sx * sx
+    if denom == 0:
+        return 0.0, sy / n
+    slope = (n * sxy - sx * sy) / denom
+    intercept = (sy - slope * sx) / n
+    return slope, intercept
 
 def calculate_donchian(highs: list, lows: list, period: int = DONCHIAN_PERIOD) -> dict:
     """Calculate Donchian Channels. Returns {upper, lower, mid, width_pct}"""
@@ -21,7 +50,7 @@ def calculate_atr(highs: list, lows: list, closes: list, period: int = ATR_PERIO
         high_close = abs(highs[i] - closes[i-1])
         low_close = abs(lows[i] - closes[i-1])
         tr_values.append(max(high_low, high_close, low_close))
-    return np.mean(tr_values[-period:])
+    return _mean(tr_values[-period:])
 
 def calculate_adx(highs: list, lows: list, closes: list, period: int = 14) -> dict:
     """Calculate ADX and DI+/DI-. Returns {adx, plus_di, minus_di, trending}"""
@@ -59,7 +88,7 @@ def calculate_adx(highs: list, lows: list, closes: list, period: int = 14) -> di
         dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100 if (plus_di + minus_di) > 0 else 0
         dx_values.append(dx)
     
-    adx = np.mean(dx_values[-period:]) if dx_values else 0
+    adx = _mean(dx_values[-period:]) if dx_values else 0
     
     # Calculate current DI values
     plus_di = 0
@@ -78,9 +107,9 @@ def calculate_adx(highs: list, lows: list, closes: list, period: int = 14) -> di
 def calculate_ema(data: list, period: int) -> list:
     """Calculate Exponential Moving Average."""
     if len(data) < period:
-        return [np.mean(data)] * len(data) if data else []
+        return [_mean(data)] * len(data) if data else []
     multiplier = 2 / (period + 1)
-    ema = [np.mean(data[:period])]
+    ema = [_mean(data[:period])]
     for price in data[period:]:
         ema.append((price - ema[-1]) * multiplier + ema[-1])
     return ema
@@ -90,16 +119,16 @@ def calculate_slope(data: list, period: int = 5) -> float:
     if len(data) < period:
         return 0
     recent = data[-period:]
-    x = np.arange(period)
-    slope = np.polyfit(x, recent, 1)[0]
-    return (slope / np.mean(recent)) * 100
+    x = list(range(period))
+    slope, _ = _linreg(x, recent)
+    return (slope / _mean(recent)) * 100 if _mean(recent) != 0 else 0.0
 
 def calculate_volatility(closes: list, period: int = 20) -> float:
     """Calculate historical volatility (standard deviation of returns)."""
     if len(closes) < period:
         return 0
     returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
-    return np.std(returns[-period:]) * np.sqrt(365) * 100  # Annualized
+    return _std(returns[-period:]) * math.sqrt(365) * 100  # Annualized
 
 def calculate_momentum(closes: list, period: int = MOMENTUM_PERIOD) -> float:
     """Calculate momentum as price change over period."""
@@ -116,8 +145,8 @@ def calculate_rsi(closes: list, period: int = 14) -> float:
         diff = closes[i] - closes[i-1]
         gains.append(max(diff, 0))
         losses.append(max(-diff, 0))
-    avg_gain = np.mean(gains[-period:])
-    avg_loss = np.mean(losses[-period:])
+    avg_gain = _mean(gains[-period:])
+    avg_loss = _mean(losses[-period:])
     if avg_loss == 0:
         return 100
     rs = avg_gain / avg_loss
