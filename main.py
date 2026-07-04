@@ -17,6 +17,7 @@ from utils.logger import (
 )
 from utils.price_cache import update_price
 from utils.state import mark_ready, tick_cycle, set_coin_count, inc_error, is_ready, get_state
+from utils.report import generate_report
 from bot.telegram_bot import build_application, run_webhook
 
 
@@ -27,6 +28,7 @@ def analysis_cycle():
         coins = get_active_coins()
         if not coins:
             cron_complete(time.time() - start_time)
+            tick_cycle(time.time() - start_time)
             return
         coins_loaded(len(coins), [c['symbol'] for c in coins])
         set_coin_count(len(coins))
@@ -41,15 +43,32 @@ def analysis_cycle():
                     time.sleep(0.2)
                     order_book = get_order_book(symbol)
                     fetch_data_done(symbol, len(klines) if isinstance(klines, list) else 0)
-                    # Cache latest close price from klines (Binance ticker IP-banned)
+
+                    # Cache latest close price (Binance ticker API blocked on Render)
                     if isinstance(klines, list) and len(klines) > 0:
+                        last = klines[-1]
                         try:
-                            latest = klines[-1]
-                            close_price = float(latest[4]) if isinstance(latest, list) else float(latest.get('close', 0))
-                            update_price(symbol, close_price)
-                        except Exception:
-                            pass
+                            if isinstance(last, (list, tuple)):
+                                update_price(symbol, float(last[4]))
+                            elif isinstance(last, dict):
+                                update_price(symbol, float(last.get('close', last.get('c', 0))))
+                        except Exception as e:
+                            error("CACHE", f"{symbol}: {e}")
+
                     result = generate_signal(symbol, tf, klines, order_book, dict(coin))
+
+                    # Print detailed report to Render console only
+                    try:
+                        dbg = result.get('_debug', {})
+                        report = generate_report(symbol, tf, klines, order_book,
+                                                result.get('regime', {}),
+                                                dbg.get('donchian_signal'),
+                                                dbg.get('order_flow_signal'),
+                                                dbg.get('decision', {}), {})
+                        print(f"\n{report}")
+                    except Exception as _re:
+                        pass  # report is cosmetic
+
                     if result.get('has_signal'):
                         save_signal({
                             'symbol': symbol, 'timeframe': tf,
@@ -67,9 +86,12 @@ def analysis_cycle():
                         signal_generated(result)
                         signal_sent(symbol)
                     else:
-                        no_signal(symbol, result.get('reason', 'No clear signal'))
+                        no_signal(symbol, result.get('reason', 'No signal'))
                 except Exception as e:
                     error(f"{symbol}/{tf}", str(e))
+                    inc_error()
+
+        # Monitor active trades
         for signal in get_active_signals():
             try:
                 time.sleep(0.2)
@@ -90,9 +112,10 @@ def analysis_cycle():
     except Exception as e:
         error("SYSTEM", f"Analysis cycle failed: {e}")
         inc_error()
+
     duration = time.time() - start_time
-    tick_cycle(duration)
     cron_complete(duration)
+    tick_cycle(duration)
     if not is_ready():
         mark_ready()
 
@@ -106,7 +129,7 @@ def main():
 
     print("Running initial analysis...")
     analysis_cycle()
-    print(f"Initial analysis done. Cycles: {get_state()['cycles']}, Coins: {get_state()['coins']}")
+    print(f"Initial analysis done. State: {get_state()}")
 
     def analysis_loop():
         while True:
