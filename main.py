@@ -100,6 +100,8 @@ def main():
     init_db()
     init_logger(SUPABASE_DB_URL)
     system_start()
+    cron_tick()  # test log
+    cron_complete(0.0)
     binance_connected()
     supabase_connected()
 

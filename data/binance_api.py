@@ -63,13 +63,24 @@ def get_24hr_ticker(symbol: str) -> dict:
 def get_all_prices(symbols: list) -> dict:
     """Get current prices for multiple symbols. Returns {symbol: price}"""
     url = f"{BINANCE_BASE_URL}/api/v3/ticker/price"
-    resp = requests.get(url, timeout=10)
-    data = resp.json()
-    if not isinstance(data, list):
-        print(f"[BINANCE prices] Error: {data}")
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if isinstance(data, list):
+            target_symbols = set(s.upper() for s in symbols)
+            return {item['symbol']: float(item['price']) for item in data if item['symbol'] in target_symbols}
+        # Fallback: try individual endpoint per symbol
+        prices = {}
+        for sym in symbols:
+            try:
+                p = get_current_price(sym)
+                if p and p.get('price'):
+                    prices[sym.upper()] = float(p['price'])
+            except Exception:
+                pass
+        return prices
+    except Exception:
         return {}
-    target_symbols = set(s.upper() for s in symbols)
-    return {item['symbol']: float(item['price']) for item in data if item['symbol'] in target_symbols}
 
 def extract_ohlcv(klines: list) -> dict:
     """Extract OHLCV arrays from raw kline data. Returns dict with lists of floats."""

@@ -15,7 +15,7 @@ from db.supabase_client import (
     get_recent_signals, get_active_signals as db_get_active_signals,
     get_recent_results, get_recent_logs
 )
-from data.binance_api import get_all_prices as fetch_all_prices
+from data.binance_api import get_current_price
 
 (SYMBOL, TIMEFRAMES_STATE, CAPITAL, RISK) = range(4)
 
@@ -96,19 +96,21 @@ async def show_live_prices(update: Update):
     if not coins:
         await update.message.reply_text("❌ لا توجد عملات مضافة.", reply_markup=get_main_keyboard())
         return
-    symbols = [c['symbol'] for c in coins]
-    try:
-        prices = fetch_all_prices(symbols)
-        msg = "💰 **الأسعار الحية**\n\n"
-        for sym in symbols:
-            price = prices.get(sym.upper())
-            if price:
-                msg += f"🟢 **{sym}**: ${price:.4f}\n"
+    from data.binance_api import get_current_price as _price
+    import time as _t
+    msg = "💰 **الأسعار الحية**\n\n"
+    for c in coins:
+        sym = c['symbol']
+        try:
+            p = _price(sym)
+            if p and 'price' in p:
+                msg += f"🟢 **{sym}**: ${float(p['price']):.4f}\n"
             else:
                 msg += f"❓ **{sym}**: غير متاح\n"
-        await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f"❌ {e}", reply_markup=get_main_keyboard())
+        except Exception as e:
+            msg += f"❓ **{sym}**: {str(e)[:50]}\n"
+        _t.sleep(0.3)
+    await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_my_coins(update: Update):
     coins = get_active_coins()
@@ -161,7 +163,11 @@ async def show_results(update: Update):
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_logs(update: Update):
-    logs = get_recent_logs(30)
+    logs = []
+    try:
+        logs = get_recent_logs(30)
+    except Exception:
+        pass
     if not logs:
         logs = get_buffer_logs(30)
     if not logs:
@@ -174,10 +180,9 @@ async def show_logs(update: Update):
             ts = ts.strftime('%H:%M:%S')
         elif isinstance(ts, str):
             ts = ts[11:19] if len(ts) > 19 else ts
-        m = l['message'] if l['message'] else ''
+        m = str(l.get('message', ''))
         first_line = m.split('\n')[0][:100]
-        more = ' ...' if '\n' in m else ''
-        msg += f"`[{ts}]` {l['level']} {l['component']} — {first_line}{more}\n"
+        msg += f"`[{ts}]` {l.get('level','')} {l.get('component','')} — {first_line}\n"
     if len(msg) > 3500:
         msg = msg[:3500] + "\n..."
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
