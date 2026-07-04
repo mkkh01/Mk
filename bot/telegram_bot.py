@@ -363,16 +363,27 @@ def build_application() -> Application:
 
 
 def run_webhook(app: Application, url: str, port: int):
-    """Run bot with built-in HTTP server — pages + webhook on same port."""
+    """Run bot with stdlib HTTP server — pages + webhook on same port."""
     import asyncio, json, threading
     from http.server import HTTPServer, BaseHTTPRequestHandler
     from telegram import Update
 
-    # Initialize PTB app FIRST (creates bot, queue, etc)
+    # Create ONE persistent event loop for all PTB operations
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(app.initialize())
     loop.run_until_complete(app.bot.set_webhook(url=url, drop_pending_updates=True))
+
+    # Background: process updates from queue using persistent loop
+    async def _process_updates():
+        while True:
+            try:
+                update = await app.update_queue.get()
+                await app.process_update(update)
+            except Exception:
+                pass
+
+    loop.create_task(_process_updates())
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, f, *a): pass
@@ -426,10 +437,10 @@ def run_webhook(app: Application, url: str, port: int):
                     body = self.rfile.read(length)
                     data = json.loads(body)
                     update_obj = Update.de_json(data, app.bot)
-                    # Process in a fresh event loop (thread-safe)
-                    _loop = asyncio.new_event_loop()
-                    _loop.run_until_complete(app.process_update(update_obj))
-                    _loop.close()
+                    # Put update in queue — processed by persistent event loop
+                    loop.call_soon_threadsafe(
+                        app.update_queue.put_nowait, update_obj
+                    )
                 except Exception:
                     pass
                 self.send_response(200); self.end_headers()
@@ -438,12 +449,7 @@ def run_webhook(app: Application, url: str, port: int):
 
     server = HTTPServer(("0.0.0.0", port), Handler)
     print(f"🌐 http://0.0.0.0:{port}/ | /health | /webhook → {url}")
-    threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    # Keep main thread alive for analysis cycle
-    try:
-        while True:
-            import time
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
+    # HTTP server in daemon thread, event loop in main thread
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    loop.run_forever()
