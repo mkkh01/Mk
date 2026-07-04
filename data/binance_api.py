@@ -23,21 +23,32 @@ def get_order_book(symbol: str, limit: int = 20) -> dict:
     return resp.json()
 
 def get_24hr_ticker(symbol: str) -> dict:
-    """Get 24hr ticker statistics including price change."""
-    url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr?symbol={symbol.upper()}"
-    resp = requests.get(url, timeout=10)
-    data = resp.json()
-    if 'lastPrice' not in data:
-        print(f"[BINANCE] Invalid response for {symbol}: {data}")
-        return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0, 'error': str(data.get('msg', 'Unknown'))}
-    return {
-        'symbol': data['symbol'],
-        'price': float(data['lastPrice']),
-        'change_pct': float(data['priceChangePercent']),
-        'high': float(data['highPrice']),
-        'low': float(data['lowPrice']),
-        'volume': float(data['volume'])
-    }
+    """Get 24hr ticker + price. Falls back to simple price if 24hr fails."""
+    try:
+        url = f"{BINANCE_BASE_URL}/api/v3/ticker/24hr?symbol={symbol.upper()}"
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if 'lastPrice' in data:
+            return {
+                'symbol': data['symbol'],
+                'price': float(data['lastPrice']),
+                'change_pct': float(data.get('priceChangePercent', 0)),
+                'high': float(data.get('highPrice', 0)),
+                'low': float(data.get('lowPrice', 0)),
+                'volume': float(data.get('volume', 0))
+            }
+        print(f"[BINANCE 24hr] {symbol}: HTTP={resp.status_code} body={data}")
+    except Exception as e:
+        print(f"[BINANCE 24hr] {symbol}: error={e}")
+    # Fallback: simple price endpoint
+    try:
+        p = get_current_price(symbol)
+        if 'price' in p:
+            return {'symbol': symbol.upper(), 'price': float(p['price']),
+                    'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0}
+    except Exception as e:
+        print(f"[BINANCE price] {symbol}: error={e}")
+    return {'symbol': symbol.upper(), 'price': 0, 'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0}
 
 def get_all_prices(symbols: list) -> dict:
     """Get current prices for multiple symbols. Returns {symbol: price}"""
