@@ -113,7 +113,7 @@ def bybit_orderbook(symbol: str, limit: int = 20) -> dict | None:
 #  CANDLE / KLINES PROVIDERS
 # ═══════════════════════════════════════════════
 
-def bybit_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+def bybit_klines(symbol: str, interval: str = "1h", limit: int = 500) -> list:
     """Bybit klines — returns Binance-compatible format."""
     try:
         # Map Binance interval to Bybit interval
@@ -158,7 +158,7 @@ def bybit_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
     return []
 
 
-def kucoin_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+def kucoin_klines(symbol: str, interval: str = "1h", limit: int = 500) -> list:
     """KuCoin klines — returns Binance-compatible format."""
     try:
         sym = symbol.upper().replace('USDT', '-USDT')
@@ -247,7 +247,7 @@ def get_price_any_source(symbol: str, binance_fn=None) -> dict:
     return {'price': 0, 'source': 'none'}
 
 
-def get_klines_any_source(symbol: str, interval: str = "1h", limit: int = 100, binance_fn=None) -> list:
+def get_klines_any_source(symbol: str, interval: str = "1h", limit: int = 500, binance_fn=None) -> list:
     """
     Get klines from ANY available source.
     Priority: Binance → Bybit → KuCoin

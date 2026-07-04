@@ -116,7 +116,7 @@ def get_current_price(symbol: str) -> dict:
 
 # ── KLINES + VALIDATION ──
 
-def get_klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
+def get_klines(symbol: str, interval: str = "1h", limit: int = 500) -> list:
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit={limit}"
     try:
         resp = _try_request(url, timeout=5)

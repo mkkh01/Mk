@@ -95,7 +95,7 @@ def analysis_cycle():
 
                     # ── KLINES (multi-source, skip dead Binance) ──
                     binance_klines_fn = None if binance_dead else get_klines
-                    klines = get_klines_any_source(symbol, tf, limit=100, binance_fn=binance_klines_fn)
+                    klines = get_klines_any_source(symbol, tf, limit=500, binance_fn=binance_klines_fn)
                     time.sleep(0.05)
 
                     # ── ORDER BOOK (multi-source) ──
@@ -123,8 +123,12 @@ def analysis_cycle():
 
                     if not klines or kline_count < 20:
                         no_signal(symbol, f"بيانات غير كافية ({kline_count} شمعة)")
-                        _log("⚠️", "DATA", f"{symbol}/{tf}: بيانات شموع غير كافية — {kline_count}/100 مطلوب ≥20")
+                        _log("⚠️", "DATA", f"{symbol}/{tf}: بيانات شموع غير كافية — {kline_count}/500 مطلوب ≥20")
                         continue
+
+                    # Warn if insufficient for EMA200
+                    if kline_count < 200:
+                        _log("⚠️", "DATA", f"{symbol}/{tf}: بيانات غير كافية لـ EMA200 — {kline_count} شمعة (تحتاج ≥200)")
 
                     # Log candle summary for Telegram
                     try:
