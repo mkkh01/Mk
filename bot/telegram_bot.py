@@ -9,12 +9,19 @@ import asyncio
 # Python 3.14 enforces __slots__ strictly — annotated attrs not in slots fail.
 # Patch before importing telegram.ext to prevent AttributeError at runtime.
 if sys.version_info >= (3, 14):
-    from telegram.ext._updater import Updater as _Updater
-    _original_init = _Updater.__init__
-    def _patched_init(self, *args, **kwargs):
-        object.__setattr__(self, '__dict__', {})
-        _original_init(self, *args, **kwargs)
-    _Updater.__init__ = _patched_init
+    import importlib.util
+    _spec = importlib.util.find_spec('telegram.ext._updater')
+    if _spec and _spec.origin:
+        _path = _spec.origin
+        with open(_path, 'r') as _f:
+            _src = _f.read()
+        if '__polling_cleanup_cb' not in _src:
+            _src = _src.replace(
+                '__slots__ = (',
+                '__slots__ = (\'__polling_cleanup_cb\','
+            )
+            with open(_path, 'w') as _f:
+                _f.write(_src)
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
