@@ -28,7 +28,8 @@ def get_24hr_ticker(symbol: str) -> dict:
     resp = requests.get(url, timeout=10)
     data = resp.json()
     if 'lastPrice' not in data:
-        return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0}
+        print(f"[BINANCE] Invalid response for {symbol}: {data}")
+        return {'symbol': symbol, 'price': 0, 'change_pct': 0, 'high': 0, 'low': 0, 'volume': 0, 'error': str(data.get('msg', 'Unknown'))}
     return {
         'symbol': data['symbol'],
         'price': float(data['lastPrice']),

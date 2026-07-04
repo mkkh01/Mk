@@ -81,9 +81,9 @@ async def show_live_prices(update: Update):
                     emoji = "🟢" if t['change_pct'] >= 0 else "🔴"
                     msg += f"{emoji} **{t['symbol']}**: ${t['price']:.4f} ({t['change_pct']:+.2f}%)\n"
                 else:
-                    msg += f"❓ **{sym}**: رمز غير صالح\n"
-            except:
-                msg += f"❓ **{sym}**: خطأ في جلب السعر\n"
+                    msg += f"❓ **{sym}**: لا توجد بيانات (تأكد من صحة الرمز)\n"
+            except Exception as e:
+                msg += f"❓ **{sym}**: {str(e)[:60]}\n"
         await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {e}", reply_markup=get_main_keyboard())
