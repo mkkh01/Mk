@@ -174,8 +174,10 @@ async def show_logs(update: Update):
             ts = ts.strftime('%H:%M:%S')
         elif isinstance(ts, str):
             ts = ts[11:19] if len(ts) > 19 else ts
-        m = l['message'][:120] if l['message'] else ''
-        msg += f"`[{ts}]` {l['level']} {l['component']} — {m}\n"
+        m = l['message'] if l['message'] else ''
+        first_line = m.split('\n')[0][:100]
+        more = ' ...' if '\n' in m else ''
+        msg += f"`[{ts}]` {l['level']} {l['component']} — {first_line}{more}\n"
     if len(msg) > 3500:
         msg = msg[:3500] + "\n..."
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')

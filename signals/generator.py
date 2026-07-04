@@ -31,7 +31,12 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
     if not decision['signal']:
         return {
             'symbol': symbol, 'timeframe': timeframe, 'has_signal': False,
-            'regime': regime_data, 'reason': decision['reason']
+            'regime': regime_data, 'reason': decision['reason'],
+            '_debug': {
+                'donchian_signal': donchian_signal,
+                'order_flow_signal': order_flow_signal,
+                'decision': decision
+            }
         }
 
     signal = decision['signal']
@@ -59,5 +64,10 @@ def generate_signal(symbol: str, timeframe: str, klines: list, order_book: dict,
         'regime_details': {
             'regime': regime_data['regime'], 'confidence': regime_data['confidence'],
             'metrics': regime_data['metrics']
+        },
+        '_debug': {
+            'donchian_signal': donchian_signal,
+            'order_flow_signal': order_flow_signal,
+            'decision': decision
         }
     }

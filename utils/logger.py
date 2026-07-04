@@ -16,10 +16,15 @@ def init_logger(db_url: str):
 
 def _log(level: str, component: str, message: str, details: dict = None):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[{timestamp}] {level} {component} — {message}"
-    print(log_entry)
+    if '\n' in message:
+        # Multi-line report — print header + body separately
+        print(f"[{timestamp}] {level} {component}")
+        print(message)
+    else:
+        log_entry = f"[{timestamp}] {level} {component} — {message}"
+        print(log_entry)
 
-    # Always keep in memory buffer (for Telegram)
+    # Always keep in memory buffer
     _LOGS_BUFFER.append({
         'timestamp': datetime.now(), 'level': level,
         'component': component, 'message': message

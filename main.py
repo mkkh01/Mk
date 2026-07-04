@@ -13,8 +13,10 @@ from utils.logger import (
     init_logger, system_start, binance_connected, supabase_connected,
     coins_loaded, analysis_start, fetch_data_start, fetch_data_done,
     no_signal, signal_generated, signal_sent, monitoring, tp_hit, sl_hit,
-    error, cron_tick, cron_complete
+    error, cron_tick, cron_complete, _log
 )
+from utils.report import generate_report
+import time as _time_module
 from bot.telegram_bot import build_application, run_webhook
 
 
@@ -38,7 +40,18 @@ def analysis_cycle():
                     time.sleep(0.2)
                     order_book = get_order_book(symbol)
                     fetch_data_done(symbol, len(klines) if isinstance(klines, list) else 0)
+                    t0 = _time_module.time()
                     result = generate_signal(symbol, tf, klines, order_book, dict(coin))
+                    timing = {'analysis': (_time_module.time() - t0) * 1000}
+                    # Generate detailed report
+                    dbg = result.get('_debug', {})
+                    report = generate_report(symbol, tf, klines, order_book,
+                                            result.get('regime', {}),
+                                            dbg.get('donchian_signal'),
+                                            dbg.get('order_flow_signal'),
+                                            dbg.get('decision', {}),
+                                            timing)
+                    _log("📋", "REPORT", f"\n{report}")
                     if result.get('has_signal'):
                         save_signal({
                             'symbol': symbol, 'timeframe': tf,
