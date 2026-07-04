@@ -1,6 +1,6 @@
 """
 CTM Bot — Main Entry Point
-Bot runs in daemon thread, analysis runs in main thread.
+Bot runs in main thread (needs signal handlers), analysis in daemon thread.
 """
 import time
 import threading
@@ -29,7 +29,6 @@ def analysis_cycle():
             cron_complete(time.time() - start_time)
             return
         coins_loaded(len(coins), [c['symbol'] for c in coins])
-
         for coin in coins:
             symbol = coin['symbol']
             for tf in coin['timeframes']:
@@ -58,7 +57,6 @@ def analysis_cycle():
                         no_signal(symbol, result.get('reason', 'No clear signal'))
                 except Exception as e:
                     error(f"{symbol}/{tf}", str(e))
-
         for signal in get_active_signals():
             try:
                 price_data = get_current_price(signal['symbol'])
@@ -87,21 +85,21 @@ def main():
     binance_connected()
     supabase_connected()
 
-    print("Running initial analysis...")
     analysis_cycle()
 
-    print("Starting Telegram bot...")
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
+    def analysis_loop():
+        while True:
+            time.sleep(MONITOR_INTERVAL_SECONDS)
+            try:
+                analysis_cycle()
+            except Exception as e:
+                error("MAIN", str(e))
+                time.sleep(10)
 
-    print(f"Monitoring loop started (interval: {MONITOR_INTERVAL_SECONDS}s)")
-    while True:
-        time.sleep(MONITOR_INTERVAL_SECONDS)
-        try:
-            analysis_cycle()
-        except Exception as e:
-            error("MAIN", str(e))
-            time.sleep(10)
+    threading.Thread(target=analysis_loop, daemon=True).start()
+
+    print("Starting Telegram bot (main thread)...")
+    run_bot()
 
 
 if __name__ == "__main__":
