@@ -252,11 +252,12 @@ def main():
     _log("📐", "SYSTEM", "مؤشرات موحدة — تحسب مرة واحدة لكل دورة")
     _log("🛡️", "SYSTEM", "محرك المخاطر نشط")
 
-    print("Running initial analysis...")
-    analysis_cycle()
-    print(f"Initial analysis done. State: {get_state()}")
-
     def analysis_loop():
+        # Run first analysis immediately
+        print("Running initial analysis...")
+        analysis_cycle()
+        print(f"Initial analysis done. State: {get_state()}")
+        # Continue periodic analysis
         while True:
             time.sleep(MONITOR_INTERVAL_SECONDS)
             try:
@@ -266,8 +267,10 @@ def main():
                 inc_error()
                 time.sleep(10)
 
+    # Start analysis in background — don't block server startup!
     threading.Thread(target=analysis_loop, daemon=True).start()
 
+    # Build and start server immediately
     app = build_application()
 
     port = int(os.environ.get('PORT', 10000))
@@ -276,9 +279,8 @@ def main():
 
     if not WEBHOOK_BASE_URL:
         print(f"⚠️  WEBHOOK_BASE_URL not set — using {webhook_url}")
-        print(f"   Set RENDER_EXTERNAL_URL or WEBHOOK_BASE_URL for production")
 
-    print(f"Starting webhook on port {port}, url={webhook_url}")
+    print(f"🚀 Starting server on port {port}")
     run_webhook(app, webhook_url, port)
 
 
