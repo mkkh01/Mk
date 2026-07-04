@@ -13,9 +13,8 @@ from utils.logger import get_buffer_logs
 from db.supabase_client import (
     get_active_coins, add_coin, remove_coin,
     get_recent_signals, get_active_signals as db_get_active_signals,
-    get_recent_results, get_recent_logs
+    get_recent_results
 )
-from data.binance_api import get_current_price
 
 (SYMBOL, TIMEFRAMES_STATE, CAPITAL, RISK) = range(4)
 
@@ -92,24 +91,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("القائمة الرئيسية:", reply_markup=get_main_keyboard())
 
 async def show_live_prices(update: Update):
+    from utils.price_cache import get_price
     coins = get_active_coins()
     if not coins:
         await update.message.reply_text("❌ لا توجد عملات مضافة.", reply_markup=get_main_keyboard())
         return
-    from data.binance_api import get_current_price as _price
-    import time as _t
     msg = "💰 **الأسعار الحية**\n\n"
     for c in coins:
         sym = c['symbol']
-        try:
-            p = _price(sym)
-            if p and 'price' in p:
-                msg += f"🟢 **{sym}**: ${float(p['price']):.4f}\n"
-            else:
-                msg += f"❓ **{sym}**: غير متاح\n"
-        except Exception as e:
-            msg += f"❓ **{sym}**: {str(e)[:50]}\n"
-        _t.sleep(0.3)
+        cached = get_price(sym)
+        if cached:
+            price = cached['price']
+            ago = int((__import__('datetime').datetime.now() - cached['updated']).total_seconds())
+            msg += f"🟢 **{sym}**: ${price:.4f} _(منذ {ago}s)_\n"
+        else:
+            msg += f"⏳ **{sym}**: انتظار أول تحليل...\n"
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_my_coins(update: Update):
@@ -163,28 +159,22 @@ async def show_results(update: Update):
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_logs(update: Update):
-    logs = []
-    try:
-        logs = get_recent_logs(30)
-    except Exception:
-        pass
+    logs = get_buffer_logs(20)
     if not logs:
-        logs = get_buffer_logs(30)
-    if not logs:
-        await update.message.reply_text("📜 لا توجد سجلات بعد.", reply_markup=get_main_keyboard())
+        await update.message.reply_text("📜 لا توجد سجلات بعد. جاري التحميل...", reply_markup=get_main_keyboard())
         return
-    msg = "📜 **سجلات النظام**\n\n"
-    for l in logs[:20]:
-        ts = l['timestamp']
+    msg = "📜 **سجلات النظام** (آخر 20)\n\n"
+    for l in logs:
+        ts = l.get('timestamp', '')
         if hasattr(ts, 'strftime'):
             ts = ts.strftime('%H:%M:%S')
         elif isinstance(ts, str):
-            ts = ts[11:19] if len(ts) > 19 else ts
+            ts = ts[-8:] if len(ts) >= 8 else ts
         m = str(l.get('message', ''))
-        first_line = m.split('\n')[0][:100]
-        msg += f"`[{ts}]` {l.get('level','')} {l.get('component','')} — {first_line}\n"
-    if len(msg) > 3500:
-        msg = msg[:3500] + "\n..."
+        first = m.split('\n')[0][:90]
+        msg += f"`{ts}` {l.get('level','')} {l.get('component','')} — {first}\n"
+    if len(msg) > 3800:
+        msg = msg[:3800] + "\n..."
     await update.message.reply_text(msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
 async def show_delete_menu(update: Update):

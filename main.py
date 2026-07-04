@@ -13,10 +13,9 @@ from utils.logger import (
     init_logger, system_start, binance_connected, supabase_connected,
     coins_loaded, analysis_start, fetch_data_start, fetch_data_done,
     no_signal, signal_generated, signal_sent, monitoring, tp_hit, sl_hit,
-    error, cron_tick, cron_complete, _log
+    error, cron_tick, cron_complete
 )
-from utils.report import generate_report
-import time as _time_module
+from utils.price_cache import update_price
 from bot.telegram_bot import build_application, run_webhook
 
 
@@ -40,20 +39,15 @@ def analysis_cycle():
                     time.sleep(0.2)
                     order_book = get_order_book(symbol)
                     fetch_data_done(symbol, len(klines) if isinstance(klines, list) else 0)
-                    t0 = _time_module.time()
+                    # Cache latest close price from klines (Binance ticker IP-banned)
+                    if isinstance(klines, list) and len(klines) > 0:
+                        try:
+                            latest = klines[-1]
+                            close_price = float(latest[4]) if isinstance(latest, list) else float(latest.get('close', 0))
+                            update_price(symbol, close_price)
+                        except Exception:
+                            pass
                     result = generate_signal(symbol, tf, klines, order_book, dict(coin))
-                    timing = {'analysis': (_time_module.time() - t0) * 1000}
-                    try:
-                        dbg = result.get('_debug', {})
-                        report = generate_report(symbol, tf, klines, order_book,
-                                                result.get('regime', {}),
-                                                dbg.get('donchian_signal'),
-                                                dbg.get('order_flow_signal'),
-                                                dbg.get('decision', {}),
-                                                timing)
-                        _log("📋", "REPORT", f"\n{report}")
-                    except Exception as _re:
-                        error("REPORT", str(_re))
                     if result.get('has_signal'):
                         save_signal({
                             'symbol': symbol, 'timeframe': tf,
@@ -100,8 +94,6 @@ def main():
     init_db()
     init_logger(SUPABASE_DB_URL)
     system_start()
-    cron_tick()  # test log
-    cron_complete(0.0)
     binance_connected()
     supabase_connected()
 
