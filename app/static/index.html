@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CT Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .container { max-width: 1400px; margin: auto; padding: 20px; }
+        .card { background-color: #1f2937; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); border: 1px solid #374151; }
+        .card-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; color: #e5e7eb; display: flex; align-items: center; gap: 8px; }
+        .stat-value { font-size: 1.5rem; font-weight: 700; }
+        .stat-label { font-size: 0.75rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; }
+        .cycle-summary-text { font-family: 'Courier New', monospace; font-size: 0.8rem; line-height: 1.6; color: #d1d5db; white-space: pre; background: #111827; padding: 16px; border-radius: 8px; border: 1px solid #374151; overflow-x: auto; }
+        .health-excellent { color: #10b981; }
+        .health-good { color: #f59e0b; }
+        .health-critical { color: #ef4444; }
+        .health-poor { color: #f97316; }
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .rejection-bar { height: 6px; border-radius: 3px; background: #374151; overflow: hidden; }
+        .rejection-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #ef4444, #f97316); }
+        .grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-3xl font-bold">CT System Dashboard</h1>
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-400">Auto-refresh</span>
+                <span id="refresh-indicator" class="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+            </div>
+        </div>
+
+        <!-- Cycle Summary Card (Main Feature) -->
+        <div class="card mb-6 fade-in">
+            <div class="card-title">
+                <svg class="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                Cycle Summary
+            </div>
+
+            <!-- Quick Stats Grid -->
+            <div class="grid-auto mb-5">
+                <div class="text-center p-3 bg-gray-800 rounded-lg">
+                    <div class="stat-value text-blue-400" id="cs-pairs">-</div>
+                    <div class="stat-label">Pairs</div>
+                </div>
+                <div class="text-center p-3 bg-gray-800 rounded-lg">
+                    <div class="stat-value text-green-400" id="cs-bullish">-</div>
+                    <div class="stat-label">Bullish</div>
+                </div>
+                <div class="text-center p-3 bg-gray-800 rounded-lg">
+                    <div class="stat-value text-red-400" id="cs-bearish">-</div>
+                    <div class="stat-label">Bearish</div>
+                </div>
+                <div class="text-center p-3 bg-gray-800 rounded-lg">
+                    <div class="stat-value text-gray-400" id="cs-sideways">-</div>
+                    <div class="stat-label">Sideways</div>
+                </div>
+                <div class="text-center p-3 bg-gray-800 rounded-lg">
+                    <div class="stat-value text-yellow-400" id="cs-signals">-</div>
+                    <div class="stat-label">Signals</div>
+                </div>
+                <div class="text-center p-3 bg-gray-800 rounded-lg">
+                    <div class="stat-value text-green-400" id="cs-approved">-</div>
+                    <div class="stat-label">Approved</div>
+                </div>
+                <div class="text-center p-3 bg-gray-800 rounded-lg">
+                    <div class="stat-value text-red-400" id="cs-rejected">-</div>
+                    <div class="stat-label">Rejected</div>
+                </div>
+            </div>
+
+            <!-- Rejection Reasons -->
+            <div class="mb-5" id="cs-rejection-section" style="display:none;">
+                <div class="text-sm font-semibold text-gray-300 mb-2">Rejection Reasons</div>
+                <div id="cs-rejection-bars"></div>
+            </div>
+
+            <!-- Averages Row -->
+            <div class="flex flex-wrap gap-4 mb-5">
+                <div class="flex-1 min-w-[140px] p-3 bg-gray-800 rounded-lg">
+                    <div class="text-xs text-gray-400 mb-1">Avg Strategy Score</div>
+                    <div class="text-lg font-bold text-blue-300" id="cs-avg-score">-</div>
+                </div>
+                <div class="flex-1 min-w-[140px] p-3 bg-gray-800 rounded-lg">
+                    <div class="text-xs text-gray-400 mb-1">Avg Confidence</div>
+                    <div class="text-lg font-bold text-purple-300" id="cs-avg-conf">-</div>
+                </div>
+                <div class="flex-1 min-w-[140px] p-3 bg-gray-800 rounded-lg">
+                    <div class="text-xs text-gray-400 mb-1">Avg Analysis Time</div>
+                    <div class="text-lg font-bold text-cyan-300" id="cs-avg-time">-</div>
+                </div>
+            </div>
+
+            <!-- Operations Row -->
+            <div class="flex flex-wrap gap-4 mb-5">
+                <div class="flex-1 min-w-[120px] p-3 bg-gray-800 rounded-lg">
+                    <div class="text-xs text-gray-400 mb-1">Telegram Messages</div>
+                    <div class="text-lg font-bold text-sky-300" id="cs-telegram">-</div>
+                </div>
+                <div class="flex-1 min-w-[120px] p-3 bg-gray-800 rounded-lg">
+                    <div class="text-xs text-gray-400 mb-1">Database Writes</div>
+                    <div class="text-lg font-bold text-indigo-300" id="cs-db-writes">-</div>
+                </div>
+                <div class="flex-1 min-w-[120px] p-3 bg-gray-800 rounded-lg">
+                    <div class="text-xs text-gray-400 mb-1">Warnings</div>
+                    <div class="text-lg font-bold text-yellow-300" id="cs-warnings">-</div>
+                </div>
+                <div class="flex-1 min-w-[120px] p-3 bg-gray-800 rounded-lg">
+                    <div class="text-xs text-gray-400 mb-1">Errors</div>
+                    <div class="text-lg font-bold text-red-300" id="cs-errors">-</div>
+                </div>
+            </div>
+
+            <!-- System Health -->
+            <div class="flex items-center gap-3 mb-4">
+                <span class="text-sm text-gray-400">System Health:</span>
+                <span id="cs-system-health" class="text-lg font-bold">-</span>
+            </div>
+
+            <!-- Raw Formatted Text -->
+            <details class="mt-2">
+                <summary class="text-sm text-gray-400 cursor-pointer hover:text-gray-300">Show Raw Log Format</summary>
+                <div class="mt-3 cycle-summary-text" id="cs-formatted-text">Loading...</div>
+            </details>
+        </div>
+
+        <!-- Existing Cards Row -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <!-- System Health Card -->
+            <div class="card">
+                <div class="card-title">
+                    <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                    System Health
+                </div>
+                <p class="mb-2">Engine: <span id="engine-status" class="font-semibold">Loading...</span></p>
+                <p class="mb-2">Active Coins: <span id="active-coins" class="font-semibold text-sm">Loading...</span></p>
+                <p class="mb-2">Last Data: <span id="last-data-at" class="font-semibold">Loading...</span></p>
+                <p>Errors: <span id="system-errors" class="font-semibold">Loading...</span></p>
+            </div>
+
+            <!-- Live Prices Card -->
+            <div class="card">
+                <div class="card-title">
+                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
+                    Live Prices
+                </div>
+                <div id="live-prices-container">Loading...</div>
+            </div>
+
+            <!-- Overall Performance Card -->
+            <div class="card">
+                <div class="card-title">
+                    <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                    Overall Performance
+                </div>
+                <p class="mb-2">Total Trades: <span id="total-trades" class="font-semibold">Loading...</span></p>
+                <p class="mb-2">Win Rate: <span id="win-rate" class="font-semibold">Loading...</span></p>
+                <p class="mb-2">Total PnL: <span id="total-pnl" class="font-semibold">Loading...</span></p>
+                <p>Max Drawdown: <span id="max-drawdown" class="font-semibold">Loading...</span></p>
+            </div>
+        </div>
+
+        <!-- Strategy Performance -->
+        <div class="card mb-6">
+            <div class="card-title">
+                <svg class="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"></path></svg>
+                Strategy Performance by Symbol
+            </div>
+            <div class="flex space-x-4 mb-4">
+                <select id="symbol-select" class="bg-gray-700 text-white p-2 rounded border border-gray-600"></select>
+                <button id="fetch-performance" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors">Fetch Performance</button>
+            </div>
+            <div id="symbol-performance-details">Select a symbol to view performance.</div>
+        </div>
+
+        <!-- Thresholds -->
+        <div class="card">
+            <div class="card-title">
+                <svg class="w-5 h-5 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                Thresholds & Configuration
+            </div>
+            <div id="thresholds-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = '/api/dashboard';
+
+        async function fetchData(endpoint) {
+            const response = await fetch(`${API_BASE_URL}/${endpoint}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return await response.json();
+        }
+
+        // ===== CYCLE SUMMARY =====
+        async function updateCycleSummary() {
+            try {
+                const data = await fetchData('cycle_summary');
+
+                // Quick stats
+                document.getElementById('cs-pairs').textContent = data.pairs_analyzed;
+                document.getElementById('cs-bullish').textContent = data.bullish;
+                document.getElementById('cs-bearish').textContent = data.bearish;
+                document.getElementById('cs-sideways').textContent = data.sideways;
+                document.getElementById('cs-signals').textContent = data.signals_found;
+                document.getElementById('cs-approved').textContent = data.approved;
+                document.getElementById('cs-rejected').textContent = data.rejected;
+
+                // Averages
+                document.getElementById('cs-avg-score').textContent = `${data.avg_strategy_score.toFixed(1)}%`;
+                document.getElementById('cs-avg-conf').textContent = `${data.avg_confidence.toFixed(1)}%`;
+                document.getElementById('cs-avg-time').textContent = `${Math.round(data.avg_analysis_time_ms)} ms`;
+
+                // Operations
+                document.getElementById('cs-telegram').textContent = data.telegram_messages;
+                document.getElementById('cs-db-writes').textContent = data.database_writes;
+                document.getElementById('cs-warnings').textContent = data.warnings;
+                document.getElementById('cs-errors').textContent = data.errors;
+
+                // System health with color
+                const healthEl = document.getElementById('cs-system-health');
+                const healthUpper = data.system_health.toUpperCase();
+                healthEl.textContent = data.system_health;
+                healthEl.className = 'text-lg font-bold ' +
+                    (healthUpper === 'EXCELLENT' ? 'health-excellent' :
+                     healthUpper === 'GOOD' ? 'health-good' :
+                     healthUpper === 'CRITICAL' ? 'health-critical' : 'health-poor');
+
+                // Rejection reasons
+                const rejectionSection = document.getElementById('cs-rejection-section');
+                const rejectionBars = document.getElementById('cs-rejection-bars');
+                const reasons = data.rejection_reasons || {};
+                const reasonKeys = Object.keys(reasons);
+
+                if (reasonKeys.length > 0) {
+                    rejectionSection.style.display = 'block';
+                    rejectionBars.innerHTML = '';
+                    const maxCount = Math.max(...Object.values(reasons));
+
+                    for (const [reason, count] of Object.entries(reasons)) {
+                        const pct = maxCount > 0 ? (count / maxCount * 100) : 0;
+                        const div = document.createElement('div');
+                        div.className = 'mb-2';
+                        div.innerHTML = `
+                            <div class="flex justify-between text-xs mb-1">
+                                <span class="text-gray-300">${reason}</span>
+                                <span class="text-gray-400">${count}</span>
+                            </div>
+                            <div class="rejection-bar">
+                                <div class="rejection-bar-fill" style="width: ${pct}%"></div>
+                            </div>
+                        `;
+                        rejectionBars.appendChild(div);
+                    }
+                } else {
+                    rejectionSection.style.display = 'none';
+                }
+
+                // Raw formatted text
+                document.getElementById('cs-formatted-text').textContent = data.formatted_text;
+
+            } catch (error) {
+                console.error('Error fetching cycle summary:', error);
+            }
+        }
+
+        // ===== SYSTEM HEALTH =====
+        async function updateSystemHealth() {
+            try {
+                const data = await fetchData('system_health');
+                document.getElementById('engine-status').textContent = data.engine_running ? 'Running' : 'Stopped';
+                document.getElementById('engine-status').className = data.engine_running ? 'font-semibold text-green-500' : 'font-semibold text-red-500';
+                document.getElementById('active-coins').textContent = data.active_coins.join(', ') || 'None';
+                document.getElementById('last-data-at').textContent = data.last_data_at ? new Date(data.last_data_at).toLocaleString() : 'N/A';
+                document.getElementById('system-errors').textContent = data.errors;
+                document.getElementById('system-errors').className = data.errors > 0 ? 'font-semibold text-red-500' : 'font-semibold text-green-500';
+
+                // Populate symbol select for strategy performance
+                const symbolSelect = document.getElementById('symbol-select');
+                symbolSelect.innerHTML = '<option value="">Select a symbol</option>';
+                data.active_coins.forEach(symbol => {
+                    const option = document.createElement('option');
+                    option.value = symbol;
+                    option.textContent = symbol;
+                    symbolSelect.appendChild(option);
+                });
+
+            } catch (error) {
+                console.error('Error fetching system health:', error);
+                document.getElementById('engine-status').textContent = 'Error';
+                document.getElementById('active-coins').textContent = 'Error';
+                document.getElementById('last-data-at').textContent = 'Error';
+                document.getElementById('system-errors').textContent = 'Error';
+            }
+        }
+
+        // ===== LIVE PRICES =====
+        async function updateLivePrices() {
+            try {
+                const activeCoinsText = document.getElementById('active-coins').textContent;
+                const activeCoins = activeCoinsText.split(', ').filter(s => s !== 'None' && s !== 'Error');
+                const livePricesContainer = document.getElementById('live-prices-container');
+                livePricesContainer.innerHTML = '';
+
+                if (activeCoins.length === 0) {
+                    livePricesContainer.textContent = 'No active coins to display live prices.';
+                    return;
+                }
+
+                for (const symbol of activeCoins) {
+                    try {
+                        const data = await fetchData(`live_prices/${symbol}`);
+                        const priceElement = document.createElement('p');
+                        priceElement.innerHTML = `<span class="font-semibold">${data.symbol}:</span> ${data.price.toFixed(2)} <span class="text-gray-400 text-sm">(${new Date(data.timestamp).toLocaleTimeString()})</span>`;
+                        livePricesContainer.appendChild(priceElement);
+                    } catch (error) {
+                        console.warn(`Could not fetch live price for ${symbol}:`, error);
+                        const priceElement = document.createElement('p');
+                        priceElement.innerHTML = `<span class="font-semibold">${symbol}:</span> N/A <span class="text-red-500 text-sm">(Error)</span>`;
+                        livePricesContainer.appendChild(priceElement);
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating live prices:', error);
+                document.getElementById('live-prices-container').textContent = 'Error loading live prices.';
+            }
+        }
+
+        // ===== OVERALL PERFORMANCE =====
+        async function updateOverallPerformance() {
+            try {
+                const data = await fetchData('overall_performance');
+                document.getElementById('total-trades').textContent = data.total_trades;
+                document.getElementById('win-rate').textContent = `${(data.win_rate * 100).toFixed(2)}%`;
+                document.getElementById('total-pnl').textContent = data.total_pnl.toFixed(2);
+                document.getElementById('max-drawdown').textContent = `${data.max_drawdown.toFixed(2)} (${(data.max_drawdown_percent * 100).toFixed(2)}%)`;
+            } catch (error) {
+                console.error('Error fetching overall performance:', error);
+            }
+        }
+
+        // ===== THRESHOLDS =====
+        async function updateThresholds() {
+            try {
+                const data = await fetchData('thresholds');
+                const thresholdsContainer = document.getElementById('thresholds-container');
+                thresholdsContainer.innerHTML = '';
+                for (const key in data) {
+                    const div = document.createElement('div');
+                    div.className = 'p-2 bg-gray-700 rounded';
+                    div.innerHTML = `<span class="font-semibold text-blue-300">${key.replace(/_/g, ' ')}:</span> ${data[key]}`;
+                    thresholdsContainer.appendChild(div);
+                }
+            } catch (error) {
+                console.error('Error fetching thresholds:', error);
+                document.getElementById('thresholds-container').textContent = 'Error loading thresholds.';
+            }
+        }
+
+        // ===== STRATEGY PERFORMANCE =====
+        async function fetchStrategyPerformance() {
+            const symbol = document.getElementById('symbol-select').value;
+            const performanceDetailsDiv = document.getElementById('symbol-performance-details');
+            if (!symbol) {
+                performanceDetailsDiv.innerHTML = 'Please select a symbol.';
+                return;
+            }
+
+            try {
+                const data = await fetchData(`strategy_performance/${symbol}`);
+                performanceDetailsDiv.innerHTML = `
+                    <p><span class="font-semibold">Symbol:</span> ${data.symbol}</p>
+                    <p><span class="font-semibold">Total Trades:</span> ${data.total_trades}</p>
+                    <p><span class="font-semibold">Winning Trades:</span> ${data.winning_trades}</p>
+                    <p><span class="font-semibold">Losing Trades:</span> ${data.losing_trades}</p>
+                    <p><span class="font-semibold">Win Rate:</span> ${data.win_rate}%</p>
+                    <p><span class="font-semibold">Total PnL:</span> ${data.total_pnl.toFixed(2)}</p>
+                    <p><span class="font-semibold">Average PnL:</span> ${data.average_pnl.toFixed(2)}</p>
+                    <p><span class="font-semibold">Max Drawdown:</span> ${data.max_drawdown.toFixed(2)} (${data.max_drawdown_percent.toFixed(2)}%)</p>
+                    <p><span class="font-semibold">Sharpe Ratio:</span> ${data.sharpe_ratio ? data.sharpe_ratio.toFixed(2) : 'N/A'}</p>
+                    <p><span class="font-semibold">Profit Factor:</span> ${data.profit_factor ? data.profit_factor.toFixed(2) : 'N/A'}</p>
+                    <p><span class="font-semibold">Consecutive Wins:</span> ${data.consecutive_wins}</p>
+                    <p><span class="font-semibold">Consecutive Losses:</span> ${data.consecutive_losses}</p>
+                `;
+            } catch (error) {
+                console.error(`Error fetching performance for ${symbol}:`, error);
+                performanceDetailsDiv.innerHTML = `<p class="text-red-500">Error loading performance for ${symbol}.</p>`;
+            }
+        }
+
+        // ===== EVENT LISTENERS =====
+        document.getElementById('fetch-performance').addEventListener('click', fetchStrategyPerformance);
+
+        // ===== INITIAL LOAD =====
+        updateCycleSummary();
+        updateSystemHealth();
+        updateLivePrices();
+        updateOverallPerformance();
+        updateThresholds();
+
+        // ===== AUTO-REFRESH =====
+        setInterval(updateCycleSummary, 10000);   // Cycle summary every 10s
+        setInterval(updateSystemHealth, 5000);     // System health every 5s
+        setInterval(updateLivePrices, 3000);       // Live prices every 3s
+        setInterval(updateOverallPerformance, 10000); // Performance every 10s
+
+    </script>
+</body>
+</html>

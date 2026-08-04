@@ -1,7 +1,1 @@
 __pycache__/
-*.pyc
-.env
-.env.supabase
-.venv/
-venv/
-*.log

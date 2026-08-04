@@ -1,0 +1,19 @@
+
+services:
+  - type: web
+    name: ct-trading-system
+    env: python
+    # Force pip to use binary wheels for heavy dependencies to prevent source compilation
+    buildCommand: pip install --upgrade pip && pip install --only-binary :all: -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false
