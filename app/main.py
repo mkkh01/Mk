@@ -64,6 +64,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Response, status, Request
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from datetime import timedelta
 import uvicorn
 
@@ -1444,6 +1445,11 @@ async def shutdown_event():
     if ct_app_instance:
         await ct_app_instance.shutdown()
         logger.info("FastAPI shutdown complete, CTApplication stopped.")
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Redirect root to the dashboard index.html."""
+    return FileResponse("app/static/index.html")
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
