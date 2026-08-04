@@ -42,7 +42,6 @@ from config.thresholds import (
     ENTRY_TIMEOUT_MINUTES,
     MAX_ENTRY_RETRIES,
 )
-from config.thresholds_dynamic import resolve_entry_offset
 from contracts.decision import EntrySignal, RiskAssessment, StrategySignal
 from contracts.market import FairValueGap, OrderBlock
 from monitoring.logger import get_logger
@@ -89,19 +88,13 @@ def _within_pct(price_a: float, price_b: float, tolerance_pct: float) -> bool:
     return (diff / denom) * 100.0 <= tolerance_pct
 
 
-def _apply_limit_offset(
-    entry_price: float,
-    direction: Literal["long", "neutral"] = "long",
-    spread_pct: float = 0.0,
-    atr_pct: float = 0.0,
-) -> float:
-    """Apply dynamic limit offset in the favourable direction for Spot.
+def _apply_limit_offset(entry_price: float, direction: Literal["long", "neutral"] = "long") -> float:
+    """Apply ``ENTRY_LIMIT_OFFSET_PCT`` in the favourable direction for Spot.
 
     * Long  : ``entry * (1 - offset)`` -- *better* (lower) entry for a buyer.
     * Neutral: no offset.
     """
-    threshold = resolve_entry_offset(spread_pct, atr_pct)
-    offset = threshold / 100.0
+    offset = ENTRY_LIMIT_OFFSET_PCT / 100.0
     if direction == "long":
         return entry_price * (1.0 - offset)
     return entry_price
@@ -217,7 +210,6 @@ def refine_entry(
     current_price: float,
     confidence: float = 1.0,
     atr: float = 0.0,
-    spread_pct: float = 0.0,
 ) -> EntrySignal:
     """Refine the entry after risk approval.
 
@@ -273,11 +265,11 @@ def refine_entry(
         direction, ob_list, fvg_list, current_price
     )
 
-    # If it's a limit entry, apply the dynamic offset to the target level.
-    # If it's a market entry, use the current price.
-    atr_pct = (atr / current_price * 100.0) if current_price > 0 else 0.0
-    if entry_type == "limit" and level_price is not None:
-        entry_price = _apply_limit_offset(level_price, direction, spread_pct, atr_pct)
+    # The base price for limit entries is the OB/FVG level when available,
+    # otherwise the current price.  Market entries always use current price.
+    if entry_type == "limit":
+        base_price = level_price if level_price is not None and level_price > 0 else current_price
+        entry_price = _apply_limit_offset(base_price, direction)
     else:
         entry_price = current_price
 

@@ -36,7 +36,6 @@ from config.thresholds import (
     MIN_SWING_SIZE_PCT,
     SWING_LOOKBACK,
 )
-from config.thresholds_dynamic import resolve_swing_size
 from contracts.market import Candle, MarketStructure, SwingPoint
 from monitoring.logger import get_logger
 
@@ -97,7 +96,6 @@ def _swing_prominence(candles: list[Candle], i: int, lookback: int, kind: str) -
 def detect_swing_points(
     candles: list[Candle],
     lookback: int = SWING_LOOKBACK,
-    atr_pct: Optional[float] = None,
 ) -> list[SwingPoint]:
     """Detect swing highs and swing lows in a closed-candle sequence.
 
@@ -131,8 +129,7 @@ def detect_swing_points(
         )
         return []
 
-    threshold = resolve_swing_size(atr_pct) if atr_pct is not None else MIN_SWING_SIZE_PCT
-    min_prominence_ratio = _pct_to_ratio(threshold)
+    min_prominence_ratio = _pct_to_ratio(MIN_SWING_SIZE_PCT)
     swings: list[SwingPoint] = []
 
     symbol = closed[0].symbol
@@ -423,7 +420,7 @@ def _classify_break(
         return "bos", "down", "bearish_bos"
 
 
-def analyze_structure(candles: list[Candle], atr_pct: Optional[float] = None) -> MarketStructure:
+def analyze_structure(candles: list[Candle]) -> MarketStructure:
     """Run the full structure-detection pipeline and return a MarketStructure.
 
     Pipeline:
@@ -476,7 +473,7 @@ def analyze_structure(candles: list[Candle], atr_pct: Optional[float] = None) ->
             trend_direction="neutral",
         )
 
-    swings = detect_swing_points(closed, lookback=SWING_LOOKBACK, atr_pct=atr_pct)
+    swings = detect_swing_points(closed, lookback=SWING_LOOKBACK)
 
     trend: str = "neutral"
     last_swing_high: Optional[SwingPoint] = None
@@ -617,7 +614,6 @@ def _find_break_index(
 def detect_swing_points_fast(
     candles: list[Candle],
     lookback: int = SWING_LOOKBACK,
-    atr_pct: Optional[float] = None,
 ) -> list[SwingPoint]:
     """Vectorised swing-point scanner -- same semantics as :func:`detect_swing_points`.
 
@@ -663,8 +659,7 @@ def detect_swing_points_fast(
                 centre_lo < right_lo
             )
 
-    threshold = resolve_swing_size(atr_pct) if atr_pct is not None else MIN_SWING_SIZE_PCT
-    min_prominence_ratio = _pct_to_ratio(threshold)
+    min_prominence_ratio = _pct_to_ratio(MIN_SWING_SIZE_PCT)
     swings: list[SwingPoint] = []
     symbol = closed[0].symbol
     timeframe = closed[0].timeframe

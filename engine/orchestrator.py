@@ -61,7 +61,6 @@ from uuid import UUID
 
 from config.thresholds import (
     CONFIDENCE_THRESHOLD,
-    ENTRY_MAX_PRICE_DRIFT_PCT,
     TIMEFRAME_TO_SECONDS,
     VOLATILITY_ATR_PERIOD,
 )
@@ -549,7 +548,6 @@ class Orchestrator:
                 coin_config=coin_config,
                 portfolio_state=portfolio_state,
                 atr=atr,
-                regime=regime,
             )
             log_analysis_step(
                 symbol, "risk_assessment", "success" if risk.allowed else "failed",
@@ -573,47 +571,14 @@ class Orchestrator:
             # All gates passed -- refine the entry.
             ob_list = list(ltf_analysis.smc.get("order_blocks", []))
             fvg_list = list(ltf_analysis.smc.get("fvgs", []))
-            candle_price = ltf_analysis.candles[-1].close if ltf_analysis.candles else candle.close
-            current_price = candle_price
-
-            # Refresh entry price to live market price if available.
-            # This ensures the entry matches what Binance shows at execution time.
-            # SL/TP are recalculated from the live price in refine_entry() so risk stays constant.
-            try:
-                live_data = await self._redis.get_live_price(symbol)
-                if live_data:
-                    live_price, live_ts = live_data
-                    drift_pct = abs(live_price - candle_price) / candle_price * 100.0 if candle_price > 0 else 0.0
-                    if drift_pct <= ENTRY_MAX_PRICE_DRIFT_PCT:
-                        logger.info(
-                            "entry_price_refreshed_to_live",
-                            timestamp=datetime.now(timezone.utc),
-                            symbol=symbol,
-                            candle_price=candle_price,
-                            live_price=live_price,
-                            drift_pct=round(drift_pct, 2),
-                        )
-                        current_price = live_price
-                    else:
-                        logger.info(
-                            "entry_price_drift_too_large_use_candle",
-                            timestamp=datetime.now(timezone.utc),
-                            symbol=symbol,
-                            candle_price=candle_price,
-                            live_price=live_price,
-                            drift_pct=round(drift_pct, 2),
-                            threshold=ENTRY_MAX_PRICE_DRIFT_PCT,
-                        )
-            except Exception:
-                pass  # Fallback to candle close price
-
+            current_price = ltf_analysis.candles[-1].close if ltf_analysis.candles else candle.close
+            
             # Log pre-entry parameters (Requested Log #8)
             logger.info(
                 "pre_entry_calculation",
                 timestamp=datetime.now(timezone.utc),
                 symbol=symbol,
                 current_price=current_price,
-                source_price=candle_price,
                 risk_allowed=risk.allowed,
                 risk_reason=risk.reason,
             )
@@ -626,7 +591,6 @@ class Orchestrator:
                 current_price=current_price,
                 confidence=confidence,
                 atr=atr,
-                spread_pct=0.05, # Default spread for altcoins
             )
 
             if entry:
@@ -700,11 +664,10 @@ class Orchestrator:
             )
 
         # -------------------------------------------------------------
-        # 11. Trade Execution logic (Removed)
+        # 11. If final_verdict: open a simulated trade via paper_trade.
         # -------------------------------------------------------------
-        # Note: Trade opening is now handled by the caller (e.g. app/main.py)
-        # to ensure atomic trade opening and Telegram notification.
-        # This keeps the orchestrator focused on analysis and decision making.
+        if final_verdict and entry is not None:
+            await self._open_simulated_trade(decision, entry)
 
         # -------------------------------------------------------------
         # 12. Generate and Log Analysis Report Block
@@ -964,27 +927,9 @@ class Orchestrator:
             }
             return analysis
 
-        # --- atr (calculated first for dynamic thresholds) ----------
-        try:
-            analysis.atr = calculate_atr(candles, VOLATILITY_ATR_PERIOD)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "error",
-                timestamp=datetime.utcnow(),
-                module="engine.orchestrator",
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                event_kind="calculate_atr_failed",
-                symbol=coin_config.symbol,
-                timeframe=timeframe,
-            )
-            analysis.atr = 0.0
-
-        atr_pct = (analysis.atr / candles[-1].close * 100.0) if candles and candles[-1].close > 0 else 0.0
-
         # --- structure ----------------------------------------------
         try:
-            analysis.structure = analyze_structure(candles, atr_pct=atr_pct)
+            analysis.structure = analyze_structure(candles)
             if analysis.structure:
                 log_analysis_step(
                     coin_config.symbol, f"component_structure_{timeframe}", "success",
@@ -1006,11 +951,11 @@ class Orchestrator:
         # --- smc ----------------------------------------------------
         try:
             swing_points = (
-                detect_swing_points(candles, atr_pct=atr_pct)
+                detect_swing_points(candles)
                 if analysis.structure is not None
                 else []
             )
-            analysis.smc = analyze_smc(candles, swing_points=swing_points, atr_pct=atr_pct)
+            analysis.smc = analyze_smc(candles, swing_points=swing_points)
             if analysis.smc:
                 ob_count = len(analysis.smc.get("order_blocks", []))
                 fvg_count = len(analysis.smc.get("fvgs", []))
@@ -1150,7 +1095,21 @@ class Orchestrator:
             )
             analysis.regime = RegimeState.RANGING
 
-        # ATR already calculated at start of function for dynamic thresholds.
+        # --- atr (for risk module) ----------------------------------
+        try:
+            analysis.atr = calculate_atr(candles, VOLATILITY_ATR_PERIOD)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "error",
+                timestamp=datetime.utcnow(),
+                module="engine.orchestrator",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                event_kind="calculate_atr_failed",
+                symbol=coin_config.symbol,
+                timeframe=timeframe,
+            )
+            analysis.atr = 0.0
 
         return analysis
 
@@ -1196,9 +1155,9 @@ class Orchestrator:
                 struct_score = 0.7
                 struct_reasons = [f"structure_trend=down (tf={tf})"]
             else:
-                struct_dir = "neutral"
-                struct_score = 0.1
-                struct_reasons = [f"structure_trend=neutral (tf={tf}) — no directional edge"]
+                struct_dir = "long"
+                struct_score = 0.4
+                struct_reasons = [f"structure_trend=neutral (tf={tf})"]
             signals.append(
                 _build_strategy_signal(
                     strategy_name="structure",
@@ -1265,7 +1224,7 @@ class Orchestrator:
         mom = analysis.momentum or {}
         mom_dir_raw = mom.get("direction", "neutral")
         mom_dir = "long" if mom_dir_raw == "long" else "neutral"
-        mom_score = float(mom.get("momentum_score", 0.3) or 0.3)
+        mom_score = float(mom.get("momentum_score", 0.5) or 0.5)
         mom_reasons = list(mom.get("reasons", []))
         if not mom_reasons:
             mom_reasons = [f"momentum direction={mom_dir_raw} (tf={tf})"]
@@ -1292,14 +1251,8 @@ class Orchestrator:
             vol_dir = "neutral"
         else:
             vol_dir = "neutral"
-        # Map |cvd_slope| to [0.0, 0.9] via a soft tanh-like transform.
-        # Floor removed: flat volume should contribute 0, not artificially inflated 0.4.
-        if cvd_slope > 0 or delta > 0:
-            vol_score = 0.5 + 0.4 * min(abs(cvd_slope) * 1e-3, 1.0)
-        elif cvd_slope < 0 or delta < 0:
-            vol_score = 0.1 + 0.4 * min(abs(cvd_slope) * 1e-3, 1.0)
-        else:
-            vol_score = 0.0
+        # Map |cvd_slope| to [0.4, 0.9] via a soft tanh-like transform.
+        vol_score = 0.4 + 0.5 * min(abs(cvd_slope) * 1e-3, 1.0)
         vol_reasons = list(vol.get("reasons", []))
         if not vol_reasons:
             vol_reasons = [
@@ -1334,29 +1287,25 @@ class Orchestrator:
         """Pick the primary LTF signal for the HTF filter and risk assessment.
 
         Preference order:
-          1. The LTF trend signal with direction='long' (highest structural weight).
-          2. The LTF momentum signal with direction='long'.
-          3. The LTF structure signal with direction='long'.
-          4. A neutral signal if no bullish LTF signal exists (will be gated later).
+          1. The LTF trend signal (highest structural weight).
+          2. The LTF momentum signal.
+          3. The first component signal on the LTF timeframe.
+          4. A default long signal at score 0.5.
         """
         ltf_tf = ltf_analysis.timeframe
-        # 1. Trend signal (prefer bullish).
+        # 1. Trend signal.
         for sig in component_signals:
             if sig.timeframe == ltf_tf and sig.strategy_name == "trend":
                 return sig
-        # 2. Momentum signal (prefer bullish).
+        # 2. Momentum signal.
         for sig in component_signals:
             if sig.timeframe == ltf_tf and sig.strategy_name == "momentum":
                 return sig
-        # 3. Structure signal (prefer bullish).
-        for sig in component_signals:
-            if sig.timeframe == ltf_tf and sig.strategy_name == "structure":
-                return sig
-        # 4. Any LTF signal (fallback — will be filtered by gates).
+        # 3. Any LTF signal.
         for sig in component_signals:
             if sig.timeframe == ltf_tf:
                 return sig
-        # 5. Default — neutral (NOT long). Prevents forced entries without evidence.
+        # 4. Default.
         last_candle = ltf_analysis.candles[-1] if ltf_analysis.candles else None
         open_time = last_candle.open_time if last_candle else datetime.now(timezone.utc)
         symbol = last_candle.symbol if last_candle else ""
@@ -1364,8 +1313,8 @@ class Orchestrator:
             strategy_name="default",
             symbol=symbol,
             timeframe=ltf_tf,
-            direction="neutral",
-            raw_score=0.0,
+            direction="long",
+            raw_score=0.5,
             reasons=["default_signal: no component signal available"],
             source_candle_open_time=open_time,
         )
@@ -1403,8 +1352,8 @@ class Orchestrator:
         """Fetch the portfolio state required by ``assess_risk``.
 
         Reads from Supabase:
-          * ``open_trade_count`` -- count of open simulated trades for this
-            specific symbol (one-trade-per-coin rule).
+          * ``open_trade_count`` -- count of open simulated trades (any
+            symbol; the concurrent-trade limit is system-wide).
           * ``current_exposure`` -- sum of (entry_price * size) for open
             trades in the same symbol.  Section 8 specifies portfolio-level
             exposure; for simplicity we treat it per-symbol (the orchestrator
@@ -1425,9 +1374,7 @@ class Orchestrator:
         }
 
         try:
-            # Count open trades for this specific symbol only (one-trade-per-coin)
-            open_trades_for_symbol = await self._supabase.fetch_open_trades(symbol=symbol)
-            state["open_trade_count"] = len(open_trades_for_symbol)
+            state["open_trade_count"] = await self._supabase.count_open_trades()
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "error",

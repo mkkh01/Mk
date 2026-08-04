@@ -72,17 +72,10 @@ async def test_scenario_perfect_bullish_setup(mock_supabase, mock_redis):
     # Structure might fail if the generated sequence doesn't have clear BOS/OrderBlocks
     # but the logic should be sound.
     assert result.regime_check_passed is True
-    # HTF bias may fail if the bullish sequence doesn't produce a strong enough EMA crossover
-    # on the highest timeframe — this is expected with synthetic data.
-    # We only assert regime passes; confidence/HTF may fail due to thresholds.
-    if not result.htf_bias_aligned:
-        assert "htf" in result.rejection_reason.lower() or "confidence" in result.rejection_reason.lower()
-    # If it failed structure, the rejection reason should mention structure, risk, or confidence
+    assert result.htf_bias_aligned is True
+    # If it failed structure, it should be reflected in the reason
     if not result.structure_alignment_passed:
-        reason_lower = result.rejection_reason.lower()
-        assert ("structure" in reason_lower or "risk" in reason_lower or "confidence" in reason_lower), (
-            f"Expected structure/risk/confidence in rejection reason, got: {result.rejection_reason}"
-        )
+        assert "structure" in result.rejection_reason.lower()
 
 @pytest.mark.asyncio
 async def test_scenario_bearish_trend_long_attempt(mock_supabase, mock_redis):

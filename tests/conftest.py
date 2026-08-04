@@ -322,7 +322,7 @@ def default_system_config() -> SystemConfig:
         supabase_key="example-key",
         redis_url="redis://localhost:6379/0",
         default_timeframes=["15m", "1h", "4h"],
-        max_active_coins=15,
+        max_active_coins=10,
         simulation_mode=True,
     )
 

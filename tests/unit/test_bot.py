@@ -135,7 +135,7 @@ class TestSystemConfig:
             redis_url="redis://localhost:6379/0",
         )
         assert cfg.telegram_bot_token == "token"
-        assert cfg.max_active_coins == 15  # default
+        assert cfg.max_active_coins == 10  # default
         assert cfg.simulation_mode is True  # default
         assert cfg.default_timeframes == ["15m", "1h", "4h"]  # default
 

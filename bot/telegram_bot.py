@@ -56,8 +56,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.constants import ParseMode
@@ -116,16 +114,6 @@ CB_SYS_PERF_PERIOD = "perf_period:"       # perf_period:<period-key>
 CB_CONFIRM_YES = "confirm_yes"
 CB_CONFIRM_NO = "confirm_no"
 CB_CANCEL = "cancel"
-
-# Fixed reply-keyboard commands (sent as plain text when buttons are tapped).
-CMD_STATUS = "/status"
-CMD_LIVE = "/live"
-CMD_HISTORY = "/history"
-CMD_ADD = "/add"
-CMD_EDIT = "/edit"
-CMD_START = "/start"
-CMD_STOP = "/stop"
-CMD_PERFORMANCE = "/performance"
 
 # Conversation states for the add-coin flow (Section 7).
 SYMBOL, TIMEFRAMES, CAPITAL, RISK, CONFIRM = range(5)
@@ -300,7 +288,7 @@ class CTTelegramBot:
         )
         text = (
             "Welcome to CT -- Simulation-Only Crypto Spot Bot.\n\n"
-            "The menu is now fixed at the bottom. All trades produced by this bot are "
+            "Pick an action below. All trades produced by this bot are "
             "simulated; no real exchange orders are ever placed.\n\n"
             "WARNING: Simulation Mode Only. No real trades are being executed."
         )
@@ -408,94 +396,13 @@ class CTTelegramBot:
                 update, context, "Something went wrong processing that action. Please try again."
             )
 
-    # ---------------- fixed reply-keyboard dispatcher ----------------
-    # Button labels → commands handled here so the user never types /start.
-    _FIXED_MENU_DISPATCH = {
-        "📊 Status":           "cmd_status",
-        "⚡ Start":            "cmd_start_engine",
-        "⛔ Stop":             "cmd_stop_engine",
-        "💰 Coins":            "_handle_coins",
-        "📈 Live Prices":      "cmd_live_prices",
-        "📜 History":          "cmd_trade_history",
-        "🏗️ Add":              "cmd_add_coin",
-        "✏️ Edit":             "cmd_edit_coin",
-        "⚙️ Performance":     "_handle_performance",
-    }
-
-    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Dispatch the fixed ``📊 Status`` button — engine state + open trades + active coins."""
-        user_id = self._user_id(update)
-        logger.info(
-            "bot_command",
-            timestamp=datetime.now(timezone.utc),
-            user_id=user_id,
-            command="status",
-        )
-
-        # --- Engine state ---
-        try:
-            engine_running = await self._redis.get_engine_running()
-        except Exception:
-            engine_running = False
-        status_icon = "🟢" if engine_running else "🔴"
-        status_text = "Running" if engine_running else "Stopped"
-
-        # --- Active coins ---
-        try:
-            coins = await self._supabase.fetch_all_coins(only_active=True)
-        except Exception:
-            coins = []
-        coin_lines = ", ".join(c.symbol for c in coins) if coins else "(none)"
-
-        # --- Open trades ---
-        try:
-            open_count = await self._supabase.count_open_trades()
-        except Exception:
-            open_count = 0
-
-        # --- Timeframes ---
-        timeframes_set: set[str] = set()
-        for c in coins:
-            timeframes_set.update(c.timeframes)
-        tf_list = ", ".join(sorted(timeframes_set)) if timeframes_set else "(none)"
-
-        body = (
-            f"{status_icon} Engine: {status_text}\n\n"
-            f"Active Coins ({len(coins)}):\n{coin_lines}\n\n"
-            f"Timeframes: {tf_list}\n\n"
-            f"Open Trades: {open_count}\n\n"
-            "Press 📈 Live Prices for current prices."
-        )
-        await self._reply_safe(
-            update, context, body, reply_markup=self._build_main_menu()
-        )
-        logger.info(
-            "bot_reply",
-            timestamp=datetime.now(timezone.utc),
-            user_id=user_id,
-            reply_kind="status",
-            engine_running=engine_running,
-            coin_count=len(coins),
-            open_trades=open_count,
-        )
-
-    async def _handle_coins(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Dispatch the fixed ``💰 Coins`` button."""
-        # Same as Edit Coin -- shows the list of coins.
-        await self.cmd_edit_coin(update, context)
-
-    async def _handle_performance(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Dispatch the fixed ``⚙️ Performance`` button."""
-        # Show default 24h performance.
-        await self.cmd_system_performance(update, context, "24h")
-
     # ---------------- free-text message handler ----------------
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle free-text messages and fixed reply-keyboard button taps.
+        """Handle free-text messages.
 
         The add-coin flow's per-state ``MessageHandler`` consumes text inside
-        the conversation. This handler picks up everything else -- including
-        reply-keyboard button taps which arrive as plain text.
+        the conversation. This handler picks up everything else -- typically
+        the user typing outside any conversation.
         """
         if update.effective_user is None or update.effective_chat is None or update.message is None:
             return
@@ -507,58 +414,6 @@ class CTTelegramBot:
             user_id=user_id,
             command=f"message:{text[:40]}",
         )
-
-        # --- Fixed reply-keyboard dispatch ---
-        handler_name = self._FIXED_MENU_DISPATCH.get(text)
-        if handler_name is not None:
-            handler = getattr(self, handler_name, None)
-            if handler is not None:
-                try:
-                    await handler(update, context)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error(
-                        "error",
-                        timestamp=datetime.now(timezone.utc),
-                        module="bot.telegram_bot",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                        button_text=text,
-                    )
-                    await self._reply_safe(
-                        update, context, "Something went wrong. Please try again.",
-                        reply_markup=self._build_main_menu(),
-                    )
-                return
-            # handler was None -- fall through to edit-flow check below.
-
-        # --- Text commands (e.g. /status, /live) ---
-        text_cmd = text.strip().split()[0] if text.strip() else ""
-        cmd_to_method = {
-            CMD_STATUS:   self._handle_status,
-            CMD_LIVE:     self.cmd_live_prices,
-            CMD_HISTORY:  self.cmd_trade_history,
-            CMD_START:    self.cmd_start_engine,
-            CMD_STOP:     self.cmd_stop_engine,
-            CMD_ADD:      self.cmd_add_coin,
-            CMD_EDIT:     self.cmd_edit_coin,
-            CMD_PERFORMANCE: self._handle_performance,
-        }
-        if text_cmd in cmd_to_method:
-            try:
-                await cmd_to_method[text_cmd](update, context)
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "error",
-                    timestamp=datetime.now(timezone.utc),
-                    module="bot.telegram_bot",
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                )
-                await self._reply_safe(
-                    update, context, "Something went wrong. Please try again.",
-                    reply_markup=self._build_main_menu(),
-                )
-            return
 
         # If we are inside an edit-coin sub-flow (tracked in user_data),
         # route to the right editor.
@@ -901,7 +756,11 @@ class CTTelegramBot:
 
         Selecting a coin transitions to ``_edit_coin_show_options``.
         """
-        user_id = self._user_id(update)
+        user_id = (
+            update.callback_query.from_user.id
+            if update.callback_query and update.callback_query.from_user
+            else 0
+        )
         logger.info(
             "bot_command",
             timestamp=datetime.now(timezone.utc),
@@ -1007,7 +866,7 @@ class CTTelegramBot:
         logger.info(
             "bot_reply",
             timestamp=datetime.now(timezone.utc),
-            user_id=self._user_id(update),
+            user_id=(update.callback_query.from_user.id if update.callback_query and update.callback_query.from_user else 0),
             reply_kind="edit_coin_options",
             symbol=symbol,
         )
@@ -1176,7 +1035,11 @@ class CTTelegramBot:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str
     ) -> None:
         """Actually delete the coin via SupabaseClient."""
-        user_id = self._user_id(update)
+        user_id = (
+            update.callback_query.from_user.id
+            if update.callback_query and update.callback_query.from_user
+            else 0
+        )
         try:
             await self._supabase.delete_coin(symbol)
         except Exception as exc:  # noqa: BLE001
@@ -1218,7 +1081,11 @@ class CTTelegramBot:
     # =====================================================================
     async def cmd_start_engine(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start Engine button -- sets the Redis flag and calls the app callback."""
-        user_id = self._user_id(update)
+        user_id = (
+            update.callback_query.from_user.id
+            if update.callback_query and update.callback_query.from_user
+            else 0
+        )
         logger.info(
             "bot_command",
             timestamp=datetime.now(timezone.utc),
@@ -1337,7 +1204,11 @@ class CTTelegramBot:
 
     async def cmd_stop_engine(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Stop Engine button -- calls the app callback and clears the Redis flag."""
-        user_id = self._user_id(update)
+        user_id = (
+            update.callback_query.from_user.id
+            if update.callback_query and update.callback_query.from_user
+            else 0
+        )
         logger.info(
             "bot_command",
             timestamp=datetime.now(timezone.utc),
@@ -1456,7 +1327,11 @@ class CTTelegramBot:
 
         Per Section 7: reads from Redis only -- never makes a fresh REST call.
         """
-        user_id = self._user_id(update)
+        user_id = (
+            update.callback_query.from_user.id
+            if update.callback_query and update.callback_query.from_user
+            else 0
+        )
         logger.info(
             "bot_command",
             timestamp=datetime.now(timezone.utc),
@@ -1511,7 +1386,11 @@ class CTTelegramBot:
     # =====================================================================
     async def cmd_trade_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show the last 10 simulated trades with the mandatory warning."""
-        user_id = self._user_id(update)
+        user_id = (
+            update.callback_query.from_user.id
+            if update.callback_query and update.callback_query.from_user
+            else 0
+        )
         logger.info(
             "bot_command",
             timestamp=datetime.now(timezone.utc),
@@ -1577,7 +1456,11 @@ class CTTelegramBot:
         Delegates all number-crunching to ``PerformanceCalculator``. The bot
         only formats the result -- no trading logic here (Section 0 #1).
         """
-        user_id = self._user_id(update)
+        user_id = (
+            update.callback_query.from_user.id
+            if update.callback_query and update.callback_query.from_user
+            else 0
+        )
         logger.info(
             "bot_command",
             timestamp=datetime.now(timezone.utc),
@@ -1644,7 +1527,7 @@ class CTTelegramBot:
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
         text: str,
-        reply_markup: Optional[InlineKeyboardMarkup | ReplyKeyboardMarkup] = None,
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
     ) -> None:
         """Send a reply, editing the callback message if possible.
 
@@ -1721,41 +1604,24 @@ class CTTelegramBot:
     # =====================================================================
     # Helpers -- formatting (Section 20 templates)
     # =====================================================================
-    @staticmethod
-    def _user_id(update: Update) -> int:
-        """Return the user ID from either a callback query or a text message."""
-        if update.callback_query and update.callback_query.from_user:
-            return update.callback_query.from_user.id
-        if update.effective_message and update.effective_message.from_user:
-            return update.effective_message.from_user.id
-        return 0
-
-    def _build_main_menu(self) -> ReplyKeyboardMarkup:
-        """Return a fixed reply keyboard that stays visible for every message.
-
-        Buttons send plain-text commands (e.g. ``/live``, ``/history``) so the
-        user never needs to type ``/start`` again to see the menu.
-        """
-        return ReplyKeyboardMarkup(
+    def _build_main_menu(self) -> InlineKeyboardMarkup:
+        """Return the main-menu inline keyboard (Section 7 full menu)."""
+        return InlineKeyboardMarkup(
             [
                 [
-                    KeyboardButton("📊 Status"),
-                    KeyboardButton("⚡ Start"),
-                    KeyboardButton("⛔ Stop"),
+                    InlineKeyboardButton("Add Coin", callback_data=CB_ADD_COIN),
+                    InlineKeyboardButton("Edit Coin", callback_data=CB_EDIT_COIN),
                 ],
                 [
-                    KeyboardButton("💰 Coins"),
-                    KeyboardButton("📈 Live Prices"),
-                    KeyboardButton("📜 History"),
+                    InlineKeyboardButton("Start Engine", callback_data=CB_START_ENGINE),
+                    InlineKeyboardButton("Stop Engine", callback_data=CB_STOP_ENGINE),
                 ],
                 [
-                    KeyboardButton("🏗️ Add"),
-                    KeyboardButton("✏️ Edit"),
-                    KeyboardButton("⚙️ Performance"),
+                    InlineKeyboardButton("Live Prices", callback_data=CB_LIVE_PRICES),
+                    InlineKeyboardButton("Trade History", callback_data=CB_TRADE_HISTORY),
                 ],
-            ],
-            resize_keyboard=True,
-            one_time_keyboard=False,
+                [InlineKeyboardButton("System Performance", callback_data=CB_SYS_PERF)],
+            ]
         )
 
     def _format_trade_history(self, trades: list[SimulatedTrade]) -> str:
@@ -1785,7 +1651,6 @@ class CTTelegramBot:
                 status_line = "Status: open"
 
             lines.append(f"{idx}. {t.symbol} (SPOT)")
-            lines.append(f"   Timeframe: {t.timeframe}")
             lines.append(f"   Quantity: {self._fmt_price(t.size)}")
             lines.append(f"   Entry: {entry}")
             lines.append(f"   Stop Loss (Current): {stop}")
@@ -1799,12 +1664,6 @@ class CTTelegramBot:
             lines.append(f"   {status_line}")
             if pnl_line:
                 lines.append(f"   {pnl_line}")
-            # Open / close timestamps
-            opened_str = t.opened_at.strftime('%Y-%m-%d %H:%M UTC') if t.opened_at else "n/a"
-            lines.append(f"   Opened: {opened_str}")
-            if t.status == "closed" and t.closed_at:
-                closed_str = t.closed_at.strftime('%Y-%m-%d %H:%M UTC')
-                lines.append(f"   Closed: {closed_str}")
             lines.append("")
 
         lines.append(SIM_WARNING_LIST)
@@ -1880,7 +1739,6 @@ class CTTelegramBot:
         return (
             "🚀 <b>Spot Trade Opened!</b>\n\n"
             f"<b>Coin:</b> {trade.symbol}\n"
-            f"<b>Timeframe:</b> {trade.timeframe}\n"
             f"<b>Quantity:</b> {CTTelegramBot._fmt_price(trade.size)}\n"
             f"<b>Entry Price:</b> {entry}\n"
             f"<b>Confidence:</b> {confidence_str}\n"
@@ -1910,14 +1768,11 @@ class CTTelegramBot:
         icon = "✅" if pnl > 0 else "❌" if pnl < 0 else "➖"
         close_price = CTTelegramBot._fmt_price(trade.close_price) if trade.close_price is not None else "n/a"
         
-        opened_time = trade.opened_at.strftime('%Y-%m-%d %H:%M:%S UTC') if trade.opened_at else "n/a"
         return (
             f"{icon} <b>Spot Trade Closed!</b>\n\n"
             f"<b>Coin:</b> {trade.symbol}\n"
-            f"<b>Timeframe:</b> {trade.timeframe}\n"
-            f"<b>Opened At:</b> {opened_time}\n"
-            f"<b>Closed At:</b> {closed_time}\n"
-            f"<b>Close Reason:</b> {reason}\n\n"
+            f"<b>Close Reason:</b> {reason}\n"
+            f"<b>Closed At:</b> {closed_time}\n\n"
             f"<b>Entry Price:</b> {entry}\n"
             f"<b>Close Price:</b> {close_price}\n"
             f"{stop_info}"

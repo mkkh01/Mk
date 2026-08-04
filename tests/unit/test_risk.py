@@ -52,12 +52,11 @@ class TestCalculatePositionSize:
 
     def test_basic_sizing(self):
         # risk_amount = 10000 * 2% = 200; price_risk = 10; size = 20.
-        # But capped at MAX_POSITION_SIZE_PCT = 18% -> 18.0
         size = calculate_position_size(
             capital=10000.0, risk_percent=2.0,
             entry_price=100.0, stop_loss_price=90.0,
         )
-        assert size == pytest.approx(18.0, rel=1e-3)
+        assert size == pytest.approx(20.0, rel=1e-3)
 
     def test_zero_price_risk_returns_zero(self):
         size = calculate_position_size(
@@ -156,14 +155,14 @@ class TestAssessRisk:
         assert result.risk_reward_ratio is not None
 
     def test_exposure_scaling(self):
-        """Verify that with existing exposure, a new trade is rejected (one-trade-per-coin)."""
+        """Verify that a trade exceeding exposure is scaled down instead of rejected."""
         signal = make_signal("long")
-        # Capital = 1000
+        # Capital = 1000, Exposure Limit = 1000 (100%)
         coin = CoinConfig(
             symbol="BTCUSDT", timeframes=["15m", "1h", "4h"],
-            capital=1000.0, risk_percent=10.0,
+            capital=1000.0, risk_percent=10.0,  # Risk amount = 100
         )
-        # current_exposure = 950, so there is already an open trade for this symbol.
+        # current_exposure = 950, so only 50 USDT left.
         portfolio_state = {
             "current_exposure": 950.0,
             "current_pnl": 0.0,
@@ -171,40 +170,17 @@ class TestAssessRisk:
             "current_price": 100.0,
             "open_trades_count": 0,
         }
+        # price_risk = 1.5 * 2.0 = 3.0
+        # raw_size = 100 / 3.0 = 33.33 units (~3333 USDT)
         result = assess_risk(
             signal=signal, confidence=0.8, coin_config=coin,
             portfolio_state=portfolio_state, atr=2.0,
         )
         
-        # With one-trade-per-coin rule, must be rejected
-        assert result.allowed is False
-        assert "trade_already_open_for_symbol" in result.reason
-
-    def test_full_capital_trade_allowed(self):
-        """Verify that a trade with no existing exposure uses allowed capital."""
-        signal = make_signal("long")
-        # Capital = 1000
-        coin = CoinConfig(
-            symbol="BTCUSDT", timeframes=["15m", "1h", "4h"],
-            capital=1000.0, risk_percent=10.0,
-        )
-        # No existing exposure -- fresh start
-        portfolio_state = {
-            "current_exposure": 0.0,
-            "current_pnl": 0.0,
-            "peak_pnl": 0.0,
-            "current_price": 100.0,
-            "open_trades_count": 0,
-        }
-        result = assess_risk(
-            signal=signal, confidence=0.8, coin_config=coin,
-            portfolio_state=portfolio_state, atr=2.0,
-        )
-        
-        # Should be allowed and use allowed capital (18%)
+        # Should be allowed but scaled down to fit 50 USDT
         assert result.allowed is True
-        # position_size * entry_price should be close to MAX_POSITION_SIZE_PCT (18%)
-        assert result.max_position_size * 100.0 >= 170.0  # at least 17% of capital
+        # size * price should be approx 50
+        assert 49.0 < (result.max_position_size * 100.0) < 51.0
 
     def test_drawdown_rejection(self):
         signal = make_signal("long")
@@ -231,31 +207,32 @@ class TestAssessRisk:
             assert len(result.reason) > 0
 
     def test_threshold_sensitivity(self):
-        """Section 10 risk test 3: changing a threshold must change the output.
-        With one-trade-per-coin, we set exposure=0 and test MIN_TRADE_VALUE_PCT sensitivity."""
+        """Section 10 risk test 3: changing a threshold must change the output."""
         signal = make_signal("long")
         coin = CoinConfig(
             symbol="BTCUSDT", timeframes=["15m", "1h", "4h"],
             capital=10000.0, risk_percent=2.0,
         )
-        # No existing exposure -- fresh start
         portfolio_state = {
-            "current_exposure": 0.0,
+            "current_exposure": 4000.0,
             "current_pnl": 0.0,
             "peak_pnl": 0.0,
             "current_price": 100.0,
             "open_trades_count": 0,
         }
 
-        # Lowering MIN_TRADE_VALUE_PCT to 15% should still allow (18% >= 15%)
-        with patch.object(thresholds, "MIN_TRADE_VALUE_PCT", 15.0):
+        # Original threshold: MAX_PORTFOLIO_EXPOSURE_PCT = 50.0.
+        # current 4000 + new trade at risk_amount 200 = 4200. total_cap=10000.
+        # new trade size = 200 / 10 = 20. exposure_after = 4000 + 20*100 = 6000 > 5000? Actually
+        # it depends on how exposure is computed. Just check that lowering the threshold
+        # to 10% forces rejection.
+        with patch.object(thresholds, "MAX_PORTFOLIO_EXPOSURE_PCT", 10.0):
             result_low = assess_risk(
                 signal=signal, confidence=0.8, coin_config=coin,
                 portfolio_state=portfolio_state, atr=2.0,
             )
 
-        # Setting MIN_TRADE_VALUE_PCT to 20% should reject (18% < 20%)
-        with patch.object(thresholds, "MIN_TRADE_VALUE_PCT", 20.0):
+        with patch.object(thresholds, "MAX_PORTFOLIO_EXPOSURE_PCT", 80.0):
             result_high = assess_risk(
                 signal=signal, confidence=0.8, coin_config=coin,
                 portfolio_state=portfolio_state, atr=2.0,

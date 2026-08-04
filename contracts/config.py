@@ -68,6 +68,6 @@ class SystemConfig(BaseModel):
     supabase_key: str
     redis_url: str
     default_timeframes: list[str] = Field(default_factory=lambda: ["15m", "1h", "4h"])
-    max_active_coins: int = 15
+    max_active_coins: int = 10
     simulation_mode: bool = True
     telegram_chat_id: Optional[str] = None

@@ -30,8 +30,8 @@ LOG EVENT CATALOG (Section 9):
   - entry_refined            {timestamp, symbol, entry_type, entry_price}
   - decision_made            {timestamp, symbol, score, confidence, final_verdict}
   - decision_rejected        {timestamp, symbol, score, final_verdict, rejection_reason}
-  - simulated_trade_opened   {timestamp, trade_id, decision_id, symbol, direction, entry_price, size, fee, slippage, stop_loss, take_profit, timeframe, is_simulated}
-  - simulated_trade_closed   {timestamp, trade_id, symbol, close_reason, pnl, closed_at, opened_at, timeframe, is_simulated}
+  - simulated_trade_opened   {timestamp, trade_id, decision_id, symbol, direction, entry_price, size, fee, slippage, is_simulated}
+  - simulated_trade_closed   {timestamp, trade_id, symbol, close_reason, pnl, is_simulated}
   - ws_connect               {timestamp, url}
   - ws_disconnect            {timestamp, reason}
   - ws_reconnect             {timestamp, attempt, backoff_seconds}

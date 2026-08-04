@@ -46,9 +46,7 @@ from datetime import datetime
 from typing import Literal, Optional
 
 import config.thresholds as thresholds
-from config.thresholds_dynamic import resolve_sl_multiplier, resolve_tp_multiplier
 from contracts.config import CoinConfig
-from contracts.market import RegimeState
 from contracts.decision import RiskAssessment, StrategySignal
 from monitoring.logger import get_logger
 
@@ -261,7 +259,6 @@ def calculate_stop_loss(
     entry_price: float,
     atr: float,
     direction: Literal["long"] = "long",
-    regime: Optional[RegimeState] = None,
 ) -> float:
     """Stop-loss price for Spot (Long only) using ``thresholds.VOLATILITY_ATR_MULTIPLIER_SL``.
 
@@ -273,8 +270,7 @@ def calculate_stop_loss(
     atr = _safe_float(atr)
     if atr <= 0:
         return entry_price
-    multiplier = resolve_sl_multiplier(regime.value) if regime else thresholds.VOLATILITY_ATR_MULTIPLIER_SL
-    distance = atr * multiplier
+    distance = atr * thresholds.VOLATILITY_ATR_MULTIPLIER_SL
     return entry_price - distance
 
 
@@ -282,7 +278,6 @@ def calculate_take_profit(
     entry_price: float,
     atr: float,
     direction: Literal["long"] = "long",
-    regime: Optional[RegimeState] = None,
 ) -> float:
     """Take-profit price for Spot (Long only) using ``thresholds.VOLATILITY_ATR_MULTIPLIER_TP``.
 
@@ -294,8 +289,7 @@ def calculate_take_profit(
     atr = _safe_float(atr)
     if atr <= 0:
         return entry_price
-    multiplier = resolve_tp_multiplier(regime.value) if regime else thresholds.VOLATILITY_ATR_MULTIPLIER_TP
-    distance = atr * multiplier
+    distance = atr * thresholds.VOLATILITY_ATR_MULTIPLIER_TP
     return entry_price + distance
 
 
@@ -336,7 +330,6 @@ def assess_risk(
     coin_config: CoinConfig,
     portfolio_state: dict,
     atr: float,
-    regime: Optional[RegimeState] = None,
 ) -> RiskAssessment:
     """Run every risk check and return a populated :class:`RiskAssessment`.
 
@@ -408,32 +401,13 @@ def assess_risk(
     # default of 0.0 (which will trigger the R:R / exposure rejections below).
     entry_price = current_price if current_price > 0 else 0.0
 
-    # --- NEW: One-trade-per-coin rule ---
-    # If there is already an open trade for this symbol (current_exposure > 0),
-    # reject any new entry for this coin. Only one trade per coin is allowed.
-    if current_exposure > 0:
-        reason = (
-            f"trade_already_open_for_symbol: "
-            f"current_exposure={current_exposure:.4f} USDT. "
-            f"Only one open trade per coin is allowed."
-        )
-        return _build_rejection(
-            symbol, reason, 0.0, 0.0, None, None, None,
-            current_exposure, 0.0, confidence
-        )
-
-    stop_loss = calculate_stop_loss(entry_price, atr, direction, regime=regime)
-    take_profit = calculate_take_profit(entry_price, atr, direction, regime=regime)
+    stop_loss = calculate_stop_loss(entry_price, atr, direction)
+    take_profit = calculate_take_profit(entry_price, atr, direction)
     risk_reward = calculate_risk_reward(entry_price, stop_loss, take_profit)
-
-    # Calculate position size using the risk-based formula
     position_size = calculate_position_size(
-        capital=capital,
-        risk_percent=coin_config.risk_percent,
-        entry_price=entry_price,
-        stop_loss_price=stop_loss,
+        capital, risk_percent, entry_price, stop_loss
     )
-    risk_amount = abs(entry_price - stop_loss) * position_size
+    risk_amount = capital * (risk_percent / 100.0)
     new_trade_value = position_size * entry_price
 
     projected_exposure = current_exposure + new_trade_value
@@ -496,27 +470,8 @@ def assess_risk(
         )
 
     # 3. Exposure check (USDT notional)
-    # Available capital is the full capital minus any current exposure.
-    # If the trade value is less than MIN_TRADE_VALUE_PCT of available capital,
-    # reject it to prevent opening positions with leftover fragments.
-    available_capital = capital - current_exposure
-    min_trade_value = available_capital * (thresholds.MIN_TRADE_VALUE_PCT / 100.0)
-
-    if new_trade_value < min_trade_value and new_trade_value > 0:
-        reason = (
-            f"trade_value_below_min_threshold: "
-            f"new_trade_value={new_trade_value:.4f} USDT < "
-            f"min_required={min_trade_value:.4f} USDT "
-            f"({thresholds.MIN_TRADE_VALUE_PCT:.1f}% of available {available_capital:.4f}). "
-            f"Leftover fragments are not used for trades."
-        )
-        return _build_rejection(
-            symbol, reason, position_size, risk_amount,
-            stop_loss, take_profit, risk_reward,
-            projected_exposure, projected_drawdown,
-            confidence,
-        )
-
+    # [FIX] If the new trade would exceed exposure, we scale it down to fit the remaining capital
+    # instead of rejecting it, making the system truly dynamic.
     limit = capital * (thresholds.MAX_PORTFOLIO_EXPOSURE_PCT / 100.0)
     available_exposure = limit - current_exposure
     
@@ -535,21 +490,6 @@ def assess_risk(
         position_size = available_exposure / entry_price
         new_trade_value = position_size * entry_price
         projected_exposure = current_exposure + new_trade_value
-
-        # After scaling, check if the scaled position still meets the minimum threshold
-        if new_trade_value < min_trade_value:
-            reason = (
-                f"scaled_trade_value_below_min: "
-                f"scaled_value={new_trade_value:.4f} < "
-                f"min_required={min_trade_value:.4f}. "
-                f"Not enough capital for a full-size trade."
-            )
-            return _build_rejection(
-                symbol, reason, position_size, risk_amount,
-                stop_loss, take_profit, risk_reward,
-                projected_exposure, projected_drawdown,
-                confidence,
-            )
         
         logger.info(
             "risk_position_scaled_to_fit_exposure",

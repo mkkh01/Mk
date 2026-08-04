@@ -25,16 +25,8 @@ class ResultFormatter:
         lines = [
             f"TRADE {trade.id} {status_emoji}",
             f"Symbol: {trade.symbol} | Direction: {trade.direction}",
-            f"Timeframe: {trade.timeframe}",
             f"Entry: {trade.entry_price} | PnL: {pnl_str} ({trade.status})",
         ]
-        
-        # Timestamps
-        opened_str = trade.opened_at.strftime('%Y-%m-%d %H:%M:%S UTC') if trade.opened_at else "N/A"
-        lines.append(f"Opened: {opened_str}")
-        if trade.closed_at:
-            closed_str = trade.closed_at.strftime('%Y-%m-%d %H:%M:%S UTC')
-            lines.append(f"Closed: {closed_str}")
         
         if decision:
             strategy_name = "N/A"
@@ -59,7 +51,6 @@ class ResultFormatter:
             f"{status_emoji} *تقرير صفقة: {trade.symbol}*\n"
             f"━━━━━━━━━━━━━━━\n"
             f"🔹 *الاتجاه:* {trade.direction.upper()}\n"
-            f"🔹 *الإطار الزمني:* {trade.timeframe}\n"
             f"🔹 *سعر الدخول:* `{trade.entry_price:.6f}`\n"
             f"🔹 *الحالة:* {trade.status}\n"
             f"🔹 *الربح/الخسارة:* `{pnl_str}`\n"

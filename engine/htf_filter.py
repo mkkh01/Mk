@@ -113,13 +113,11 @@ def _check_alignment(
     The reason string is human-readable and unique per case so the
     orchestrator can surface it as the rejection_reason.
     """
-    # LTF neutral: the market has no clear direction -- pass through (low signal).
+    # LTF neutral: the market has no clear direction -- pass through.
     if ltf_direction == "neutral":
         return True, "ltf_neutral_pass_through"
-    # [OPTIMIZATION] HTF neutral no longer auto-passes. Without HTF confirmation,
-    # a long LTF signal has reduced alignment — gated by confidence threshold.
     if htf_bias == "neutral":
-        return False, "htf_neutral_requires_confirmation"
+        return True, "htf_neutral_pass_through"
     if ltf_direction == "long" and htf_bias == "bullish":
         return True, "ltf_long_aligned_with_htf_bullish"
     if ltf_direction == "long" and htf_bias == "bearish":

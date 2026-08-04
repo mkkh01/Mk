@@ -93,7 +93,6 @@ def _average_volume(candles: list[Candle], lookback: int = 20) -> float:
 def detect_order_blocks(
     candles: list[Candle],
     max_lookback: int = OB_MAX_CANDLES_BACK,
-    atr_pct: Optional[float] = None,
 ) -> list[OrderBlock]:
     """Detect bullish and bearish order blocks in a closed-candle sequence.
 
@@ -271,7 +270,7 @@ def _ob_strength(impulse_body: float, typical_body: float) -> float:
 # ---------------------------------------------------------------------------
 # Fair Value Gaps
 # ---------------------------------------------------------------------------
-def detect_fvgs(candles: list[Candle], atr_pct: Optional[float] = None) -> list[FairValueGap]:
+def detect_fvgs(candles: list[Candle]) -> list[FairValueGap]:
     """Detect bullish and bearish Fair Value Gaps in a 3-candle pattern.
 
     *Bullish FVG* (3 candles A, B, C):
@@ -582,7 +581,6 @@ def detect_liquidity_sweeps(
 def analyze_smc(
     candles: list[Candle],
     swing_points: Optional[list[SwingPoint]] = None,
-    atr_pct: Optional[float] = None,
 ) -> dict:
     """Run all SMC detectors and return a single aggregated dict.
 
@@ -608,8 +606,8 @@ def analyze_smc(
             count=len(closed),
         )
 
-    order_blocks = detect_order_blocks(closed, atr_pct=atr_pct)
-    fvgs = detect_fvgs(closed, atr_pct=atr_pct)
+    order_blocks = detect_order_blocks(closed)
+    fvgs = detect_fvgs(closed)
     sweeps = detect_liquidity_sweeps(closed, swing_points or [])
 
     # Log SMC Discovery (Requested Log #6)
