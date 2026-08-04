@@ -165,16 +165,16 @@ MAX_ENTRY_RETRIES = 2
 TRAILING_ENABLED = True
 """Global switch to enable / disable trailing-stop logic."""
 
-TRAILING_ACTIVATION_MULTIPLIER = 1.5
+TRAILING_ACTIVATION_MULTIPLIER = 2.0
 """Start moving the stop once unrealised profit >= this x initial risk.
 For example, 1.5 means: after profit reaches 1.5x the initial risk, the
 stop begins trailing behind the price."""
 
-TRAILING_ATR_DISTANCE = 1.5
+TRAILING_ATR_DISTANCE = 2.2
 """Distance (in ATR multiples) between the current high/low and the
 tailing stop.  A larger value gives the trade more breathing room."""
 
-TRAILING_MIN_DISTANCE_PCT = 0.3
+TRAILING_MIN_DISTANCE_PCT = 0.5
 """Minimum distance (as % of price) between the trailing stop and the
 current extreme price.  Prevents the stop from hugging the price too
 closely in low-volatility conditions."""
