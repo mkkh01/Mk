@@ -15,8 +15,8 @@ File: contracts/config.py
 
 from __future__ import annotations
 
-from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Optional
+from pydantic import BaseModel, Field, field_validator, validator
 
 from config.thresholds import VALID_TIMEFRAMES
 
@@ -71,3 +71,12 @@ class SystemConfig(BaseModel):
     max_active_coins: int = 10
     simulation_mode: bool = True
     telegram_chat_id: Optional[str] = None
+
+    @validator("telegram_bot_token", "supabase_url", "supabase_key", "redis_url", pre=True)
+    def clean_credentials(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            # Strip whitespace and control characters that often creep in from copy-paste
+            # but preserve spaces if they are internal (though unlikely in tokens)
+            cleaned = "".join(c for c in v.strip() if c.isprintable())
+            return cleaned
+        return v

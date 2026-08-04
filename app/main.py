@@ -1419,8 +1419,18 @@ async def startup_event():
         sys.exit(1)
 
     ct_app_instance = CTApplication(settings=settings)
-    await ct_app_instance.start()
-    logger.info("FastAPI startup complete, CTApplication started.")
+    try:
+        await ct_app_instance.start()
+        logger.info("FastAPI startup complete, CTApplication started.")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "error",
+            timestamp=datetime.now(timezone.utc),
+            module="app.main",
+            error_type=type(exc).__name__,
+            error_message=f"CRITICAL: CTApplication failed to start: {exc}. The web dashboard will remain active, but the bot and engine may be offline.",
+        )
+        # We don't exit here so the web server stays alive for debugging/logs.
     app.state.redis = ct_app_instance._redis
     app.state.supabase = ct_app_instance._supabase
     app.state.performance_calculator = ct_app_instance._performance_calc
