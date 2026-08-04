@@ -839,7 +839,11 @@ class BinanceWSClient:
         since: Optional[datetime],
         limit: int,
     ) -> list[Candle]:
-        """Fetch historical candles from Binance REST API."""
+        """Fetch historical candles from Binance REST API.
+
+        Includes handling for HTTP 418 (I'm a teapot) which indicates an IP ban
+        or rate-limit violation. Implements exponential backoff for retries.
+        """
         params: dict[str, Any] = {
             "symbol": symbol,
             "interval": timeframe,
@@ -851,20 +855,38 @@ class BinanceWSClient:
         for attempt in range(WS_REST_RETRY_COUNT):
             try:
                 resp = await self._http_client.get(BINANCE_REST_KLINES_URL, params=params)  # type: ignore[union-attr]
+                
+                # Special handling for 418 (IP Ban / Rate Limit)
+                if resp.status_code == 418:
+                    # Exponential backoff: 30s, 60s, 120s...
+                    wait_time = 30 * (2 ** attempt)
+                    logger.error(
+                        "ws_rate_limited",
+                        timestamp=datetime.now(timezone.utc),
+                        note=f"Binance returned 418 (IP Ban). Waiting {wait_time}s before retry.",
+                        symbol=symbol,
+                        attempt=attempt + 1
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+
                 resp.raise_for_status()
                 data = resp.json()
                 return self._parse_rest_klines(data, symbol, timeframe)
             except (httpx.HTTPError, httpx.TimeoutException) as exc:
                 if attempt == WS_REST_RETRY_COUNT - 1:
                     raise
+                
+                # Standard backoff for other errors
+                wait_time = 2.0 * (attempt + 1)
                 logger.warning(
                     "ws_reconnect",
                     timestamp=datetime.now(timezone.utc),
-                    note=f"REST klines failed (attempt {attempt+1}): {exc}",
+                    note=f"REST klines failed (attempt {attempt+1}): {exc}. Retrying in {wait_time}s.",
                     symbol=symbol,
                     timeframe=timeframe,
                 )
-                await asyncio.sleep(1.0 * (attempt + 1))
+                await asyncio.sleep(wait_time)
         return []
 
     def _parse_rest_klines(
