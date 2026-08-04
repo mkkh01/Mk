@@ -304,16 +304,21 @@
         // ===== LIVE PRICES =====
         async function updateLivePrices() {
             try {
-                const activeCoinsText = document.getElementById('active-coins').textContent;
-                const activeCoins = activeCoinsText.split(', ').filter(s => s !== 'None' && s !== 'Error');
-                const livePricesContainer = document.getElementById('live-prices-container');
-                livePricesContainer.innerHTML = '';
-
+                // Use the globally updated list or fall back to DOM if not yet populated
+                let activeCoins = currentActiveCoins;
                 if (activeCoins.length === 0) {
-                    livePricesContainer.textContent = 'No active coins to display live prices.';
+                    const activeCoinsText = document.getElementById('active-coins').textContent;
+                    activeCoins = activeCoinsText.split(', ').filter(s => s !== 'None' && s !== 'Error' && s !== 'Loading...');
+                }
+
+                const livePricesContainer = document.getElementById('live-prices-container');
+                
+                if (activeCoins.length === 0) {
+                    livePricesContainer.innerHTML = 'No active coins to display live prices.';
                     return;
                 }
 
+                livePricesContainer.innerHTML = '';
                 for (const symbol of activeCoins) {
                     try {
                         const data = await fetchData(`live_prices/${symbol}`);
@@ -398,16 +403,29 @@
         // ===== EVENT LISTENERS =====
         document.getElementById('fetch-performance').addEventListener('click', fetchStrategyPerformance);
 
+        // Global variable to store active coins from system health
+        let currentActiveCoins = [];
+
         // ===== INITIAL LOAD =====
-        updateCycleSummary();
-        updateSystemHealth();
-        updateLivePrices();
-        updateOverallPerformance();
-        updateThresholds();
+        async function initialLoad() {
+            await updateThresholds();
+            await updateCycleSummary();
+            await updateSystemHealth(); // This populates currentActiveCoins
+            await updateLivePrices();
+            await updateOverallPerformance();
+        }
+
+        initialLoad();
 
         // ===== AUTO-REFRESH =====
         setInterval(updateCycleSummary, 10000);   // Cycle summary every 10s
-        setInterval(updateSystemHealth, 5000);     // System health every 5s
+        setInterval(async () => {
+            await updateSystemHealth();
+            // Store active coins locally to avoid DOM scraping race conditions
+            const activeCoinsText = document.getElementById('active-coins').textContent;
+            currentActiveCoins = activeCoinsText.split(', ').filter(s => s !== 'None' && s !== 'Error' && s !== 'Loading...');
+        }, 5000);     // System health every 5s
+        
         setInterval(updateLivePrices, 3000);       // Live prices every 3s
         setInterval(updateOverallPerformance, 10000); // Performance every 10s
 

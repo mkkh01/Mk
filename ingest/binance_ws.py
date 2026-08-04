@@ -858,8 +858,8 @@ class BinanceWSClient:
                 
                 # Special handling for 418 (IP Ban / Rate Limit)
                 if resp.status_code == 418:
-                    # Exponential backoff: 30s, 60s, 120s...
-                    wait_time = 30 * (2 ** attempt)
+                    # Even more aggressive backoff for IP ban: 60s, 120s, 240s...
+                    wait_time = 60 * (2 ** attempt)
                     logger.error(
                         "ws_rate_limited",
                         timestamp=datetime.now(timezone.utc),
@@ -867,6 +867,7 @@ class BinanceWSClient:
                         symbol=symbol,
                         attempt=attempt + 1
                     )
+                    # Add extra sleep to the http_client shared cooldown if possible
                     await asyncio.sleep(wait_time)
                     continue
 
