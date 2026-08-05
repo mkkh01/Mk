@@ -239,6 +239,10 @@ class CTApplication:
                 await self._telegram_app.updater.stop()
             except:
                 pass
+            
+            # [MOD] Wait 2 seconds to allow any previous instance to release the session
+            await asyncio.sleep(2.0)
+            
             await self._telegram_app.updater.start_polling(
                 allowed_updates=None,
                 drop_pending_updates=True,

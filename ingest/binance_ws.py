@@ -111,6 +111,9 @@ class BinanceWSClient:
           needed because Python coroutines only yield at await points.
     """
 
+    # Global circuit breaker shared across all instances
+    _ban_until: Optional[datetime] = None
+
     # ---------------- construction ----------------
     def __init__(
         self,
@@ -735,8 +738,16 @@ class BinanceWSClient:
             )
 
         now = datetime.now(timezone.utc)
+        # Coordinate gap-fills to be serial and respect the ban
         for symbol, timeframe in self._active_pairs:
+            # Check ban status before each pair
+            if BinanceWSClient._ban_until and datetime.now(timezone.utc) < BinanceWSClient._ban_until:
+                break
+
             try:
+                # Add a small delay between symbols to avoid bursting
+                await asyncio.sleep(0.5)
+
                 # 1. Get the last known checkpoint
                 since = await self._load_checkpoint(symbol, timeframe)
                 if not since:
@@ -844,6 +855,19 @@ class BinanceWSClient:
         Includes handling for HTTP 418 (I'm a teapot) which indicates an IP ban
         or rate-limit violation. Implements exponential backoff for retries.
         """
+        # Check global circuit breaker
+        now = datetime.now(timezone.utc)
+        if BinanceWSClient._ban_until and now < BinanceWSClient._ban_until:
+            wait_left = (BinanceWSClient._ban_until - now).total_seconds()
+            logger.warning(
+                "ws_rate_limited_blocked",
+                symbol=symbol,
+                timeframe=timeframe,
+                wait_left_seconds=round(wait_left, 1),
+                note="REST request blocked by global circuit breaker (418 active)"
+            )
+            return []
+
         params: dict[str, Any] = {
             "symbol": symbol,
             "interval": timeframe,
@@ -854,22 +878,27 @@ class BinanceWSClient:
 
         for attempt in range(WS_REST_RETRY_COUNT):
             try:
+                # Re-check ban status before each retry
+                now = datetime.now(timezone.utc)
+                if BinanceWSClient._ban_until and now < BinanceWSClient._ban_until:
+                    return []
+
                 resp = await self._http_client.get(BINANCE_REST_KLINES_URL, params=params)  # type: ignore[union-attr]
                 
                 # Special handling for 418 (IP Ban / Rate Limit)
                 if resp.status_code == 418:
-                    # Even more aggressive backoff for IP ban: 60s, 120s, 240s...
-                    wait_time = 60 * (2 ** attempt)
+                    # Activate global circuit breaker for 10 minutes
+                    ban_duration = 600 # 10 minutes
+                    BinanceWSClient._ban_until = datetime.now(timezone.utc) + timedelta(seconds=ban_duration)
+                    
                     logger.error(
-                        "ws_rate_limited",
+                        "ws_rate_limited_global_ban",
                         timestamp=datetime.now(timezone.utc),
-                        note=f"Binance returned 418 (IP Ban). Waiting {wait_time}s before retry.",
+                        note=f"Binance returned 418 (IP Ban). Global ban activated for {ban_duration}s.",
                         symbol=symbol,
                         attempt=attempt + 1
                     )
-                    # Add extra sleep to the http_client shared cooldown if possible
-                    await asyncio.sleep(wait_time)
-                    continue
+                    return [] # Abort immediately
 
                 resp.raise_for_status()
                 data = resp.json()
