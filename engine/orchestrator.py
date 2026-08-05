@@ -1371,6 +1371,7 @@ class Orchestrator:
             "peak_pnl": 0.0,
             "open_trade_count": 0,
             "current_price": 0.0,
+            "symbol_has_open_trade": False, # [MOD] Track if this specific symbol has an open trade
         }
 
         try:
@@ -1391,6 +1392,9 @@ class Orchestrator:
             state["current_exposure"] = sum(
                 float(t.entry_price) * float(t.size) for t in open_trades
             )
+            # [MOD] If any open trades exist for this symbol, mark it
+            if open_trades:
+                state["symbol_has_open_trade"] = True
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "error",
@@ -1442,7 +1446,17 @@ class Orchestrator:
 
         try:
             trader = PaperTrader(self._supabase)
-            await trader.open_trade(decision)
+            
+            # Fetch live price from Redis for immediate execution
+            live_price = None
+            try:
+                price_data = await self._redis.get_live_price(decision.symbol)
+                if price_data:
+                    live_price, _ = price_data
+            except Exception as r_exc:
+                logger.warning(f"Failed to fetch live price from Redis for trade opening: {r_exc}")
+            
+            await trader.open_trade(decision, override_entry_price=live_price)
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "error",

@@ -132,20 +132,20 @@ def calculate_position_size(
     if price_risk == 0:
         return 0.0
 
-    raw_size = risk_amount / price_risk
-    max_size = capital * (thresholds.MAX_POSITION_SIZE_PCT / 100.0) / entry_price
-    
-    # [FIX] Instead of just returning min, we ensure that the trade value 
-    # (size * entry_price) never exceeds the allowed capital exposure.
-    # This makes the system dynamic: it scales the size to fit the capital.
-    if max_size <= 0:
+    # [MOD] Force full capital allocation per user request.
+    # Instead of risk-based sizing, we use the full capital available for this coin.
+    if entry_price <= 0:
         return 0.0
         
-    final_size = min(raw_size, max_size)
+    final_size = capital / entry_price
     
-    # Final safety check: Ensure notional value <= capital
-    if (final_size * entry_price) > (capital + 0.01):
-        final_size = capital / entry_price
+    logger.info(
+        "position_sizing_full_capital",
+        capital=capital,
+        entry_price=entry_price,
+        final_size=final_size,
+        notional_value=final_size * entry_price
+    )
         
     return final_size
 
@@ -388,6 +388,15 @@ def assess_risk(
     current_pnl = _portfolio_state_get(portfolio_state, "current_pnl")
     peak_pnl = _portfolio_state_get(portfolio_state, "peak_pnl")
     open_trade_count = _portfolio_state_int(portfolio_state, "open_trade_count")
+    symbol_has_open_trade = portfolio_state.get("symbol_has_open_trade", False) # [MOD]
+
+    # [MOD] Single Position Limit: Reject if this symbol already has an open trade.
+    if symbol_has_open_trade:
+        return _build_rejection(
+            symbol, f"already_open: active trade exists for {symbol}",
+            0.0, 0.0, None, None, None,
+            current_exposure, 0.0, confidence
+        )
 
     # Spot-only: Reject any signal that is not "long".
     if direction != "long":
