@@ -960,9 +960,10 @@ class CTApplication:
                 # This ensures bullish/bearish counts reflect actual market analysis,
                 # not just approved trades.
                 primary_direction = "neutral"
-                if result.score >= 60.0:
+                score_pct = result.score * 100.0
+                if score_pct >= 60.0:
                     primary_direction = "long"
-                elif result.score <= 40.0:
+                elif score_pct <= 40.0:
                     primary_direction = "short"
                 else:
                     primary_direction = "neutral"
