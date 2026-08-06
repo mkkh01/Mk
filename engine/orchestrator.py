@@ -116,7 +116,7 @@ _DEFAULT_CANDLE_FETCH_LIMIT = 250
 # Minimum number of closed candles required on a timeframe for its analysis
 # to be considered "usable" for the orchestrator.  Below this we skip the
 # timeframe (Section 22 -- graceful degradation) and log a warning.
-_MIN_USABLE_CANDLE_COUNT = 30
+_MIN_USABLE_CANDLE_COUNT = 5
 
 
 # ---------------------------------------------------------------------------

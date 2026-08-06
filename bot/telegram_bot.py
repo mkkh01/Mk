@@ -260,6 +260,7 @@ class CTTelegramBot:
             name="add_coin_conversation",
             per_user=True,
             per_chat=True,
+            per_message=False,
             allow_reentry=True,
         )
         application.add_handler(add_coin_conversation)
