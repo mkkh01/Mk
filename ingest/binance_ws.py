@@ -834,7 +834,7 @@ class BinanceWSClient:
             pass
 
         try:
-            cp = await self._supabase.fetch_checkpoint(symbol, timeframe)
+            cp = await self._supabase.get_checkpoint(symbol, timeframe)
             if cp:
                 self._last_checkpoint[pair_key] = cp
                 return cp
