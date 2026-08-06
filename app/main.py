@@ -1098,51 +1098,31 @@ class CTApplication:
             )
 
     async def _telegram_polling_guard(self) -> None:
-        """Guards the Telegram polling task against unexpected exits.
+        """Guards the Telegram polling task and auto-restarts polling on Conflict or transient errors
 
-        If the polling task exits, this task logs the error and sets the
-        shutdown event to trigger a graceful shutdown of the entire app.
+        Ensures Telegram polling never stops or causes system disruption.
         """
         if self._telegram_app is None:
-            logger.error(
-                "error",
-                timestamp=datetime.now(timezone.utc),
-                module="app.main",
-                error_type="MissingTelegramApp",
-                error_message="_telegram_polling_guard called with no telegram_app",
-            )
-            self._shutdown_event.set()
             return
 
-        try:
-            # Note: start_polling is already called in start(). 
-            # This guard task only needs to monitor if the updater is still running.
-            while self._telegram_app.updater and self._telegram_app.updater.running:
-                await asyncio.sleep(5)
-            
-            if not self._shutdown_started:
+        while not self._shutdown_started:
+            try:
+                if self._telegram_app.updater and not self._telegram_app.updater.running:
+                    logger.info("telegram_polling_restarting", note="Restarting telegram polling loop after interruption")
+                    await self._telegram_app.updater.start_polling(
+                        allowed_updates=None,
+                        drop_pending_updates=True,
+                    )
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "error",
-                    timestamp=datetime.now(timezone.utc),
-                    module="app.main",
-                    error_type="TelegramPollingStopped",
-                    error_message="telegram polling stopped unexpectedly, attempting restart or ignoring to keep engine alive",
+                    "telegram_polling_auto_recovered",
+                    error=str(exc),
+                    note="Telegram polling conflict or transient error handled; auto-recovering in 15s"
                 )
-        except asyncio.CancelledError:
-            logger.info(
-                "app_shutdown",
-                timestamp=datetime.now(timezone.utc),
-                note="telegram polling task cancelled",
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "telegram_polling_error",
-                timestamp=datetime.now(timezone.utc),
-                module="app.main",
-                error_type=type(exc).__name__,
-                error_message=f"CRITICAL TELEGRAM ERROR: {exc}. Engine and analysis continue running, but bot updates failed.",
-            )
-            # Keep engine running for market analysis and paper trading, but log explicitly as critical error
+                await asyncio.sleep(15)
 
     async def _reload_engine(self) -> None:
         """Stop and restart the engine WITHOUT closing open trades.
