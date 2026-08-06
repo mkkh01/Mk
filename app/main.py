@@ -1126,7 +1126,7 @@ class CTApplication:
                     timestamp=datetime.now(timezone.utc),
                     module="app.main",
                     error_type="TelegramPollingStopped",
-                    error_message="telegram polling stopped unexpectedly",
+                    error_message="telegram polling stopped unexpectedly, attempting restart or ignoring to keep engine alive",
                 )
         except asyncio.CancelledError:
             logger.info(
@@ -1140,9 +1140,9 @@ class CTApplication:
                 timestamp=datetime.now(timezone.utc),
                 module="app.main",
                 error_type=type(exc).__name__,
-                error_message=f"telegram polling task crashed: {exc}",
+                error_message=f"telegram polling task encountered error: {exc}, keeping engine running",
             )
-            self._shutdown_event.set()  # Trigger app shutdown on polling crash.
+            # Do NOT trigger shutdown on polling transient errors or conflicts
 
     async def _reload_engine(self) -> None:
         """Stop and restart the engine WITHOUT closing open trades.
