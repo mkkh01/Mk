@@ -446,6 +446,17 @@ class PaperTrader:
             )
             return None
 
+        # [MOD] Ensure we never check closure on a candle that closed at or before trade open time.
+        if current_candle.close_time <= trade.opened_at:
+            logger.warning(
+                "simulated_trade_skip_pre_entry_candle",
+                trade_id=str(trade.id),
+                symbol=trade.symbol,
+                opened_at=trade.opened_at.isoformat(),
+                candle_close_time=current_candle.close_time.isoformat(),
+            )
+            return None
+
         resolution = _resolve_close_price(trade, current_candle)
         if resolution is None:
             logger.debug(

@@ -1444,30 +1444,9 @@ class Orchestrator:
             )
             return
 
-        try:
-            trader = PaperTrader(self._supabase)
-            
-            # Fetch live price from Redis for immediate execution
-            live_price = None
-            try:
-                price_data = await self._redis.get_live_price(decision.symbol)
-                if price_data:
-                    live_price, _ = price_data
-            except Exception as r_exc:
-                logger.warning(f"Failed to fetch live price from Redis for trade opening: {r_exc}")
-            
-            await trader.open_trade(decision, override_entry_price=live_price)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "error",
-                timestamp=datetime.utcnow(),
-                module="engine.orchestrator",
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                event_kind="open_simulated_trade_failed",
-                symbol=decision.symbol,
-                decision_id=str(decision.id),
-            )
+        # [MOD] Simulated trade opening responsibility is handled strictly in app/main.py
+        # to prevent duplicate trade creation and race conditions.
+        pass
 
     # -----------------------------------------------------------------
     # Failure-result builder (used when min-timeframes constraint fails)

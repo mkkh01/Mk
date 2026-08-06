@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 CANDLE_TTL_SECONDS = 24 * 3600
 LAST_MSG_TTL_SECONDS = 3600
-LIVE_PRICE_TTL_SECONDS = 300
+LIVE_PRICE_TTL_SECONDS = 30
 
 
 class RedisCache:

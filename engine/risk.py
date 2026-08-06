@@ -132,21 +132,22 @@ def calculate_position_size(
     if price_risk == 0:
         return 0.0
 
-    # [MOD] Force full capital allocation per user request.
-    # Instead of risk-based sizing, we use the full capital available for this coin.
-    if entry_price <= 0:
-        return 0.0
-        
-    final_size = capital / entry_price
-    
+    raw_size = risk_amount / price_risk
+    max_size = capital * (thresholds.MAX_POSITION_SIZE_PCT / 100.0) / entry_price
+    final_size = min(raw_size, max_size)
+
     logger.info(
-        "position_sizing_full_capital",
+        "position_sized",
         capital=capital,
+        risk_percent=risk_percent,
         entry_price=entry_price,
+        stop_loss_price=stop_loss_price,
+        risk_amount=risk_amount,
+        price_risk=price_risk,
+        raw_size=raw_size,
+        max_size=max_size,
         final_size=final_size,
-        notional_value=final_size * entry_price
     )
-        
     return final_size
 
 

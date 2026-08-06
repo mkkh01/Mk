@@ -342,8 +342,8 @@ class SupabaseClient:
             row = await conn.fetchrow(
                 """
                 SELECT * FROM candles
-                WHERE symbol = $1 AND timeframe = $2
-                ORDER BY open_time DESC LIMIT 1
+                WHERE symbol = $1 AND timeframe = $2 AND is_closed = TRUE
+                ORDER BY close_time DESC LIMIT 1
                 """,
                 symbol, timeframe,
             )
