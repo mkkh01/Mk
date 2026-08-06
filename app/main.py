@@ -1136,13 +1136,13 @@ class CTApplication:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(
-                "error",
+                "telegram_polling_error",
                 timestamp=datetime.now(timezone.utc),
                 module="app.main",
                 error_type=type(exc).__name__,
-                error_message=f"telegram polling task encountered error: {exc}, keeping engine running",
+                error_message=f"CRITICAL TELEGRAM ERROR: {exc}. Engine and analysis continue running, but bot updates failed.",
             )
-            # Do NOT trigger shutdown on polling transient errors or conflicts
+            # Keep engine running for market analysis and paper trading, but log explicitly as critical error
 
     async def _reload_engine(self) -> None:
         """Stop and restart the engine WITHOUT closing open trades.
