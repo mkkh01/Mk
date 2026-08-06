@@ -856,9 +856,16 @@ class CTApplication:
         # [TRACE] Consumer received
         now = datetime.now(timezone.utc)
         await health_manager.update_component("Ingest", HealthStatus.OK, "Received candle", {"symbol": candle.symbol, "timeframe": candle.timeframe}, timeout=60.0)
-        # [FIX] Synchronize scan_cycles between local health_stats and global health_manager
         await health_manager.increment_stat("scan_cycles")
         
+        # Track candles received and unique symbols seen for every closed or live update
+        if candle.is_closed:
+            await health_manager.increment_stat("candles_received")
+        
+        # Track symbol in unique symbols seen
+        if candle.symbol:
+            await health_manager.record_symbol_direction(candle.symbol, "neutral")
+
         logger.debug(
             "trace_consumer_received",
             symbol=candle.symbol,
@@ -868,10 +875,7 @@ class CTApplication:
         )
 
         # OPTIMIZATION: Early return for unclosed candles BEFORE database I/O.
-        # This prevents the subscriber from hanging on database pressure for 
-        # thousands of tick updates that are just ignored by the engine.
         if not candle.is_closed:
-            # We still updated scan_cycles and last_data_at above.
             return
 
         # The orchestrator requires (candle, coin_config). We must fetch the

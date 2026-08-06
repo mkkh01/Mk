@@ -204,7 +204,7 @@ class StrategyPerformanceResponse(BaseModel):
 # Endpoints
 # ============================================================================
 @router.get("/live_prices/{symbol}", response_model=LivePriceResponse)
-async def get_live_price_endpoint(
+async def get_live_price_endpoints(
     symbol: str,
     redis_cache: RedisCache = Depends(get_redis_cache),
 ) -> LivePriceResponse:
@@ -212,7 +212,8 @@ async def get_live_price_endpoint(
     if price_data:
         price, timestamp = price_data
         return LivePriceResponse(symbol=symbol, price=price, timestamp=timestamp)
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Live price not found")
+    # Return zero price instead of 404 to prevent dashboard polling error spam
+    return LivePriceResponse(symbol=symbol, price=0.0, timestamp=datetime.now(timezone.utc))
 
 
 @router.get("/thresholds", response_model=ThresholdsResponse)
@@ -316,15 +317,15 @@ async def get_system_health_endpoint(request: Request) -> SystemHealthResponse:
     health_stats = {
         "scan_cycles": stats.get("scan_cycles", 0),
         "pairs_analyzed": stats.get("analyses_executed", 0),
-        "strategies_run": stats.get("strategies_run", 0),
+        "strategies_run": stats.get("analyses_executed", 0),
         "opportunities_found": stats.get("opportunities_found", 0),
         "opportunities_rejected": stats.get("opportunities_rejected", 0),
-        "rejection_reasons": {}, # Requires dedicated analytics
-        "errors": stats.get("errors", 0),
-        "last_data_at": None, # Requires dedicated analytics
-        "total_score_sum": 0.0, # Requires dedicated analytics
-        "total_confidence_sum": 0.0, # Requires dedicated analytics
-        "total_analysis_time_ms": 0.0, # Requires dedicated analytics
+        "rejection_reasons": stats.get("rejection_reasons", {}),
+        "errors": stats.get("errors_count", 0),
+        "last_data_at": stats.get("last_activity"),
+        "total_score_sum": stats.get("total_score_sum", 0.0),
+        "total_confidence_sum": stats.get("total_confidence_sum", 0.0),
+        "total_analysis_time_ms": stats.get("total_analysis_time_ms", 0.0),
         "db_writes": stats.get("db_writes", 0),
         "telegram_sent": stats.get("telegram_sent", 0),
         "engine_running": ct_app_instance._engine_running,
