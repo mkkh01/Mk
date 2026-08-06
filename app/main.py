@@ -960,19 +960,12 @@ class CTApplication:
                 # This ensures bullish/bearish counts reflect actual market analysis,
                 # not just approved trades.
                 primary_direction = "neutral"
-                if result.component_signals:
-                    # Count signal directions to determine primary direction
-                    long_count = sum(1 for s in result.component_signals if s.direction == "long")
-                    # In Spot-only, we only care if long signals dominate.
-                    long_count = sum(1 for s in result.component_signals if s.direction == "long")
-                    short_count = sum(1 for s in result.component_signals if s.direction == "short")
-
-                    if long_count > short_count:
-                        primary_direction = "long"
-                    elif short_count > long_count:
-                        primary_direction = "short"
-                    else:
-                        primary_direction = "neutral"
+                if result.score >= 60.0:
+                    primary_direction = "long"
+                elif result.score <= 40.0:
+                    primary_direction = "short"
+                else:
+                    primary_direction = "neutral"
                 await health_manager.record_symbol_direction(
                     result.symbol,
                     primary_direction,
