@@ -1442,9 +1442,8 @@ async def health_check():
 @app.get("/ready", status_code=status.HTTP_200_OK)
 async def readiness_check():
     global ct_app_instance
-    if ct_app_instance and ct_app_instance._engine_running:
-        return {"status": "ready", "message": "CT Engine is running"}
-    return Response(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content="CT Engine not ready")
+    is_running = ct_app_instance and ct_app_instance._engine_running
+    return {"status": "ready" if is_running else "initializing", "engine_running": is_running, "message": "CT Web Server is ready"}
 
 @app.get("/", status_code=status.HTTP_200_OK)
 async def root():
