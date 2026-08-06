@@ -862,9 +862,10 @@ class CTApplication:
         if candle.is_closed:
             await health_manager.increment_stat("candles_received")
         
-        # Track symbol in unique symbols seen
+        # Track symbol in unique symbols seen without forcing neutral direction on every ingest
         if candle.symbol:
-            await health_manager.record_symbol_direction(candle.symbol, "neutral")
+            async with health_manager._lock:
+                health_manager._stats["unique_symbols_seen"].add(candle.symbol)
 
         logger.debug(
             "trace_consumer_received",
