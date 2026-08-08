@@ -515,7 +515,7 @@ class CTApplication:
                     open_trades_count = len(open_trades)
                     if open_trades:
                         from simulation.paper_trade import PaperTrader
-                        paper_trader = PaperTrader(supabase=self._supabase)
+                        paper_trader = PaperTrader(supabase=self._supabase, redis=self._redis)
                         
                         # Build price map from latest candles
                         price_map = {}
@@ -987,7 +987,7 @@ class CTApplication:
                         try:
                             # Open trade and send confirmation with confidence
                             from simulation.paper_trade import PaperTrader
-                            trader = PaperTrader(self._supabase)
+                            trader = PaperTrader(self._supabase, redis=self._redis)
                             trade = await trader.open_trade(result)
                             
                             opened_text = self._bot.format_trade_opened(trade, confidence=result.confidence)
@@ -1037,7 +1037,8 @@ class CTApplication:
         from simulation.paper_trade import PaperTrader
 
         paper_trader = PaperTrader(
-            supabase=self._supabase
+            supabase=self._supabase,
+            redis=self._redis,
         )
 
         try:

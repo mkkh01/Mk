@@ -57,6 +57,7 @@ from uuid import UUID
 import numpy as np
 
 from config.thresholds import TAKER_FEE_PCT, VOLATILITY_ATR_PERIOD  # noqa: F401 -- re-exported for tests
+from config.thresholds import LIVE_PRICE_MAX_AGE_SECONDS
 from config.thresholds import (
     TRAILING_ENABLED,
     TRAILING_ACTIVATION_MULTIPLIER,
@@ -241,17 +242,140 @@ class PaperTrader:
     ``is_simulated=True`` hard-coded; no method accepts a flag to disable it.
     """
 
-    def __init__(self, supabase: SupabaseClient) -> None:
+    def __init__(
+        self,
+        supabase: SupabaseClient,
+        redis: Optional[object] = None,
+    ) -> None:
         """Construct a PaperTrader.
 
         Args:
             supabase: An *already-connected* ``SupabaseClient``.  The trader
                 does not call ``connect()`` itself; that is the responsibility
                 of ``app/main.py`` per the Section 1 startup contract.
+            redis: An *optional* ``RedisCache`` instance. When provided, the
+                trader resolves the *actual* fill price at trade-open time
+                from ``live_price:{symbol}`` (set by the ingest WebSocket
+                loop on every kline tick) instead of blindly using the
+                signal's entry price, which may be stale (derived from the
+                last closed candle in the database). Pass ``None`` (or omit)
+                to preserve the legacy behaviour (signal price = fill price).
         """
         self._supabase = supabase
+        self._redis = redis
 
     # ----------------------- open -------------------------------------------
+    # --- live fill-price resolution helpers --------------------------------
+
+    async def _resolve_exec_price(
+        self, symbol: str, signal_price: float, timeframe: str
+    ) -> tuple[float, Optional[float]]:
+        """Resolve the real market price at trade-open time.
+
+        Resolution order (Section 22 graceful degradation everywhere):
+
+        1. ``live_price:{symbol}`` from Redis -- refreshed by the ingest
+           WebSocket loop on *every* kline tick (closed AND live). Only used
+           when it is recent enough (``< LIVE_PRICE_MAX_AGE_SECONDS``)
+           and positive. Returns ``(price, age_seconds)``.
+        2. Fallback: ``close`` of the last closed candle in the database
+           (``fetch_latest_candle``). Returns ``(close, None)``.
+        3. Fallback: ``(0.0, None)`` -- the caller must then fall back to the
+           signal price as the fill price.
+
+        Any Redis / DB error is logged and degraded to the next step; it
+        never prevents the trade from opening.
+        """
+        # 1. Redis live price.
+        if self._redis is not None:
+            try:
+                live = await self._redis.get_live_price(symbol)  # type: ignore[attr-defined]
+                if live is not None:
+                    price, ts = live
+                    price = _safe_float(price)
+                    if price > 0 and ts is not None:
+                        age = (_utcnow() - ts).total_seconds()
+                        if 0.0 <= age < float(LIVE_PRICE_MAX_AGE_SECONDS):
+                            logger.info(
+                                "entry_price_from_live_price",
+                                timestamp=_utcnow(),
+                                symbol=symbol,
+                                signal_price=signal_price,
+                                live_price=price,
+                                live_price_age_seconds=round(age, 1),
+                                label=_SIMULATED_LABEL,
+                            )
+                            return price, round(age, 3)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "error",
+                    timestamp=_utcnow(),
+                    module="simulation.paper_trade",
+                    error_type=type(exc).__name__,
+                    error_message=f"get_live_price failed for {symbol}: {exc}",
+                    symbol=symbol,
+                )
+
+        # 2. Last closed candle in the database (freshness check only -- the
+        #    candle is already the latest *closed* one by construction).
+        try:
+            latest = await self._supabase.fetch_latest_candle(symbol, timeframe)
+            if latest is not None and latest.is_closed and latest.close > 0:
+                logger.info(
+                    "entry_price_from_latest_candle",
+                    timestamp=_utcnow(),
+                    symbol=symbol,
+                    signal_price=signal_price,
+                    candle_price=latest.close,
+                    candle_open_time=latest.open_time.isoformat(),
+                    label=_SIMULATED_LABEL,
+                )
+                return latest.close, None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "error",
+                timestamp=_utcnow(),
+                module="simulation.paper_trade",
+                error_type=type(exc).__name__,
+                error_message=f"fetch_latest_candle failed for {symbol}: {exc}",
+                symbol=symbol,
+            )
+
+        # 3. Nothing usable -- caller falls back to the signal price.
+        logger.warning(
+            "entry_price_fallback_signal",
+            timestamp=_utcnow(),
+            symbol=symbol,
+            signal_price=signal_price,
+            note="no live price available; fill price = signal price",
+            label=_SIMULATED_LABEL,
+        )
+        return 0.0, None
+
+    @staticmethod
+    def _shift_levels(
+        exec_price: float,
+        signal_price: float,
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
+    ) -> tuple[Optional[float], Optional[float]]:
+        """Shift SL/TP so their absolute distances from the fill price match
+        the distances the signal originally defined.
+
+        The signal defines ``stop_loss = signal_price - risk_distance`` and
+        ``take_profit = signal_price + reward_distance``. Keeping the same
+        absolute distances guarantees the planned USDT risk amount and the
+        R:R ratio stay valid even when the market moved between the signal
+        and the fill. ``None`` levels pass through unchanged.
+        """
+        new_sl: Optional[float] = None
+        new_tp: Optional[float] = None
+        if stop_loss is not None:
+            new_sl = exec_price - (signal_price - stop_loss)
+        if take_profit is not None:
+            new_tp = exec_price + (take_profit - signal_price)
+        return new_sl, new_tp
+
     async def open_trade(self, decision: DecisionResult) -> SimulatedTrade:
         """Open a simulated trade from an approved ``DecisionResult``.
 
@@ -317,7 +441,7 @@ class PaperTrader:
         entry = decision.entry
         symbol = decision.symbol
         direction = entry.direction
-        entry_price = _safe_float(entry.entry_price)
+        signal_price = _safe_float(entry.entry_price)
         # Size comes from the risk assessment -- EntrySignal has no size field.
         size = _safe_float(decision.risk.max_position_size)
         stop_loss = (
@@ -327,7 +451,44 @@ class PaperTrader:
             float(entry.take_profit) if entry.take_profit is not None else None
         )
 
-        # Conservative: default taker for the entry leg (Section 18).
+        # ------------------------------------------------------------------
+        # FIX: resolve the ACTUAL fill price at trade-open time.
+        # Previously the entry_price from the signal (derived from the last
+        # closed candle in the DB at signal time) was used verbatim as the
+        # fill price -- so when candles arrived with a delay, several
+        # time-distant trades were opened at the exact same stale price.
+        # Now we prefer the live market price (Redis), fall back to the last
+        # closed candle in the DB, and finally to the signal price itself.
+        # ------------------------------------------------------------------
+        exec_price, live_price_age = await self._resolve_exec_price(
+            symbol, signal_price, entry.timeframe if hasattr(entry, "timeframe") else "15m"
+        )
+        if exec_price and exec_price > 0:
+            # Recompute SL / TP keeping the SAME absolute distances from the
+            # signal price, so the risk distance (and R:R ratio) stays valid
+            # relative to where the entry signal actually pointed.
+            new_stop_loss, new_take_profit = self._shift_levels(
+                exec_price, signal_price, stop_loss, take_profit,
+            )
+            stop_loss = new_stop_loss
+            take_profit = new_take_profit
+            # Keep the same USDT position value so the capital-risk amount
+            # (in dollars, not quantity) stays identical to the risk plan:
+            #   new_size = (signal_size * signal_price) / exec_price
+            if exec_price > 0 and signal_price > 0:
+                position_value = _safe_float(size) * signal_price
+                size = position_value / exec_price
+            entry_price = exec_price
+        else:
+            # No live price available -- behave exactly as before (signal
+            # price = fill price). ``signal_price`` is left unset so history
+            # stays readable.
+            entry_price = signal_price
+            live_price_age = None
+
+        # Conservative: default taker for the entry leg (Section 18) --
+        # computed AFTER the fill price and size are final so fee/slippage
+        # reflect the actual execution rather than the stale signal price.
         fee = calculate_fee(entry_price, size, is_maker=False)
         slippage = estimate_slippage(entry_price, size, symbol)
 
@@ -345,6 +506,8 @@ class PaperTrader:
             symbol=symbol,
             direction="long", # Force long for Spot
             entry_price=entry_price,
+            signal_price=signal_price if entry_price != signal_price else None,
+            live_price_age_seconds=live_price_age,
             size=size,
             fee=fee,
             slippage=slippage,

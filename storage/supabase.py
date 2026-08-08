@@ -144,6 +144,11 @@ def _trade_from_row(row: asyncpg.Record) -> SimulatedTrade:
         is_simulated=bool(row["is_simulated"]),
         stop_loss=None if row.get("stop_loss") is None else float(row["stop_loss"]),
         take_profit=None if row.get("take_profit") is None else float(row["take_profit"]),
+        signal_price=None if row.get("signal_price") is None else float(row["signal_price"]),
+        live_price_age_seconds=(
+            None if row.get("live_price_age_seconds") is None
+            else float(row["live_price_age_seconds"])
+        ),
         highest_price=None if row.get("highest_price") is None else float(row["highest_price"]),
         lowest_price=None if row.get("lowest_price") is None else float(row["lowest_price"]),
         atr_at_entry=None if row.get("atr_at_entry") is None else float(row["atr_at_entry"]),
@@ -456,7 +461,7 @@ class SupabaseClient:
         return [_decision_from_row(r) for r in rows]
 
     # ---------------- simulated_trades ----------------
-    async def insert_simulated_trade(self, trade: SimulatedTrade) -> bool:
+    async def insert_simulated_trade(self, trade: SimulatedTrade) -> bool:  # noqa: C901 -- column list kept together for readability
         """Insert a simulated trade. Idempotent on decision_id."""
         pool = self._require_pool()
         async with pool.acquire() as conn:
@@ -465,17 +470,19 @@ class SupabaseClient:
                     """
                     INSERT INTO simulated_trades (
                         id, decision_id, symbol, direction,
-                        entry_price, size, fee, slippage,
+                        entry_price, signal_price, live_price_age_seconds,
+                        size, fee, slippage,
                         opened_at, closed_at, pnl, status,
                         close_reason, is_simulated,
                         stop_loss, take_profit,
                         highest_price, lowest_price, atr_at_entry,
                         initial_stop_loss, timeframe
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
                     ON CONFLICT (decision_id) DO NOTHING
                     """,
                     trade.id, trade.decision_id, trade.symbol, trade.direction,
-                    trade.entry_price, trade.size, trade.fee, trade.slippage,
+                    trade.entry_price, trade.signal_price, trade.live_price_age_seconds,
+                    trade.size, trade.fee, trade.slippage,
                     trade.opened_at, trade.closed_at, trade.pnl, trade.status,
                     trade.close_reason, trade.is_simulated,
                     trade.stop_loss, trade.take_profit,

@@ -112,10 +112,50 @@ class TestPaperTraderOpenTrade:
         assert trade.symbol == "BTCUSDT"
         assert trade.direction == "long"
         assert trade.status == "open"
+        # No live price available (no Redis + fetch_latest_candle stub returns
+        # None) -> fill price falls back to the signal price.
         assert trade.entry_price == 100.0
         assert trade.decision_id == decision.id
         # Storage must have been called.
         mock_supabase.insert_simulated_trade.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_open_trade_uses_live_price_from_redis(self, mock_supabase, mock_redis):
+        """FIX regression: the fill price must come from the live market
+        price, not the (possibly stale) signal price. SL/TP distances and the
+        USDT position value are preserved around the new fill price."""
+        now = datetime.now(timezone.utc)
+        mock_redis.get_live_price.return_value = (102.0, now)
+        trader = PaperTrader(supabase=mock_supabase, redis=mock_redis)
+        decision = make_decision("long", 100.0)
+        trade = await trader.open_trade(decision)
+        assert trade.entry_price == 102.0, "fill must use the live price"
+        assert trade.signal_price == 100.0, "original signal price preserved"
+        # SL/TP absolute distances preserved: SL was 95 (-5), TP was 110 (+10).
+        assert trade.stop_loss == pytest.approx(97.0)
+        assert trade.take_profit == pytest.approx(112.0)
+        # USDT position value preserved: 10.0 units * 100.0 signal price.
+        assert trade.size == pytest.approx(10.0 * 100.0 / 102.0)
+        # Fee/slippage recomputed on the actual fill, not the signal.
+        expected_fee = 102.0 * trade.size * (thresholds.TAKER_FEE_PCT / 100.0)
+        assert trade.fee == pytest.approx(expected_fee)
+        # Trailing-track starts at the fill price, never the stale signal.
+        assert trade.highest_price == pytest.approx(102.0)
+        assert trade.initial_stop_loss == pytest.approx(97.0)
+        assert trade.live_price_age_seconds is not None
+
+    @pytest.mark.asyncio
+    async def test_open_trade_stale_live_price_ignored(self, mock_supabase, mock_redis):
+        """A live price older than LIVE_PRICE_MAX_AGE_SECONDS is rejected and
+        the fill falls back to the signal price."""
+        now = datetime.now(timezone.utc)
+        stale = datetime.fromtimestamp(now.timestamp() - 300, timezone.utc)
+        mock_redis.get_live_price.return_value = (200.0, stale)
+        trader = PaperTrader(supabase=mock_supabase, redis=mock_redis)
+        decision = make_decision("long", 100.0)
+        trade = await trader.open_trade(decision)
+        assert trade.entry_price == 100.0
+        assert trade.signal_price is None
 
     @pytest.mark.asyncio
     async def test_is_simulated_always_true(self, mock_supabase):

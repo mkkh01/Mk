@@ -190,6 +190,13 @@ volatile coins."""
 MAKER_FEE_PCT = 0.01
 TAKER_FEE_PCT = 0.01
 SLIPPAGE_PCT = 0.05
+LIVE_PRICE_MAX_AGE_SECONDS = 60
+"""Maximum acceptable age (seconds) of a live market price when resolving the
+actual fill price at trade-open time. The live-price cache has a Redis TTL of
+30s (``storage.redis_cache.LIVE_PRICE_TTL_SECONDS``); 60s is a generous
+ceiling that still guarantees the fill price reflects the *current* market
+rather than a stale cache (stale signal prices are what caused multiple
+time-distant trades to open at the same entry price)."""
 
 # ---------------------------------------------------------------------------
 # WebSocket / Ingest
@@ -272,7 +279,7 @@ __all__ = [
     "CONFIDENCE_THRESHOLD", "HTF_ALIGNMENT_WEIGHT", "STRUCTURE_WEIGHT", "MOMENTUM_WEIGHT", "LIQUIDITY_WEIGHT",
     "SESSION_WEIGHT", "REGIME_MODIFIER_TRENDING", "REGIME_MODIFIER_RANGING", "REGIME_MODIFIER_VOLATILE",
     "ENTRY_LIMIT_OFFSET_PCT", "ENTRY_TIMEOUT_MINUTES", "MAX_ENTRY_RETRIES",
-    "MAKER_FEE_PCT", "TAKER_FEE_PCT", "SLIPPAGE_PCT",
+    "MAKER_FEE_PCT", "TAKER_FEE_PCT", "SLIPPAGE_PCT", "LIVE_PRICE_MAX_AGE_SECONDS",
     "WS_INITIAL_BACKOFF_SECONDS", "WS_MAX_BACKOFF_SECONDS", "WS_STABLE_RESET_SECONDS", "WS_STALE_MULTIPLIER",
     "WS_REST_RETRY_COUNT", "WS_RESUME_PAD_CANDLES",
     "TIMEFRAME_TO_SECONDS", "VALID_TIMEFRAMES", "timeframe_to_seconds", "resume_window_candles",

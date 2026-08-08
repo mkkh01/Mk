@@ -32,6 +32,14 @@ class SimulatedTrade(BaseModel):
     symbol: str
     direction: Literal["long"]
     entry_price: float
+    signal_price: Optional[float] = None
+    """The entry price from the original signal (before live-price adjustment).
+
+    ``entry_price`` is the actual execution (fill) price at trade-open time.
+    ``signal_price`` preserves the original signal price so operators can see
+    how far the market moved between the signal and the fill.``None`` when the
+    signal price was not available or equals the execution price.
+    """
     size: float
     fee: float
     slippage: float
@@ -55,3 +63,6 @@ class SimulatedTrade(BaseModel):
     """Immutable initial stop loss, used for trailing activation threshold."""
     timeframe: str = "15m"
     """The timeframe this trade was opened on, used for ATR lookups."""
+    live_price_age_seconds: Optional[float] = None
+    """Age of the live price used at fill time (seconds). ``None`` when the
+    signal price was used directly (no live price available)."""
