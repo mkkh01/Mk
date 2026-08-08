@@ -230,19 +230,35 @@ class CTApplication:
         # background task so this coroutine can wait on the shutdown event.
         await self._telegram_app.initialize()
         await self._telegram_app.start()
+
         if self._telegram_app.updater is not None:
-            # [FIX] Set drop_pending_updates=True to clear any stale polling sessions 
-            # from previous instances, preventing Conflict: terminated by other getUpdates.
+            # [FIX] Clear any stale polling/webhook sessions from previous
+            # instances (including a still-running old Render revision),
+            # preventing "Conflict: terminated by other getUpdates".
             logger.info("telegram_polling_starting", drop_pending_updates=True)
+            try:
+                # Explicitly drop any webhook so long polling is the only
+                # active session (defensive -- Render hot deploys can leave a
+                # webhook registered by another instance).
+                await self._telegram_app.bot.delete_webhook(
+                    drop_pending_updates=True
+                )
+            except Exception as wh_exc:  # noqa: BLE001
+                logger.warning(
+                    "error",
+                    timestamp=datetime.now(timezone.utc),
+                    module="app.main",
+                    error_type=type(wh_exc).__name__,
+                    error_message=f"delete_webhook failed: {wh_exc}",
+                )
             # Try to stop any existing polling first to be safe
             try:
                 await self._telegram_app.updater.stop()
-            except:
+            except Exception:  # noqa: BLE001
                 pass
-            
-            # [MOD] Wait 2 seconds to allow any previous instance to release the session
-            await asyncio.sleep(2.0)
-            
+            # [MOD] Wait 3 seconds to allow any previous instance to release
+            # the polling session on the Telegram servers.
+            await asyncio.sleep(3.0)
             await self._telegram_app.updater.start_polling(
                 allowed_updates=None,
                 drop_pending_updates=True,
@@ -1098,31 +1114,61 @@ class CTApplication:
             )
 
     async def _telegram_polling_guard(self) -> None:
-        """Guards the Telegram polling task and auto-restarts polling on Conflict or transient errors
+        """Guards the Telegram polling task and auto-restarts polling on
+        Conflict or transient errors.
 
-        Ensures Telegram polling never stops or causes system disruption.
+        [FIX] A persistent ``Conflict: terminated by other getUpdates request``
+        means a *second* bot instance (typically a stale Render revision or a
+        remote duplicate) owns the polling session. Retrying every 10-15
+        seconds floods the logs and cannot win the race, so the guard now
+        uses exponential backoff and re-verifies the session owner before
+        retrying. A successful poll resets the backoff to the initial value.
         """
         if self._telegram_app is None:
             return
-
+        backoff = 15.0
+        max_backoff = 300.0
         while not self._shutdown_started:
             try:
                 if self._telegram_app.updater and not self._telegram_app.updater.running:
-                    logger.info("telegram_polling_restarting", note="Restarting telegram polling loop after interruption")
+                    logger.info(
+                        "telegram_polling_restarting",
+                        note="Restarting telegram polling loop after interruption",
+                    )
                     await self._telegram_app.updater.start_polling(
                         allowed_updates=None,
                         drop_pending_updates=True,
                     )
+                    backoff = 15.0  # healthy poll -- reset backoff
                 await asyncio.sleep(10)
             except asyncio.CancelledError:
                 break
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "telegram_polling_auto_recovered",
-                    error=str(exc),
-                    note="Telegram polling conflict or transient error handled; auto-recovering in 15s"
-                )
-                await asyncio.sleep(15)
+                exc_text = str(exc)
+                if "Conflict" in exc_text or "terminated by other getUpdates" in exc_text:
+                    # Another instance owns the polling session; do not fight
+                    # it with rapid retries. Back off and re-check ownership.
+                    try:
+                        me = await self._telegram_app.bot.get_me()
+                        logger.info(
+                            "telegram_polling_conflict_other_instance",
+                            note=(
+                                f"Another bot instance holds the polling "
+                                f"session (Conflict). Backing off {backoff:.0f}s "
+                                f"before retry. Bot username: {me.username}"
+                            ),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    backoff = min(backoff * 2.0, max_backoff)
+                else:
+                    logger.warning(
+                        "telegram_polling_auto_recovered",
+                        error=exc_text,
+                        note="Telegram polling conflict or transient error handled; auto-recovering",
+                    )
+                    backoff = min(backoff * 2.0, max_backoff)
+                await asyncio.sleep(backoff)
 
     async def _reload_engine(self) -> None:
         """Stop and restart the engine WITHOUT closing open trades.

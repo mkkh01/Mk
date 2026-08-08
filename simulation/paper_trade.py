@@ -263,6 +263,12 @@ class PaperTrader:
         """
         self._supabase = supabase
         self._redis = redis
+        # [FIX] Trades whose latest closed candle predates their open time
+        # would otherwise emit a ``warning`` on EVERY poll interval until the
+        # next candle closes (up to 60 min for 1h trades). Track warned trade
+        # ids so the warning fires once per trade; subsequent skips are
+        # logged at debug level.
+        self._pre_entry_warned: set[UUID] = set()
 
     # ----------------------- open -------------------------------------------
     # --- live fill-price resolution helpers --------------------------------
@@ -609,15 +615,34 @@ class PaperTrader:
             )
             return None
 
-        # [MOD] Ensure we never check closure on a candle that closed at or before trade open time.
+        # [MOD] Ensure we never check closure on a candle that closed at or
+        # before trade open time.
         if current_candle.close_time <= trade.opened_at:
-            logger.warning(
-                "simulated_trade_skip_pre_entry_candle",
-                trade_id=str(trade.id),
-                symbol=trade.symbol,
-                opened_at=trade.opened_at.isoformat(),
-                candle_close_time=current_candle.close_time.isoformat(),
-            )
+            # [FIX] The latest CLOSED candle is naturally older than the
+            # trade until the *next* candle closes -- this condition holds
+            # for the entire lifetime of the current candle (up to 60 min).
+            # Log a warning ONCE per trade, then drop subsequent checks
+            # silently (debug) to avoid flooding the logs every poll
+            # interval.
+            if trade.id not in self._pre_entry_warned:
+                self._pre_entry_warned.add(trade.id)
+                logger.warning(
+                    "simulated_trade_skip_pre_entry_candle",
+                    trade_id=str(trade.id),
+                    symbol=trade.symbol,
+                    opened_at=trade.opened_at.isoformat(),
+                    candle_close_time=current_candle.close_time.isoformat(),
+                    note="Skipping silently until a newer closed candle arrives",
+                )
+            else:
+                logger.debug(
+                    "simulated_trade_skip_pre_entry_candle",
+                    trade_id=str(trade.id),
+                    symbol=trade.symbol,
+                    opened_at=trade.opened_at.isoformat(),
+                    candle_close_time=current_candle.close_time.isoformat(),
+                    note="Already warned -- suppressing repeated warning",
+                )
             return None
 
         resolution = _resolve_close_price(trade, current_candle)

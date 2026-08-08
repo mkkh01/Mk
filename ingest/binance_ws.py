@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -367,8 +368,19 @@ class BinanceWSClient:
         if self._ws is None:
             return
 
-        # 1. On every connect, load fresh checkpoints and gap-fill (Section 4 #2).
-        await self._refill_all_gaps()
+        # 1. [FIX] On every connect, load fresh checkpoints and gap-fill
+        #    (Section 4 #2) -- but NEVER while the global 418 ban is active,
+        #    otherwise the REST burst re-triggers the ban immediately.
+        if (BinanceWSClient._ban_until is None
+                or datetime.now(timezone.utc) >= BinanceWSClient._ban_until):
+            await self._refill_all_gaps()
+        else:
+            wait_left = (BinanceWSClient._ban_until - datetime.now(timezone.utc)).total_seconds()
+            logger.info(
+                "ws_rate_limited_blocked",
+                timestamp=datetime.now(timezone.utc),
+                note=f"Skipping initial gap-fill -- Binance ban active ({wait_left:.0f}s remaining)",
+            )
 
         while self._running:
             try:
@@ -725,8 +737,35 @@ class BinanceWSClient:
         except asyncio.CancelledError:
             raise
 
-        # 4. Refill gaps BEFORE reconnecting
-        await self._refill_all_gaps()
+        # 4. [FIX] Refill gaps ONLY after a *stable* connection, never right
+        #    after a flapping reconnect. Previously gap-fill ran on EVERY
+        #    disconnect, and a burst of REST requests during a flapping
+        #    connection (or immediately after a 418 ban) re-triggered the
+        #    same ban in a loop. Now it runs once per stable session -- at
+        #    the start of ``_receive_loop`` after the connection survives
+        #    its initial setup, and then only after
+        #    ``WS_STABLE_RESET_SECONDS`` of uptime.
+        run_refill = (BinanceWSClient._ban_until is None
+                      or datetime.now(timezone.utc) >= BinanceWSClient._ban_until)
+        if run_refill:
+            if uptime_seconds is not None and uptime_seconds >= float(WS_STABLE_RESET_SECONDS):
+                await self._refill_all_gaps()
+            else:
+                logger.debug(
+                    "ws_reconnect",
+                    timestamp=datetime.now(timezone.utc),
+                    note=("Skipping gap-fill on flapping reconnect (stable "
+                          "refill will run at the start of the receive loop "
+                          "or after a stable session)"),
+                )
+        else:
+            wait_left = (BinanceWSClient._ban_until - datetime.now(timezone.utc)).total_seconds()
+            logger.info(
+                "ws_rate_limited_blocked",
+                timestamp=datetime.now(timezone.utc),
+                note=f"Skipping gap-fill -- Binance ban still active ({wait_left:.0f}s remaining). "
+                     f"Missed candles will be back-filled after the ban expires.",
+            )
 
     # ---------------- gap fill via REST ----------------
     async def _refill_all_gaps(self) -> None:
@@ -745,8 +784,13 @@ class BinanceWSClient:
                 break
 
             try:
-                # Add a small delay between symbols to avoid bursting
-                await asyncio.sleep(0.5)
+                # [FIX] Spread REST requests apart (initial wait + jitter) so
+                # the burst of one request per active pair does not exceed
+                # Binance's per-IP rate limits (HTTP 418 bans). A flat 0.5s
+                # spacing previously produced ~16 requests within 8s of every
+                # connection, which was the direct trigger for the bans.
+                per_request_pause = 3.0 + random.uniform(0.0, 2.0)
+                await asyncio.sleep(per_request_pause)
 
                 # 1. Get the last known checkpoint
                 since = await self._load_checkpoint(symbol, timeframe)
@@ -811,13 +855,21 @@ class BinanceWSClient:
                 await self._advance_checkpoint(closed_gaps[-1])
 
             except Exception as exc:  # noqa: BLE001
+                # [FIX] Do not abort the entire gap-fill on a single pair
+                # failure -- Binance 418 bans the whole IP, so a failure here
+                # means the remaining pairs would hit the same ban anyway.
+                # Continue with the next pair on the next reconnect once the
+                # ban window expires.
                 logger.error(
                     "error",
                     timestamp=now,
                     module="ingest.binance_ws",
                     error_type=type(exc).__name__,
-                    error_message=f"gap-fill failed for {symbol} {timeframe}: {exc}",
+                    error_message=f"gap-fill failed for {symbol} {timeframe}: {exc}. "
+                    f"Continuing with the next pair; the missed candles will "
+                    f"be re-fetched after the next successful reconnect.",
                 )
+                continue
 
     async def _load_checkpoint(self, symbol: str, timeframe: str) -> Optional[datetime]:
         """Load the most recent checkpoint from Redis, then Postgres."""

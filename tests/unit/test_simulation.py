@@ -225,6 +225,66 @@ class TestPaperTraderClosure:
         result = await trader.check_trade_closure(trade, current)
         assert result is None  # Trade remains open.
 
+class TestPreEntryCandleWarning:
+    """Regression: skip_pre_entry_candle must warn ONCE per trade, not on
+    every poll, while the latest closed candle predates the trade open time.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pre_entry_warning_emitted_once(self, mock_supabase, caplog):
+        import datetime as _dt
+        trader = PaperTrader(supabase=mock_supabase)
+        decision = make_decision("long", 100.0)
+        trade = await trader.open_trade(decision)
+
+        # A closed candle that predates the trade open time (like on every
+        # poll while the current candle is still forming). Pydantic models are
+        # frozen, so rebuild with model_copy instead of mutating close_time.
+        candle = make_candle(
+            open_time=make_dt(-900), open=99.0, high=101.0,
+            low=98.0, close=100.0,
+        ).model_copy(update={"close_time": trade.opened_at - _dt.timedelta(seconds=60)})
+
+        # First check: pre-entry skip fires and the trade id is marked warned.
+        result = await trader.check_trade_closure(trade, candle)
+        assert result is None
+        assert trade.id in trader._pre_entry_warned, (
+            "trade must be marked as warned after the first pre-entry skip"
+        )
+
+        # Subsequent checks: still skipped silently -- the warned set keeps
+        # growing to a single entry per trade (idempotent).
+        for _ in range(5):
+            await trader.check_trade_closure(trade, candle)
+        assert trader._pre_entry_warned == {trade.id}, (
+            "warned set must not grow on repeated polls"
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_entry_check_resumes_after_newer_candle(self, mock_supabase):
+        """Once a closed candle newer than opened_at arrives, closure checks
+        resume normally (TP/SL hits are honoured)."""
+        trader = PaperTrader(supabase=mock_supabase)
+        decision = make_decision("long", 100.0)
+        trade = await trader.open_trade(decision)
+
+        import datetime as _dt
+        old = make_candle(
+            open_time=make_dt(-900), open=99.0, high=101.0,
+            low=98.0, close=100.0,
+        ).model_copy(update={"close_time": trade.opened_at - _dt.timedelta(seconds=60)})
+        assert await trader.check_trade_closure(trade, old) is None
+
+        new_candle = make_candle(
+            open_time=make_dt(0), open=100.0, high=111.0,
+            low=99.0, close=110.0,
+        ).model_copy(update={"close_time": trade.opened_at + _dt.timedelta(seconds=60)})
+        result = await trader.check_trade_closure(trade, new_candle)
+        assert result is not None
+        assert result.status == "closed"
+        assert result.close_reason == "tp"
+
+
 class TestPnLCalculation:
     @pytest.mark.asyncio
     async def test_long_pnl_positive_on_tp(self, mock_supabase):
