@@ -118,6 +118,7 @@ def _decision_from_row(row: asyncpg.Record) -> DecisionResult:
         regime_check_passed=bool(row["regime_check_passed"]),
         structure_alignment_passed=bool(row["structure_alignment_passed"]),
         htf_bias_aligned=bool(row["htf_bias_aligned"]),
+        rsi_overbought_blocked=bool(row.get("rsi_overbought_blocked", False)),
         risk=risk,
         entry=entry,
         final_verdict=bool(row["final_verdict"]),
@@ -372,10 +373,11 @@ class SupabaseClient:
                     INSERT INTO decisions (
                         id, symbol, source_candle_open_time, score, confidence,
                         regime_check_passed, structure_alignment_passed,
-                        htf_bias_aligned, risk_allowed, risk_reason,
+                        htf_bias_aligned, rsi_overbought_blocked,
+                        risk_allowed, risk_reason,
                         entry_payload, risk_payload,
                         final_verdict, rejection_reason
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
                     ON CONFLICT (symbol, source_candle_open_time) 
                     DO UPDATE SET score = EXCLUDED.score  -- dummy update to trigger RETURNING
                     RETURNING id
@@ -383,7 +385,8 @@ class SupabaseClient:
                     decision.id, decision.symbol, decision.source_candle_open_time,
                     decision.score, decision.confidence,
                     decision.regime_check_passed, decision.structure_alignment_passed,
-                    decision.htf_bias_aligned, decision.risk.allowed, decision.risk.reason,
+                    decision.htf_bias_aligned, decision.rsi_overbought_blocked,
+                    decision.risk.allowed, decision.risk.reason,
                     entry_json, risk_json,
                     decision.final_verdict, decision.rejection_reason,
                 )

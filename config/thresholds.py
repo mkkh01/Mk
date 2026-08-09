@@ -84,16 +84,29 @@ MOMENTUM_STOCH_OVERSOLD = 20
 # Volatility
 # ---------------------------------------------------------------------------
 VOLATILITY_ATR_PERIOD = 14
-VOLATILITY_ATR_MULTIPLIER_SL = 1.8
-"""ATR multiplier used to compute the stop-loss distance."""
+VOLATILITY_ATR_MULTIPLIER_SL = 2.5
+"""ATR multiplier used to compute the stop-loss distance.
+Raised from 1.8 after a losing-trades review: several trades were stopped
+out by normal intra-candle noise *after* the analysed candle had closed
+beyond the level. A wider 2.5x ATR stop keeps trades alive through the
+next-candle evaluation cycle (Section 8)."""
 
-VOLATILITY_ATR_MULTIPLIER_TP = 3.2
-"""ATR multiplier used to compute the take-profit distance."""
+VOLATILITY_ATR_MULTIPLIER_TP = 4.0
+"""ATR multiplier used to compute the take-profit distance.
+Raised from 3.2 alongside the SL multiplier (2.5) so that the default
+reward:risk ratio stays above MIN_RISK_REWARD_RATIO (1.4):
+4.0 / 2.5 = 1.6 > 1.4."""
 
 VOLATILITY_BB_PERIOD = 20
 VOLATILITY_BB_STD = 2.0
 HIGH_VOLATILITY_THRESHOLD = 1.8
 """ATR/price ratio (%) above which the market is considered highly volatile."""
+
+HIGH_VOLATILITY_VOLUME_SPIKE_RATIO = 4.0
+"""Current-candle volume / rolling-average ratio above which a volume candle
+is considered climactic. Entries immediately after such a spike are
+rejected in the orchestrator's entry-gate (losing-trades review
+2026-08-08)."""
 
 VOLATILITY_BB_RANGING_PCT = 0.5
 """BB width (as % of price) below which the market is considered ranging."""
@@ -132,8 +145,12 @@ RISK_REWARD_TARGET = 1.8
 # ---------------------------------------------------------------------------
 # Confidence Scoring
 # ---------------------------------------------------------------------------
-CONFIDENCE_THRESHOLD = 0.60
-"""Minimum confidence (0..1) required for a signal to be acted on."""
+CONFIDENCE_THRESHOLD = 0.70
+"""Minimum confidence (0..1) required for a signal to be acted on.
+Raised from 0.60 after a losing-trades review: signals scoring below 70%
+lacked sufficient multi-condition confluence (structure + momentum +
+liquidity) and were more likely to be whipsawed into the tight stop.
+See losing-trades analysis (2026-08-08)."""
 
 HTF_ALIGNMENT_WEIGHT = 0.20
 STRUCTURE_WEIGHT = 0.30
@@ -272,7 +289,8 @@ __all__ = [
     "MOMENTUM_MACD_SLOW", "MOMENTUM_MACD_SIGNAL", "MOMENTUM_STOCH_PERIOD", "MOMENTUM_STOCH_SMOOTH_K",
     "MOMENTUM_STOCH_SMOOTH_D", "MOMENTUM_STOCH_OVERBOUGHT", "MOMENTUM_STOCH_OVERSOLD",
     "VOLATILITY_ATR_PERIOD", "VOLATILITY_ATR_MULTIPLIER_SL", "VOLATILITY_ATR_MULTIPLIER_TP",
-    "VOLATILITY_BB_PERIOD", "VOLATILITY_BB_STD", "HIGH_VOLATILITY_THRESHOLD", "VOLATILITY_BB_RANGING_PCT",
+    "VOLATILITY_BB_PERIOD", "VOLATILITY_BB_STD", "HIGH_VOLATILITY_THRESHOLD",
+"HIGH_VOLATILITY_VOLUME_SPIKE_RATIO", "VOLATILITY_BB_RANGING_PCT",
     "ASIAN_START_UTC", "ASIAN_END_UTC", "LONDON_START_UTC", "LONDON_END_UTC", "NY_START_UTC", "NY_END_UTC",
     "MAX_PORTFOLIO_EXPOSURE_PCT", "MAX_POSITION_SIZE_PCT", "MAX_DAILY_LOSS_PCT", "MAX_CONCURRENT_TRADES",
     "MIN_RISK_REWARD_RATIO", "RISK_REWARD_TARGET",

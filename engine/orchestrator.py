@@ -61,6 +61,7 @@ from uuid import UUID
 
 from config.thresholds import (
     CONFIDENCE_THRESHOLD,
+    MOMENTUM_RSI_OVERBOUGHT,
     TIMEFRAME_TO_SECONDS,
     VOLATILITY_ATR_PERIOD,
 )
@@ -86,7 +87,7 @@ from engine.session import build_session_signal
 from engine.smc import analyze_smc
 from engine.structure import analyze_structure, detect_swing_points
 from engine.trend import analyze_trend
-from engine.volume import analyze_volume, volume_confirmation_score
+from engine.volume import analyze_volume, volume_confirmation_score, volume_is_climactic
 from market.regime import classify_regime
 from market.volatility import calculate_atr
 from monitoring.logger import get_logger
@@ -145,13 +146,15 @@ def _determine_rejection_reason(
     structure_ok: bool,
     htf_ok: bool,
     confidence_ok: bool,
-    risk_ok: bool,
-    risk_reason: Optional[str],
+    rsi_ok: bool = True,
+    volume_ok: bool = True,
+    risk_ok: bool = True,
+    risk_reason: Optional[str] = None,
 ) -> str:
     """Return the first failing reason by priority order.
 
     Priority (Section 15 engine/orchestrator.py):
-        regime > risk > structure > confidence > htf
+        regime > risk > structure > confidence > rsi > volume_spike > htf
 
     ``risk_reason`` is included verbatim in the risk-rejection message.
 
@@ -170,6 +173,13 @@ def _determine_rejection_reason(
             f"confidence_below_threshold: "
             f"{CONFIDENCE_THRESHOLD:.2f} required"
         )
+    if not rsi_ok:
+        return (
+            f"rsi_overbought: RSI above {MOMENTUM_RSI_OVERBOUGHT:.0f} "
+            f"(overbought -- wait for pullback)"
+        )
+    if not volume_ok:
+        return "volume_spike: climactic volume detected (exhaustion risk)"
     if not htf_ok:
         return "htf_bias_misaligned: LTF signal contradicts HTF bias"
     return ""
@@ -528,12 +538,40 @@ class Orchestrator:
         )
 
         # -------------------------------------------------------------
+        # 6b. Momentum filter: reject long entries when the LTF RSI is
+        #      overbought (>= MOMENTUM_RSI_OVERBOUGHT). Buying into an
+        #      overbought market historically produced whipsaw losses
+        #      (losing-trades review 2026-08-08).
+        # -------------------------------------------------------------
+        rsi_value = float(ltf_analysis.momentum.get("rsi", 50.0) or 50.0)
+        rsi_ok = rsi_value < float(MOMENTUM_RSI_OVERBOUGHT)
+        log_analysis_step(
+            symbol, "rsi_filter", "success" if rsi_ok else "failed",
+            f"فلتر RSI: {rsi_value:.1f} ({'مقبول' if rsi_ok else 'تشبع شرائي - مرفوض'})",
+            {"rsi": round(rsi_value, 2), "rsi_ok": rsi_ok},
+        )
+
+        # -------------------------------------------------------------
+        # 6c. Volume-spike filter: reject when the last closed LTF candle
+        #      shows a climactic volume spike (>= 4x the recent average).
+        #      Climactic candles usually mark local exhaustion, so entries
+        #      immediately after them tend to be stopped out.
+        # -------------------------------------------------------------
+        volume_spike = volume_is_climactic(ltf_analysis.candles)
+        volume_ok = not volume_spike
+        log_analysis_step(
+            symbol, "volume_spike_filter", "success" if volume_ok else "failed",
+            f"فلتر ذروة الحجم: {'عادي' if volume_ok else 'ذروة حجم - مرفوض'}",
+            {"volume_spike": volume_spike, "volume_ok": volume_ok},
+        )
+
+        # -------------------------------------------------------------
         # 7. Risk assessment (only if regime + confidence pass).
         # -------------------------------------------------------------
         risk: RiskAssessment
         entry: Optional[EntrySignal] = None
 
-        if regime_ok and confidence_ok:
+        if regime_ok and confidence_ok and rsi_ok and volume_ok:
             portfolio_state = await self._fetch_portfolio_state(symbol, coin_config)
             atr = ltf_analysis.atr
             # Populate current_price from the latest LTF close so the risk
@@ -556,7 +594,10 @@ class Orchestrator:
         else:
             risk = RiskAssessment(
                 allowed=False,
-                reason="skipped: regime or confidence gate failed",
+                reason=(
+                    "skipped: regime, confidence, RSI, or volume-spike "
+                    "gate failed"
+                ),
             )
 
         risk_ok = risk.allowed
@@ -567,7 +608,8 @@ class Orchestrator:
         final_verdict: bool
         rejection_reason: Optional[str]
 
-        if regime_ok and structure_ok and htf_ok and confidence_ok and risk_ok:
+        if (regime_ok and structure_ok and htf_ok and confidence_ok
+                and rsi_ok and volume_ok and risk_ok):
             # All gates passed -- refine the entry.
             ob_list = list(ltf_analysis.smc.get("order_blocks", []))
             fvg_list = list(ltf_analysis.smc.get("fvgs", []))
@@ -615,6 +657,8 @@ class Orchestrator:
                 structure_ok=structure_ok,
                 htf_ok=htf_ok,
                 confidence_ok=confidence_ok,
+                rsi_ok=rsi_ok,
+                volume_ok=volume_ok,
                 risk_ok=risk_ok,
                 risk_reason=risk.reason,
             )
@@ -631,6 +675,7 @@ class Orchestrator:
             regime_check_passed=regime_ok,
             structure_alignment_passed=structure_ok,
             htf_bias_aligned=htf_ok,
+            rsi_overbought_blocked=(not rsi_ok),
             risk=risk,
             entry=entry,
             final_verdict=final_verdict,
@@ -1475,6 +1520,7 @@ class Orchestrator:
             regime_check_passed=regime_check_passed,
             structure_alignment_passed=structure_alignment_passed,
             htf_bias_aligned=htf_bias_aligned,
+            rsi_overbought_blocked=False,
             risk=risk,
             entry=entry,
             final_verdict=False,

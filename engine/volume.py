@@ -417,6 +417,26 @@ def _volume_ratio(closed: list[Candle]) -> float:
     return _safe_float(current_vol / avg, default=1.0)
 
 
+def volume_is_climactic(candles: list[Candle]) -> bool:
+    """True when the most recent closed candle's volume is an extreme spike.
+
+    A climactic / exhaustion spike (volume far above the recent average)
+    often marks local exhaustion rather than genuine momentum -- entering
+    immediately after such a candle historically produced losing trades
+    (losing-trades review 2026-08-08). Threshold: volume ratio
+    ``>= HIGH_VOLATILITY_VOLUME_SPIKE_RATIO`` (see
+    ``config/thresholds.HIGH_VOLATILITY_VOLUME_SPIKE_RATIO``).
+
+    Returns ``False`` (i.e. allow entry) when there is insufficient data.
+    """
+    from config import thresholds  # local import to avoid a cycle at load time
+    closed = _filter_closed(candles)
+    ratio = _volume_ratio(closed)
+    if ratio == 1.0 and len(closed) < 3:
+        return False
+    return ratio >= float(thresholds.HIGH_VOLATILITY_VOLUME_SPIKE_RATIO)
+
+
 def _delta_for_last(closed: list[Candle]) -> float:
     """Taker buy minus taker sell volume on the most recent closed candle."""
     if not closed:

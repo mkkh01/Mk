@@ -109,7 +109,8 @@ class TestCheckDrawdown:
 
 class TestStopLossAndTakeProfit:
     def test_stop_loss_long(self):
-        # SL = entry - ATR * multiplier (default 1.5).
+        # SL = entry - ATR * thresholds.VOLATILITY_ATR_MULTIPLIER_SL (raised to
+        # 2.5 by the losing-trades review on 2026-08-09).
         sl = calculate_stop_loss(entry_price=100.0, atr=2.0, direction="long")
         expected = 100.0 - 2.0 * thresholds.VOLATILITY_ATR_MULTIPLIER_SL
         assert sl == pytest.approx(expected)
@@ -260,8 +261,9 @@ class TestRiskRewardRejection:
             "current_price": 100.0,
             "open_trades_count": 0,
         }
-        # Use a huge ATR so SL is far from entry and TP is also far -> R:R = 3/1.5 = 2.0
-        # which is above MIN_RISK_REWARD_RATIO. To force R:R below 1.5, patch the multipliers.
+        # With the 2026-08-09 multipliers (SL=2.5x, TP=4.0x) the default R:R is
+        # 4.0/2.5 = 1.6, above MIN_RISK_REWARD_RATIO. To force R:R below 1.4,
+        # patch the multipliers.
         with patch.object(thresholds, "VOLATILITY_ATR_MULTIPLIER_SL", 5.0), \
              patch.object(thresholds, "VOLATILITY_ATR_MULTIPLIER_TP", 1.0):
             result = assess_risk(

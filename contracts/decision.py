@@ -81,6 +81,10 @@ class DecisionResult(BaseModel):
     regime_check_passed: bool
     structure_alignment_passed: bool
     htf_bias_aligned: bool
+    rsi_overbought_blocked: bool = False
+    """True when the entry was rejected because the LTF RSI was overbought
+    (>= MOMENTUM_RSI_OVERBOUGHT). Added by the losing-trades strategy
+    enhancements (2026-08-09)."""
     risk: RiskAssessment
     entry: Optional[EntrySignal] = None
     final_verdict: bool
