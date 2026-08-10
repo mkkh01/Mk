@@ -1,4 +1,4 @@
-# CT — Telegram Crypto Spot Bot (Simulation-Only)
+# CT — Telegram Crypto Spot Bot (Simulation-Only) with Manus ai .
 
 > **Single source of truth:** `CT_AI_System_Master_Guide_v6.md` (hand this file to any AI before it touches the codebase).
 
