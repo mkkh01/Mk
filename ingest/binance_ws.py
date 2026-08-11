@@ -52,7 +52,7 @@ from contracts.market import Candle
 from data.cleaners import normalize_volume
 from data.validators import InvalidCandleError, validate_binance_kline, validate_candle
 from monitoring.logger import get_logger
-from storage.redis_cache import RedisCache
+from storage.redis_cache import RedisCache, LIVE_PRICE_TTL_SECONDS
 from storage.supabase import SupabaseClient
 from monitoring.health_manager import health_manager, HealthStatus
 
@@ -146,6 +146,7 @@ class BinanceWSClient:
 
         # Background tasks.
         self._health_task: Optional[asyncio.Task[None]] = None
+        self._gap_fill_task: Optional[asyncio.Task[None]] = None
 
         # Per-pair last-message timestamps, kept in memory as well as in Redis
         # so the health-check loop doesn't have to await a Redis call for every
@@ -240,6 +241,10 @@ class BinanceWSClient:
         # we left off (Section 4 #3).
         await self._flush_final_checkpoints()
 
+        # Cancel background health/gap-fill tasks before closing the HTTP
+        # client they may still be using.
+        await self._cleanup_background_tasks()
+
         # Close HTTP client.
         if self._http_client is not None:
             try:
@@ -255,7 +260,6 @@ class BinanceWSClient:
             finally:
                 self._http_client = None
 
-        await self._cleanup_background_tasks()
 
     # ---------------- dynamic coin reload ----------------
     async def reload_coins(self, coins: list[CoinConfig]) -> None:
@@ -368,19 +372,11 @@ class BinanceWSClient:
         if self._ws is None:
             return
 
-        # 1. [FIX] On every connect, load fresh checkpoints and gap-fill
-        #    (Section 4 #2) -- but NEVER while the global 418 ban is active,
-        #    otherwise the REST burst re-triggers the ban immediately.
-        if (BinanceWSClient._ban_until is None
-                or datetime.now(timezone.utc) >= BinanceWSClient._ban_until):
-            await self._refill_all_gaps()
-        else:
-            wait_left = (BinanceWSClient._ban_until - datetime.now(timezone.utc)).total_seconds()
-            logger.info(
-                "ws_rate_limited_blocked",
-                timestamp=datetime.now(timezone.utc),
-                note=f"Skipping initial gap-fill -- Binance ban active ({wait_left:.0f}s remaining)",
-            )
+        # 1. Schedule gap-fill in the background. It deliberately must not
+        #    block recv(): the REST backfill spaces requests by several seconds
+        #    per pair, and awaiting it here can starve the WebSocket and make
+        #    live_price:{symbol} remain empty while the connection is alive.
+        self._schedule_gap_fill()
 
         while self._running:
             try:
@@ -493,24 +489,23 @@ class BinanceWSClient:
             )
 
         # Update live price (every kline tick -- WS or closed) for the bot.
-        try:
-            await self._redis.set_live_price(candle.symbol, candle.close)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "error",
-                timestamp=now,
-                module="ingest.binance_ws",
-                error_type=type(exc).__name__,
-                error_message=f"set_live_price failed: {exc}",
-                symbol=candle.symbol,
-            )
+        await self._write_live_price(
+            symbol=candle.symbol,
+            price=candle.close,
+            source="websocket_kline",
+        )
 
         # [FIX] Refresh health status on successful message receipt to prevent stale CRITICAL status.
         await health_manager.update_component(
             "WebSocket", 
             HealthStatus.OK, 
             f"Receiving data for {candle.symbol}",
-            {"symbol": candle.symbol, "timeframe": candle.timeframe, "is_closed": candle.is_closed}
+            {
+                "symbol": candle.symbol,
+                "timeframe": candle.timeframe,
+                "is_closed": candle.is_closed,
+                "live_price": candle.close,
+            }
         )
 
         # Log real data proof (Requested Log #10)
@@ -570,6 +565,69 @@ class BinanceWSClient:
                 symbol=candle.symbol,
                 timeframe=candle.timeframe,
             )
+
+    async def _write_live_price(self, symbol: str, price: float, source: str) -> bool:
+        """Write a positive live quote to Redis and expose its source."""
+        if source == "rest_gap_fill":
+            try:
+                current = await self._redis.get_live_price(symbol)
+                if current is not None:
+                    _, timestamp = current
+                    age = (datetime.now(timezone.utc) - timestamp).total_seconds()
+                    if 0.0 <= age < LIVE_PRICE_TTL_SECONDS:
+                        logger.debug(
+                            "live_price_bootstrap_skipped",
+                            timestamp=datetime.now(timezone.utc),
+                            symbol=symbol,
+                            source=source,
+                            age_seconds=round(age, 3),
+                            note="fresh WebSocket price already exists",
+                        )
+                        return True
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "live_price_bootstrap_check_failed",
+                    timestamp=datetime.now(timezone.utc),
+                    symbol=symbol,
+                    source=source,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+
+        if price <= 0:
+            logger.warning(
+                "live_price_rejected",
+                timestamp=datetime.now(timezone.utc),
+                module="ingest.binance_ws",
+                symbol=symbol,
+                price=price,
+                source=source,
+                reason="non_positive_price",
+            )
+            return False
+        try:
+            await self._redis.set_live_price(symbol, price)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "live_price_write_failed",
+                timestamp=datetime.now(timezone.utc),
+                module="ingest.binance_ws",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                symbol=symbol,
+                price=price,
+                source=source,
+            )
+            return False
+        logger.debug(
+            "live_price_updated",
+            timestamp=datetime.now(timezone.utc),
+            module="ingest.binance_ws",
+            symbol=symbol,
+            price=price,
+            source=source,
+        )
+        return True
 
     async def _persist_closed_candle(self, candle: Candle) -> bool:
         """Write a closed candle and report durable success to the caller."""
@@ -743,37 +801,54 @@ class BinanceWSClient:
         except asyncio.CancelledError:
             raise
 
-        # 4. [FIX] Refill gaps ONLY after a *stable* connection, never right
-        #    after a flapping reconnect. Previously gap-fill ran on EVERY
-        #    disconnect, and a burst of REST requests during a flapping
-        #    connection (or immediately after a 418 ban) re-triggered the
-        #    same ban in a loop. Now it runs once per stable session -- at
-        #    the start of ``_receive_loop`` after the connection survives
-        #    its initial setup, and then only after
-        #    ``WS_STABLE_RESET_SECONDS`` of uptime.
-        run_refill = (BinanceWSClient._ban_until is None
-                      or datetime.now(timezone.utc) >= BinanceWSClient._ban_until)
-        if run_refill:
-            if uptime_seconds is not None and uptime_seconds >= float(WS_STABLE_RESET_SECONDS):
-                await self._refill_all_gaps()
-            else:
-                logger.debug(
-                    "ws_reconnect",
-                    timestamp=datetime.now(timezone.utc),
-                    note=("Skipping gap-fill on flapping reconnect (stable "
-                          "refill will run at the start of the receive loop "
-                          "or after a stable session)"),
-                )
-        else:
+        # Gap-fill is scheduled after the next successful connect. Never
+        # await the REST backfill inside the disconnect path: reconnecting to
+        # Binance and consuming live ticks has priority over historical repair.
+        logger.debug(
+            "ws_reconnect",
+            timestamp=datetime.now(timezone.utc),
+            note="deferring gap-fill until next WebSocket receive loop",
+            uptime_seconds=uptime_seconds,
+        )
+
+    # ---------------- gap fill via REST ----------------
+    def _schedule_gap_fill(self) -> None:
+        """Start one non-blocking REST gap-fill task per connection epoch."""
+        if BinanceWSClient._ban_until and datetime.now(timezone.utc) < BinanceWSClient._ban_until:
             wait_left = (BinanceWSClient._ban_until - datetime.now(timezone.utc)).total_seconds()
             logger.info(
                 "ws_rate_limited_blocked",
                 timestamp=datetime.now(timezone.utc),
-                note=f"Skipping gap-fill -- Binance ban still active ({wait_left:.0f}s remaining). "
-                     f"Missed candles will be back-filled after the ban expires.",
+                note=f"Skipping gap-fill -- Binance ban active ({wait_left:.0f}s remaining)",
+            )
+            return
+        if self._gap_fill_task is not None and not self._gap_fill_task.done():
+            logger.debug("ws_gap_fill_already_running")
+            return
+        self._gap_fill_task = asyncio.create_task(
+            self._run_gap_fill_safe(), name="binance_ws_gap_fill"
+        )
+        logger.info(
+            "ws_gap_fill_scheduled",
+            timestamp=datetime.now(timezone.utc),
+            active_pairs=len(self._active_pairs),
+        )
+
+    async def _run_gap_fill_safe(self) -> None:
+        """Run historical repair without taking down live WebSocket intake."""
+        try:
+            await self._refill_all_gaps()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "ws_gap_fill_failed",
+                timestamp=datetime.now(timezone.utc),
+                module="ingest.binance_ws",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
             )
 
-    # ---------------- gap fill via REST ----------------
     async def _refill_all_gaps(self) -> None:
         """For every active ``(symbol, timeframe)`` pair, fetch and persist any missed candles."""
         if self._http_client is None:
@@ -853,12 +928,29 @@ class BinanceWSClient:
                 if not closed_gaps:
                     continue
 
-                # 5. Persist and advance
+                # 5. Persist and advance. A failed candle write must not
+                # advance the checkpoint or hide the gap from the next retry.
+                persisted_all = True
                 for candle in closed_gaps:
-                    await self._persist_closed_candle(candle)
-                
-                # Advance to the last one
-                await self._advance_checkpoint(closed_gaps[-1])
+                    if not await self._persist_closed_candle(candle):
+                        persisted_all = False
+                        break
+
+                if not persisted_all:
+                    continue
+
+                # Bootstrap the hot-price key from the newest closed REST
+                # candle while the WebSocket is reconnecting. Subsequent WS
+                # ticks overwrite it with fresher prices.
+                latest_closed = max(closed_gaps, key=lambda item: item.open_time)
+                await self._write_live_price(
+                    symbol=symbol,
+                    price=latest_closed.close,
+                    source="rest_gap_fill",
+                )
+
+                # Advance to the last one only after all writes succeeded.
+                await self._advance_checkpoint(latest_closed)
 
             except Exception as exc:  # noqa: BLE001
                 # [FIX] Do not abort the entire gap-fill on a single pair
@@ -1080,16 +1172,16 @@ class BinanceWSClient:
 
     # ---------------- helpers ----------------
     async def _cleanup_background_tasks(self) -> None:
-        """Cancel and await the health-check task on shutdown."""
-        if self._health_task is None:
-            return
-        if not self._health_task.done():
-            self._health_task.cancel()
-            try:
-                await self._health_task
-            except asyncio.CancelledError:
-                pass
-        self._health_task = None
+        """Cancel and await health and gap-fill tasks on shutdown."""
+        for task_attr in ("_health_task", "_gap_fill_task"):
+            task = getattr(self, task_attr)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            setattr(self, task_attr, None)
 
     @staticmethod
     def _build_active_pairs(coins: list[CoinConfig]) -> list[tuple[str, str]]:

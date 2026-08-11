@@ -110,6 +110,26 @@ class TestCheckpointAdvance:
         assert persisted is False
         mock_supabase.upsert_candle.assert_called_once_with(closed)
 
+    @pytest.mark.asyncio
+    async def test_live_price_writer_updates_redis(self, ws_client, mock_redis):
+        written = await ws_client._write_live_price(
+            symbol="BTCUSDT", price=101.25, source="test"
+        )
+
+        assert written is True
+        mock_redis.set_live_price.assert_awaited_once_with("BTCUSDT", 101.25)
+
+    @pytest.mark.asyncio
+    async def test_live_price_writer_rejects_non_positive_price(
+        self, ws_client, mock_redis
+    ):
+        written = await ws_client._write_live_price(
+            symbol="BTCUSDT", price=0.0, source="test"
+        )
+
+        assert written is False
+        mock_redis.set_live_price.assert_not_awaited()
+
 
 class TestResumeGapFill:
     """Section 10 ingest test 2: on reconnect, fetch historical candles to cover gap."""
