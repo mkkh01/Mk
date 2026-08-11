@@ -532,14 +532,31 @@ class PaperTrader:
 
         # Persist (idempotent on decision_id at the DB level).
         try:
-            await self._supabase.insert_simulated_trade(trade)
-            await health_manager.increment_stat("trades_simulated")
-            await health_manager.update_component(
-                "PaperTrader", 
-                HealthStatus.OK, 
-                f"Opened simulated trade for {symbol}",
-                {"trade_id": str(trade.id), "symbol": symbol}
-            )
+            inserted = await self._supabase.insert_simulated_trade(trade)
+            if inserted:
+                await health_manager.increment_stat("trades_simulated")
+                await health_manager.update_component(
+                    "PaperTrader",
+                    HealthStatus.OK,
+                    f"Opened simulated trade for {symbol}",
+                    {"trade_id": str(trade.id), "symbol": symbol},
+                )
+            else:
+                # A replay is not a new trade. Keep the operation idempotent
+                # and make the distinction visible in metrics/logs.
+                await health_manager.update_component(
+                    "PaperTrader",
+                    HealthStatus.OK,
+                    f"Trade already exists for decision {decision.id}",
+                    {"symbol": symbol, "decision_id": str(decision.id)},
+                )
+                logger.info(
+                    "simulated_trade_duplicate_ignored",
+                    timestamp=_utcnow(),
+                    decision_id=str(decision.id),
+                    symbol=symbol,
+                    is_simulated=True,
+                )
         except Exception as exc:  # noqa: BLE001
             # Section 22 (Storage Level): foreign key violation -> log error,
             # skip trade write.  We re-raise as RuntimeError so the caller

@@ -998,30 +998,58 @@ class CTApplication:
 
                     # self._health_stats["last_success_at"] = datetime.now(timezone.utc) # Specific metric, remove or move to analytics
                     
-                    # Send Telegram Notification (Section 20) - Only send trade opened message
-                    if self._telegram_app and self._settings.telegram_chat_id and result.entry:
+                    # Persist the simulated trade independently from Telegram.
+                    # Notification is an optional side effect and must never be a
+                    # prerequisite for recording an approved decision.
+                    if result.entry:
                         try:
-                            # Open trade and send confirmation with confidence
                             from simulation.paper_trade import PaperTrader
                             trader = PaperTrader(self._supabase, redis=self._redis)
                             trade = await trader.open_trade(result)
-                            
-                            opened_text = self._bot.format_trade_opened(trade, confidence=result.confidence)
-                            await self._telegram_app.bot.send_message(
-                                chat_id=self._settings.telegram_chat_id,
-                                text=opened_text,
-                                parse_mode="HTML"
-                            )
-                            await health_manager.increment_stat("telegram_sent")
-                        except Exception as t_exc:
+                        except Exception as trade_exc:
                             logger.error(
-                                "error",
+                                "trade_open_failed",
                                 timestamp=datetime.now(timezone.utc),
                                 module="app.main",
-                                error_type=type(t_exc).__name__,
-                                error_message=f"failed to send telegram alert: {t_exc}",
+                                error_type=type(trade_exc).__name__,
+                                error_message=str(trade_exc),
+                                decision_id=str(result.id),
                                 symbol=candle.symbol,
                             )
+                            await health_manager.increment_stat("errors_count")
+                        else:
+                            # Telegram is best-effort: a notification failure
+                            # must not roll back or obscure a persisted trade.
+                            if self._telegram_app and self._settings.telegram_chat_id:
+                                try:
+                                    opened_text = self._bot.format_trade_opened(
+                                        trade, confidence=result.confidence
+                                    )
+                                    await self._telegram_app.bot.send_message(
+                                        chat_id=self._settings.telegram_chat_id,
+                                        text=opened_text,
+                                        parse_mode="HTML",
+                                    )
+                                    await health_manager.increment_stat("telegram_sent")
+                                except Exception as notify_exc:
+                                    logger.error(
+                                        "telegram_notification_failed",
+                                        timestamp=datetime.now(timezone.utc),
+                                        module="app.main",
+                                        error_type=type(notify_exc).__name__,
+                                        error_message=str(notify_exc),
+                                        decision_id=str(result.id),
+                                        trade_id=str(trade.id),
+                                        symbol=candle.symbol,
+                                    )
+                    else:
+                        logger.error(
+                            "approved_decision_missing_entry",
+                            timestamp=datetime.now(timezone.utc),
+                            module="app.main",
+                            decision_id=str(result.id),
+                            symbol=candle.symbol,
+                        )
                 else:
                     await health_manager.increment_stat("opportunities_rejected")
                     reason = result.rejection_reason or "unknown"

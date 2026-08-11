@@ -167,6 +167,21 @@ REGIME_MODIFIER_VOLATILE = 0.85
 # ---------------------------------------------------------------------------
 # Entry Rules
 # ---------------------------------------------------------------------------
+# Quality gates are intentionally separate from CONFIDENCE_THRESHOLD. The
+# confidence score is a weighted aggregate and can pass on strong HTF/volume
+# evidence while short-term momentum is weak. These gates require a minimum
+# directional signal before an entry is refined.
+MIN_ENTRY_SIGNAL_SCORE = 0.70
+"""Minimum aggregate component score required for a new entry."""
+
+MIN_ENTRY_MOMENTUM_SCORE = 0.6667
+"""Minimum LTF momentum score for Spot-long entries.
+
+The momentum model emits values in increments of roughly 1/6. A value of
+0.6667 requires net-positive agreement from the RSI/MACD/Stochastic ensemble
+instead of allowing neutral or mixed momentum to pass on confidence alone.
+"""
+
 ENTRY_LIMIT_OFFSET_PCT = 0.03
 """Limit order offset (% of price) in the favourable direction."""
 

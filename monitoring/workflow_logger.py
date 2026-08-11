@@ -142,6 +142,8 @@ def log_analysis_gates(
     confidence: float,
     risk_ok: bool,
     risk_reason: Optional[str] = None,
+    signal_quality_ok: bool = True,
+    signal_quality_reason: Optional[str] = None,
 ) -> None:
     """Log the status of all decision gates."""
     log_workflow_event(
@@ -152,6 +154,10 @@ def log_analysis_gates(
             "structure": {"passed": structure_ok},
             "htf_bias": {"passed": htf_ok},
             "confidence": {"passed": confidence_ok, "value": round(confidence, 4)},
+            "signal_quality": {
+                "passed": signal_quality_ok,
+                "reason": signal_quality_reason,
+            },
             "risk": {"passed": risk_ok, "reason": risk_reason},
         },
     )

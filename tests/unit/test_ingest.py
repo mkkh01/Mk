@@ -95,6 +95,21 @@ class TestCheckpointAdvance:
             # Postgres upsert_checkpoint MUST have been called.
             mock_supabase.upsert_checkpoint.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_persist_closed_candle_reports_failure(
+        self, ws_client, mock_supabase
+    ):
+        closed = make_candle(
+            open_time=make_dt(0), open=100.0, high=101.0, low=99.0, close=100.5,
+            is_closed=True,
+        )
+        mock_supabase.upsert_candle.side_effect = RuntimeError("DB unavailable")
+
+        persisted = await ws_client._persist_closed_candle(closed)
+
+        assert persisted is False
+        mock_supabase.upsert_candle.assert_called_once_with(closed)
+
 
 class TestResumeGapFill:
     """Section 10 ingest test 2: on reconnect, fetch historical candles to cover gap."""

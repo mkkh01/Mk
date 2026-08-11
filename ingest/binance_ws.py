@@ -533,7 +533,11 @@ class BinanceWSClient:
         # Note: We ALWAYS publish to Redis so the orchestrator can see every tick if needed,
         # but only closed candles trigger persistence and checkpoint advancement.
         if candle.is_closed:
-            await self._persist_closed_candle(candle)
+            persisted = await self._persist_closed_candle(candle)
+            if not persisted:
+                # Do not advance the checkpoint or publish a closed candle that
+                # was not durably stored. The reconnect gap-fill can retry it.
+                return
             await self._advance_checkpoint(candle)
         
         try:
@@ -567,21 +571,23 @@ class BinanceWSClient:
                 timeframe=candle.timeframe,
             )
 
-    async def _persist_closed_candle(self, candle: Candle) -> None:
-        """Write a closed candle to Postgres via the idempotent upsert."""
+    async def _persist_closed_candle(self, candle: Candle) -> bool:
+        """Write a closed candle and report durable success to the caller."""
         try:
             await self._supabase.upsert_candle(candle)
+            return True
         except Exception as exc:  # noqa: BLE001
             logger.error(
-                "error",
+                "candle_persist_failed",
                 timestamp=datetime.now(timezone.utc),
                 module="ingest.binance_ws",
                 error_type=type(exc).__name__,
-                error_message=f"upsert_candle failed: {exc}",
+                error_message=str(exc),
                 symbol=candle.symbol,
                 timeframe=candle.timeframe,
                 open_time=candle.open_time.isoformat(),
             )
+            return False
 
     # ---------------- checkpoint advancement ----------------
     async def _advance_checkpoint(self, candle: Candle) -> None:

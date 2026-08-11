@@ -61,6 +61,8 @@ from uuid import UUID
 
 from config.thresholds import (
     CONFIDENCE_THRESHOLD,
+    MIN_ENTRY_MOMENTUM_SCORE,
+    MIN_ENTRY_SIGNAL_SCORE,
     MOMENTUM_RSI_OVERBOUGHT,
     TIMEFRAME_TO_SECONDS,
     VOLATILITY_ATR_PERIOD,
@@ -146,6 +148,8 @@ def _determine_rejection_reason(
     structure_ok: bool,
     htf_ok: bool,
     confidence_ok: bool,
+    signal_quality_ok: bool = True,
+    signal_quality_reason: Optional[str] = None,
     rsi_ok: bool = True,
     volume_ok: bool = True,
     risk_ok: bool = True,
@@ -153,8 +157,9 @@ def _determine_rejection_reason(
 ) -> str:
     """Return the first failing reason by priority order.
 
-    Priority (Section 15 engine/orchestrator.py):
-        regime > risk > structure > confidence > rsi > volume_spike > htf
+    Priority is ordered from the earliest actionable gate to the latest:
+        regime > structure > confidence > signal_quality > rsi
+        > volume_spike > htf > risk
 
     ``risk_reason`` is included verbatim in the risk-rejection message.
 
@@ -163,9 +168,6 @@ def _determine_rejection_reason(
     """
     if not regime_ok:
         return "regime_check_failed: VOLATILE regime blocks new entries"
-    if not risk_ok:
-        rr = risk_reason or "risk_assessment_rejected"
-        return f"risk_rejected: {rr}"
     if not structure_ok:
         return "structure_alignment_failed: no clear trend/BOS/CHOCH on any timeframe"
     if not confidence_ok:
@@ -173,6 +175,8 @@ def _determine_rejection_reason(
             f"confidence_below_threshold: "
             f"{CONFIDENCE_THRESHOLD:.2f} required"
         )
+    if not signal_quality_ok:
+        return signal_quality_reason or "signal_quality_gate_failed"
     if not rsi_ok:
         return (
             f"rsi_overbought: RSI above {MOMENTUM_RSI_OVERBOUGHT:.0f} "
@@ -182,6 +186,9 @@ def _determine_rejection_reason(
         return "volume_spike: climactic volume detected (exhaustion risk)"
     if not htf_ok:
         return "htf_bias_misaligned: LTF signal contradicts HTF bias"
+    if not risk_ok:
+        rr = risk_reason or "risk_assessment_rejected"
+        return f"risk_rejected: {rr}"
     return ""
 
 
@@ -517,6 +524,35 @@ class Orchestrator:
         )
         confidence_ok = confidence_gate(confidence)
         score = aggregate_score(component_signals)
+
+        quality_failures: list[str] = []
+        if score < MIN_ENTRY_SIGNAL_SCORE:
+            quality_failures.append(
+                f"aggregate_score={score:.4f}<{MIN_ENTRY_SIGNAL_SCORE:.4f}"
+            )
+        if momentum_score < MIN_ENTRY_MOMENTUM_SCORE:
+            quality_failures.append(
+                f"momentum_score={momentum_score:.4f}<{MIN_ENTRY_MOMENTUM_SCORE:.4f}"
+            )
+        signal_quality_ok = not quality_failures
+        signal_quality_reason = (
+            "signal_quality_gate_failed: " + "; ".join(quality_failures)
+            if quality_failures
+            else None
+        )
+        log_analysis_step(
+            symbol,
+            "signal_quality_gate",
+            "success" if signal_quality_ok else "failed",
+            signal_quality_reason or "بوابة جودة الإشارة اجتازت",
+            {
+                "score": round(score, 4),
+                "momentum_score": round(momentum_score, 4),
+                "score_threshold": MIN_ENTRY_SIGNAL_SCORE,
+                "momentum_threshold": MIN_ENTRY_MOMENTUM_SCORE,
+                "ok": signal_quality_ok,
+            },
+        )
         log_analysis_step(
             symbol, "confidence_gate", "success" if confidence_ok else "failed",
             f"بوابة الثقة: {confidence:.2f} ({'اجتازت' if confidence_ok else 'أقل من الحد المطلوب'})",
@@ -571,7 +607,13 @@ class Orchestrator:
         risk: RiskAssessment
         entry: Optional[EntrySignal] = None
 
-        if regime_ok and confidence_ok and rsi_ok and volume_ok:
+        if (
+            regime_ok
+            and confidence_ok
+            and signal_quality_ok
+            and rsi_ok
+            and volume_ok
+        ):
             portfolio_state = await self._fetch_portfolio_state(symbol, coin_config)
             atr = ltf_analysis.atr
             # Populate current_price from the latest LTF close so the risk
@@ -595,8 +637,8 @@ class Orchestrator:
             risk = RiskAssessment(
                 allowed=False,
                 reason=(
-                    "skipped: regime, confidence, RSI, or volume-spike "
-                    "gate failed"
+                    "skipped: regime, confidence, signal-quality, RSI, "
+                    "or volume-spike gate failed"
                 ),
             )
 
@@ -608,8 +650,16 @@ class Orchestrator:
         final_verdict: bool
         rejection_reason: Optional[str]
 
-        if (regime_ok and structure_ok and htf_ok and confidence_ok
-                and rsi_ok and volume_ok and risk_ok):
+        if (
+            regime_ok
+            and structure_ok
+            and htf_ok
+            and confidence_ok
+            and signal_quality_ok
+            and rsi_ok
+            and volume_ok
+            and risk_ok
+        ):
             # All gates passed -- refine the entry.
             ob_list = list(ltf_analysis.smc.get("order_blocks", []))
             fvg_list = list(ltf_analysis.smc.get("fvgs", []))
@@ -647,9 +697,13 @@ class Orchestrator:
                     rr_ratio=entry.risk_reward,
                     position_size=risk.max_position_size,
                 )
-
-            final_verdict = True
-            rejection_reason = None
+                final_verdict = True
+                rejection_reason = None
+            else:
+                final_verdict = False
+                rejection_reason = (
+                    "entry_refinement_failed: no valid EntrySignal was produced"
+                )
         else:
             final_verdict = False
             rejection_reason = _determine_rejection_reason(
@@ -657,6 +711,8 @@ class Orchestrator:
                 structure_ok=structure_ok,
                 htf_ok=htf_ok,
                 confidence_ok=confidence_ok,
+                signal_quality_ok=signal_quality_ok,
+                signal_quality_reason=signal_quality_reason,
                 rsi_ok=rsi_ok,
                 volume_ok=volume_ok,
                 risk_ok=risk_ok,
@@ -812,6 +868,8 @@ class Orchestrator:
             confidence=confidence,
             risk_ok=risk_ok,
             risk_reason=risk.reason,
+            signal_quality_ok=signal_quality_ok,
+            signal_quality_reason=signal_quality_reason,
         )
 
         if final_verdict:

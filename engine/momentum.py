@@ -476,7 +476,7 @@ def _empty_momentum(
         "stoch_k": 50.0,
         "stoch_d": 50.0,
         "momentum_score": 0.5,
-        "direction": "long",
+        "direction": "neutral",
         "reasons": reasons,
     }
 

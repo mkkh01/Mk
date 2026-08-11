@@ -378,8 +378,20 @@ class SupabaseClient:
                         entry_payload, risk_payload,
                         final_verdict, rejection_reason
                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-                    ON CONFLICT (symbol, source_candle_open_time) 
-                    DO UPDATE SET score = EXCLUDED.score  -- dummy update to trigger RETURNING
+                    ON CONFLICT (symbol, source_candle_open_time)
+                    DO UPDATE SET
+                        score = EXCLUDED.score,
+                        confidence = EXCLUDED.confidence,
+                        regime_check_passed = EXCLUDED.regime_check_passed,
+                        structure_alignment_passed = EXCLUDED.structure_alignment_passed,
+                        htf_bias_aligned = EXCLUDED.htf_bias_aligned,
+                        rsi_overbought_blocked = EXCLUDED.rsi_overbought_blocked,
+                        risk_allowed = EXCLUDED.risk_allowed,
+                        risk_reason = EXCLUDED.risk_reason,
+                        entry_payload = EXCLUDED.entry_payload,
+                        risk_payload = EXCLUDED.risk_payload,
+                        final_verdict = EXCLUDED.final_verdict,
+                        rejection_reason = EXCLUDED.rejection_reason
                     RETURNING id
                     """,
                     decision.id, decision.symbol, decision.source_candle_open_time,
@@ -394,6 +406,11 @@ class SupabaseClient:
                     decision_id = row["id"]
                 else:
                     decision_id = decision.id
+                # Always use the database's canonical UUID for every downstream
+                # FK, including the trade row and component signals. Pydantic
+                # models are mutable, so update the in-memory decision before
+                # the caller can open a trade from it.
+                decision.id = decision_id
                 # Persist component_signals as JSON for traceability.
                 # NOTE: CREATE TABLE moved to migrations/001_init_core_tables.sql
                 # to avoid DuplicatePreparedStatementError in PgBouncer.
@@ -414,7 +431,8 @@ class SupabaseClient:
                     """
                     INSERT INTO decision_component_signals (decision_id, idx, payload)
                     VALUES ($1, $2, $3)
-                    ON CONFLICT (decision_id, idx) DO NOTHING
+                    ON CONFLICT (decision_id, idx)
+                    DO UPDATE SET payload = EXCLUDED.payload
                     """,
                     [
                         (decision_id, i, json.dumps(s.model_dump(mode="json")))
@@ -469,7 +487,7 @@ class SupabaseClient:
         pool = self._require_pool()
         async with pool.acquire() as conn:
             try:
-                await conn.execute(
+                row = await conn.fetchrow(
                     """
                     INSERT INTO simulated_trades (
                         id, decision_id, symbol, direction,
@@ -482,6 +500,7 @@ class SupabaseClient:
                         initial_stop_loss, timeframe
                     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
                     ON CONFLICT (decision_id) DO NOTHING
+                    RETURNING id
                     """,
                     trade.id, trade.decision_id, trade.symbol, trade.direction,
                     trade.entry_price, trade.signal_price, trade.live_price_age_seconds,
@@ -492,7 +511,7 @@ class SupabaseClient:
                     trade.highest_price, trade.lowest_price, trade.atr_at_entry,
                     trade.initial_stop_loss, trade.timeframe,
                 )
-                inserted = True
+                inserted = row is not None
             except UniqueViolationError:
                 inserted = False
         logger.info(
