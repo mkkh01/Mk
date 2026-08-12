@@ -57,7 +57,7 @@ from uuid import UUID
 import numpy as np
 
 from config.thresholds import TAKER_FEE_PCT, VOLATILITY_ATR_PERIOD  # noqa: F401 -- re-exported for tests
-from config.thresholds import LIVE_PRICE_MAX_AGE_SECONDS
+from config.thresholds import LIVE_PRICE_MAX_AGE_SECONDS, MAX_LIMIT_SLIPPAGE_PCT
 from config.thresholds import (
     TRAILING_ENABLED,
     TRAILING_ACTIVATION_MULTIPLIER,
@@ -94,6 +94,10 @@ returns nothing.
 
 _DEFAULT_CLOSE_REASON = "manual"
 """Default close reason when ``close_trade_manual`` is invoked without one."""
+
+
+class LimitNotFilledError(ValueError):
+    """Raised when a simulated long limit has not reached its price."""
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +278,11 @@ class PaperTrader:
     # --- live fill-price resolution helpers --------------------------------
 
     async def _resolve_exec_price(
-        self, symbol: str, signal_price: float, timeframe: str
+        self,
+        symbol: str,
+        signal_price: float,
+        timeframe: str,
+        entry_type: str = "market",
     ) -> tuple[float, Optional[float]]:
         """Resolve the real market price at trade-open time.
 
@@ -302,6 +310,20 @@ class PaperTrader:
                     if price > 0 and ts is not None:
                         age = (_utcnow() - ts).total_seconds()
                         if 0.0 <= age < float(LIVE_PRICE_MAX_AGE_SECONDS):
+                            if (
+                                entry_type == "limit"
+                                and price > signal_price * (1.0 + MAX_LIMIT_SLIPPAGE_PCT / 100.0)
+                            ):
+                                logger.info(
+                                    "limit_not_filled",
+                                    timestamp=_utcnow(),
+                                    symbol=symbol,
+                                    signal_price=signal_price,
+                                    live_price=price,
+                                    max_allowed_price=signal_price * (1.0 + MAX_LIMIT_SLIPPAGE_PCT / 100.0),
+                                    label=_SIMULATED_LABEL,
+                                )
+                                return 0.0, round(age, 3)
                             logger.info(
                                 "entry_price_from_live_price",
                                 timestamp=_utcnow(),
@@ -327,6 +349,20 @@ class PaperTrader:
         try:
             latest = await self._supabase.fetch_latest_candle(symbol, timeframe)
             if latest is not None and latest.is_closed and latest.close > 0:
+                if (
+                    entry_type == "limit"
+                    and latest.close > signal_price * (1.0 + MAX_LIMIT_SLIPPAGE_PCT / 100.0)
+                ):
+                    logger.info(
+                        "limit_not_filled",
+                        timestamp=_utcnow(),
+                        symbol=symbol,
+                        signal_price=signal_price,
+                        candle_price=latest.close,
+                        max_allowed_price=signal_price * (1.0 + MAX_LIMIT_SLIPPAGE_PCT / 100.0),
+                        label=_SIMULATED_LABEL,
+                    )
+                    return 0.0, None
                 logger.info(
                     "entry_price_from_latest_candle",
                     timestamp=_utcnow(),
@@ -467,8 +503,16 @@ class PaperTrader:
         # closed candle in the DB, and finally to the signal price itself.
         # ------------------------------------------------------------------
         exec_price, live_price_age = await self._resolve_exec_price(
-            symbol, signal_price, entry.timeframe if hasattr(entry, "timeframe") else "15m"
+            symbol,
+            signal_price,
+            entry.timeframe if hasattr(entry, "timeframe") else "15m",
+            entry_type=entry.entry_type,
         )
+        if entry.entry_type == "limit" and (not exec_price or exec_price <= 0):
+            raise LimitNotFilledError(
+                f"Limit entry for {symbol} was not filled at or below "
+                f"{signal_price:.8f}; no simulated trade was created."
+            )
         if exec_price and exec_price > 0:
             # Recompute SL / TP keeping the SAME absolute distances from the
             # signal price, so the risk distance (and R:R ratio) stays valid
@@ -1070,7 +1114,6 @@ class PaperTrader:
 
         # --- Step 1: update extreme ---
         high = _safe_float(current_candle.high)
-        low = _safe_float(current_candle.low)
         new_highest = trade.highest_price
         new_lowest = trade.lowest_price
 
@@ -1257,6 +1300,7 @@ class PaperTrader:
 
 
 __all__ = [
+    "LimitNotFilledError",
     "PaperTrader",
 ]
 

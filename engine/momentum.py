@@ -31,6 +31,8 @@ from config.thresholds import (
     MOMENTUM_MACD_SLOW,
     MOMENTUM_RSI_OVERBOUGHT,
     MOMENTUM_RSI_OVERSOLD,
+    LONG_RSI_MIN_UPTICK,
+    LONG_RSI_RECOVERY_MAX,
     MOMENTUM_RSI_PERIOD,
     MOMENTUM_STOCH_OVERBOUGHT,
     MOMENTUM_STOCH_OVERSOLD,
@@ -315,13 +317,31 @@ def calculate_momentum(candles: list[Candle]) -> dict:
     k_series, d_series = calculate_stochastic(closed)
 
     rsi = rsi_series[-1]
+    rsi_prev = rsi_series[-2]
     macd_line = macd_line_s[-1]
     macd_signal = signal_line_s[-1]
     macd_hist = hist_s[-1]
+    macd_hist_prev = hist_s[-2]
     stoch_k = k_series[-1]
     stoch_d = d_series[-1]
+    stoch_k_prev = k_series[-2]
+    stoch_d_prev = d_series[-2]
 
-    if any(np.isnan(x) for x in (rsi, macd_line, macd_signal, macd_hist, stoch_k, stoch_d)):
+    if any(
+        np.isnan(x)
+        for x in (
+            rsi,
+            rsi_prev,
+            macd_line,
+            macd_signal,
+            macd_hist,
+            macd_hist_prev,
+            stoch_k,
+            stoch_d,
+            stoch_k_prev,
+            stoch_d_prev,
+        )
+    ):
         logger.warning(
             "momentum_calculated",
             timestamp=datetime.utcnow(),
@@ -428,6 +448,22 @@ def calculate_momentum(candles: list[Candle]) -> dict:
     raw = (rsi_score + macd_score + stoch_score) / 3.0
     momentum_score = _clip((raw + 1.0) / 2.0)
 
+    recent_rsi = [value for value in rsi_series[-4:] if np.isfinite(value)]
+    rsi_recovered_from_low = bool(
+        recent_rsi
+        and min(recent_rsi) <= LONG_RSI_RECOVERY_MAX
+        and rsi >= rsi_prev + LONG_RSI_MIN_UPTICK
+    )
+    stoch_bullish_recovery = bool(
+        stoch_k > stoch_d
+        and stoch_k > stoch_k_prev
+        and stoch_k <= MOMENTUM_STOCH_OVERBOUGHT
+    )
+    macd_improving = bool(macd_hist > macd_hist_prev)
+    recovery_confirmation = bool(
+        rsi_recovered_from_low or stoch_bullish_recovery or macd_improving
+    )
+
     if raw > 0:
         direction = "long"
         reasons.append(f"aggregated momentum bullish (raw={raw:+.2f})")
@@ -451,6 +487,12 @@ def calculate_momentum(candles: list[Candle]) -> dict:
 
     return {
         "rsi": float(rsi),
+        "rsi_prev": float(rsi_prev),
+        "rsi_slope": float(rsi - rsi_prev),
+        "rsi_recovered_from_low": rsi_recovered_from_low,
+        "stoch_bullish_recovery": stoch_bullish_recovery,
+        "macd_improving": macd_improving,
+        "recovery_confirmation": recovery_confirmation,
         "macd_line": float(macd_line),
         "macd_signal": float(macd_signal),
         "macd_hist": float(macd_hist),
@@ -470,6 +512,12 @@ def _empty_momentum(
     """Return a neutral-safe momentum dict for edge cases."""
     return {
         "rsi": 50.0,
+        "rsi_prev": 50.0,
+        "rsi_slope": 0.0,
+        "rsi_recovered_from_low": False,
+        "stoch_bullish_recovery": False,
+        "macd_improving": False,
+        "recovery_confirmation": False,
         "macd_line": 0.0,
         "macd_signal": 0.0,
         "macd_hist": 0.0,

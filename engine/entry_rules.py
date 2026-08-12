@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from config.thresholds import (
+    ALLOW_LONG_MARKET_FALLBACK,
     ENTRY_LIMIT_OFFSET_PCT,
     ENTRY_TIMEOUT_MINUTES,
     MAX_ENTRY_RETRIES,
@@ -210,6 +211,10 @@ def refine_entry(
     current_price: float,
     confidence: float = 1.0,
     atr: float = 0.0,
+    pullback_confirmed: bool = False,
+    pullback_reference: Optional[float] = None,
+    extension_atr: Optional[float] = None,
+    distance_to_swing_high_pct: Optional[float] = None,
 ) -> EntrySignal:
     """Refine the entry after risk approval.
 
@@ -240,12 +245,18 @@ def refine_entry(
             limit-entry decision).
         fvg_list: Fair value gaps detected on the entry timeframe.
         current_price: Current market price of the symbol.
-        confidence: Pre-computed confidence in [0, 1] from the orchestrator
-            pipeline.  Defaults to ``1.0`` for callers that do not pass it
-            (e.g. back-testers).  MUST NOT be derived from risk / money
-            management fields -- it reflects the quality of the signal.
+                confidence: Pre-computed confidence in [0, 1] from the orchestrator
+        pipeline.  Defaults to ``1.0`` for callers that do not pass it
+        (e.g. back-testers).  MUST NOT be derived from risk / money
+        management fields -- it reflects the quality of the signal.
+        pullback_confirmed: Whether a recent support touch and bounce candle
+            were confirmed by the caller.
+        pullback_reference: Support level used for the timing decision.
+        extension_atr: Distance from the fast EMA in ATR units.
+        distance_to_swing_high_pct: Distance to the latest confirmed swing high.
 
     Returns:
+
         :class:`EntrySignal` with all fields populated.
     """
     if not risk.allowed:
@@ -310,6 +321,10 @@ def refine_entry(
         take_profit=take_profit,
         risk_reward=risk_reward,
         valid_until=valid_until,
+        pullback_confirmed=bool(pullback_confirmed),
+        pullback_reference=pullback_reference,
+        extension_atr=extension_atr,
+        distance_to_swing_high_pct=distance_to_swing_high_pct,
     )
 
     logger.info(
@@ -391,6 +406,23 @@ def fallback_to_market(
         A new :class:`EntrySignal` with ``entry_type="market"``.
     """
     current_price = _safe_float(current_price)
+    if entry.direction == "long" and not ALLOW_LONG_MARKET_FALLBACK:
+        logger.info(
+            "limit_fallback_disabled",
+            timestamp=datetime.utcnow(),
+            symbol=entry.symbol,
+            entry_price=entry.entry_price,
+            current_price=current_price,
+            reason="long_limit_expired_without_market_chase",
+        )
+        return entry.model_copy(
+            update={
+                "valid_until": datetime.now(timezone.utc),
+                "reasons": list(entry.reasons)
+                + ["limit_expired_without_market_fallback"],
+            }
+        )
+
     new_reasons = list(entry.reasons) + [
         f"fallback_to_market: retries_exhausted={MAX_ENTRY_RETRIES}",
     ]
@@ -406,6 +438,10 @@ def fallback_to_market(
         take_profit=entry.take_profit,
         risk_reward=entry.risk_reward,
         valid_until=datetime.now(timezone.utc) + timedelta(minutes=ENTRY_TIMEOUT_MINUTES),
+        pullback_confirmed=entry.pullback_confirmed,
+        pullback_reference=entry.pullback_reference,
+        extension_atr=entry.extension_atr,
+        distance_to_swing_high_pct=entry.distance_to_swing_high_pct,
     )
     logger.info(
         "entry_refined",

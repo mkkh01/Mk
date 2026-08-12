@@ -64,6 +64,10 @@ class EntrySignal(BaseModel):
     take_profit: float
     risk_reward: float
     valid_until: datetime
+    pullback_confirmed: bool = False
+    pullback_reference: Optional[float] = None
+    extension_atr: Optional[float] = None
+    distance_to_swing_high_pct: Optional[float] = None
 
 
 class DecisionResult(BaseModel):

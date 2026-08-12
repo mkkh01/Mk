@@ -182,6 +182,24 @@ The momentum model emits values in increments of roughly 1/6. A value of
 instead of allowing neutral or mixed momentum to pass on confidence alone.
 """
 
+# Conservative long-entry timing gates. These are intentionally separate from
+# confidence/risk limits: they block late entries without weakening existing
+# portfolio protection.
+LONG_RSI_NEAR_OVERBOUGHT = 65.0
+LONG_NEAR_OVERBOUGHT_STOCH = 75.0
+LONG_RSI_RECOVERY_MAX = 40.0
+LONG_RSI_MIN_UPTICK = 1.0
+
+MAX_LONG_EXTENSION_ATR = 1.25
+MIN_DISTANCE_TO_SWING_HIGH_ATR = 0.75
+MIN_DISTANCE_TO_SWING_HIGH_PCT = 0.50
+
+PULLBACK_LOOKBACK_CANDLES = 5
+PULLBACK_ZONE_TOLERANCE_ATR = 0.25
+PULLBACK_CONFIRMATION_CLOSE_LOCATION = 0.60
+PULLBACK_CONFIRMATION_BODY_RATIO = 0.35
+MAX_CONFIRMATION_DISTANCE_ATR = 1.00
+
 # Signal-quality calibration. These controls are intentionally separate from
 # risk limits and the global confidence gate so they can be evaluated in
 # simulation without weakening portfolio protection.
@@ -202,7 +220,17 @@ ENTRY_TIMEOUT_MINUTES = 20
 """Number of minutes a limit entry is valid for before being cancelled."""
 
 MAX_ENTRY_RETRIES = 2
-"""Number of times a limit entry may be retried before falling back to market."""
+"""Number of times a limit entry may be retried before it is cancelled.
+
+Long entries never fall back to market after the limit retry budget is
+exhausted; this prevents chasing a move that never pulled back.
+"""
+
+ALLOW_LONG_MARKET_FALLBACK = False
+"""Safety switch: long entries must not convert an expired limit to market."""
+
+MAX_LIMIT_SLIPPAGE_PCT = 0.05
+"""Maximum favourable-price drift accepted for a simulated long limit fill."""
 
 # ---------------------------------------------------------------------------
 # Trailing Stop
@@ -325,6 +353,12 @@ __all__ = [
     "CONFIDENCE_THRESHOLD", "HTF_ALIGNMENT_WEIGHT", "STRUCTURE_WEIGHT", "MOMENTUM_WEIGHT", "LIQUIDITY_WEIGHT",
     "SESSION_WEIGHT", "REGIME_MODIFIER_TRENDING", "REGIME_MODIFIER_RANGING", "REGIME_MODIFIER_VOLATILE",
     "ENTRY_LIMIT_OFFSET_PCT", "ENTRY_TIMEOUT_MINUTES", "MAX_ENTRY_RETRIES",
+    "ALLOW_LONG_MARKET_FALLBACK", "MAX_LIMIT_SLIPPAGE_PCT",
+    "LONG_RSI_NEAR_OVERBOUGHT", "LONG_NEAR_OVERBOUGHT_STOCH", "LONG_RSI_RECOVERY_MAX",
+    "LONG_RSI_MIN_UPTICK", "MAX_LONG_EXTENSION_ATR", "MIN_DISTANCE_TO_SWING_HIGH_ATR",
+    "MIN_DISTANCE_TO_SWING_HIGH_PCT", "PULLBACK_LOOKBACK_CANDLES", "PULLBACK_ZONE_TOLERANCE_ATR",
+    "PULLBACK_CONFIRMATION_CLOSE_LOCATION", "PULLBACK_CONFIRMATION_BODY_RATIO",
+    "MAX_CONFIRMATION_DISTANCE_ATR",
     "MAKER_FEE_PCT", "TAKER_FEE_PCT", "SLIPPAGE_PCT", "LIVE_PRICE_MAX_AGE_SECONDS",
     "WS_INITIAL_BACKOFF_SECONDS", "WS_MAX_BACKOFF_SECONDS", "WS_STABLE_RESET_SECONDS", "WS_STALE_MULTIPLIER",
     "WS_REST_RETRY_COUNT", "WS_RESUME_PAD_CANDLES",

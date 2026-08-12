@@ -89,6 +89,7 @@ from engine.confidence import (
     confidence_gate,
 )
 from engine.entry_rules import refine_entry
+from engine.entry_filters import evaluate_long_entry_quality
 from engine.htf_filter import filter_by_htf
 from engine.momentum import calculate_momentum
 from engine.risk import assess_risk
@@ -158,6 +159,8 @@ def _determine_rejection_reason(
     signal_quality_reason: Optional[str] = None,
     rsi_ok: bool = True,
     volume_ok: bool = True,
+    entry_timing_ok: bool = True,
+    entry_timing_reason: Optional[str] = None,
     risk_ok: bool = True,
     risk_reason: Optional[str] = None,
 ) -> str:
@@ -165,7 +168,7 @@ def _determine_rejection_reason(
 
     Priority is ordered from the earliest actionable gate to the latest:
         regime > structure > confidence > signal_quality > rsi
-        > volume_spike > htf > risk
+        > volume_spike > entry_timing > htf > risk
 
     ``risk_reason`` is included verbatim in the risk-rejection message.
 
@@ -190,6 +193,8 @@ def _determine_rejection_reason(
         )
     if not volume_ok:
         return "volume_spike: climactic volume detected (exhaustion risk)"
+    if not entry_timing_ok:
+        return entry_timing_reason or "entry_timing_gate_failed"
     if not htf_ok:
         return "htf_bias_misaligned: LTF signal contradicts HTF bias"
     if not risk_ok:
@@ -646,6 +651,46 @@ class Orchestrator:
         )
 
         # -------------------------------------------------------------
+        # 6d. Conservative long-entry timing gate.  A long must not be
+        #      opened merely because trend is bullish: price must not be
+        #      overextended or near a recent swing high, and a recent support
+        #      pullback must be followed by a confirmed bullish candle.
+        # -------------------------------------------------------------
+        entry_timing = evaluate_long_entry_quality(
+            candles=ltf_analysis.candles,
+            momentum=ltf_analysis.momentum,
+            trend=ltf_analysis.trend,
+            structure=ltf_analysis.structure,
+            ob_list=list(ltf_analysis.smc.get("order_blocks", [])),
+            fvg_list=list(ltf_analysis.smc.get("fvgs", [])),
+            atr=ltf_analysis.atr,
+        )
+        # Preserve the existing hard RSI gate and add the near-overbought
+        # exhaustion rule; no existing safety threshold is weakened.
+        rsi_ok = rsi_ok and entry_timing.rsi_ok
+        entry_timing_ok = entry_timing.allowed and rsi_ok
+        log_analysis_step(
+            symbol,
+            "entry_timing_gate",
+            "success" if entry_timing_ok else "failed",
+            f"بوابة توقيت الدخول: {'مقبولة' if entry_timing_ok else 'مرفوضة'} ({entry_timing.reason})",
+            {
+                "entry_timing_ok": entry_timing_ok,
+                "rsi_ok": rsi_ok,
+                "pullback_ok": entry_timing.pullback_ok,
+                "bounce_confirmation_ok": entry_timing.bounce_confirmation_ok,
+                "recovery_ok": entry_timing.recovery_ok,
+                "extension_ok": entry_timing.extension_ok,
+                "extension_atr": entry_timing.extension_atr,
+                "swing_high_distance_ok": entry_timing.swing_high_distance_ok,
+                "distance_to_swing_high_pct": entry_timing.distance_to_swing_high_pct,
+                "distance_to_swing_high_atr": entry_timing.distance_to_swing_high_atr,
+                "pullback_reference": entry_timing.pullback_reference,
+                "reason": entry_timing.reason,
+            },
+        )
+
+        # -------------------------------------------------------------
         # 7. Risk assessment (only if regime + confidence pass).
         # -------------------------------------------------------------
         risk: RiskAssessment
@@ -657,6 +702,7 @@ class Orchestrator:
             and signal_quality_ok
             and rsi_ok
             and volume_ok
+            and entry_timing_ok
         ):
             portfolio_state = await self._fetch_portfolio_state(symbol, coin_config)
             atr = ltf_analysis.atr
@@ -681,8 +727,8 @@ class Orchestrator:
             risk = RiskAssessment(
                 allowed=False,
                 reason=(
-                    "skipped: regime, confidence, signal-quality, RSI, "
-                    "or volume-spike gate failed"
+                    "skipped: regime, confidence, signal-quality, RSI, volume, "
+                    "or entry-timing gate failed"
                 ),
             )
 
@@ -702,6 +748,7 @@ class Orchestrator:
             and signal_quality_ok
             and rsi_ok
             and volume_ok
+            and entry_timing_ok
             and risk_ok
         ):
             # All gates passed -- refine the entry.
@@ -727,6 +774,10 @@ class Orchestrator:
                 current_price=current_price,
                 confidence=confidence,
                 atr=atr,
+                pullback_confirmed=entry_timing.pullback_ok and entry_timing.bounce_confirmation_ok,
+                pullback_reference=entry_timing.pullback_reference,
+                extension_atr=entry_timing.extension_atr,
+                distance_to_swing_high_pct=entry_timing.distance_to_swing_high_pct,
             )
 
             if entry:
@@ -759,6 +810,8 @@ class Orchestrator:
                 signal_quality_reason=signal_quality_reason,
                 rsi_ok=rsi_ok,
                 volume_ok=volume_ok,
+                entry_timing_ok=entry_timing_ok,
+                entry_timing_reason=entry_timing.reason,
                 risk_ok=risk_ok,
                 risk_reason=risk.reason,
             )
