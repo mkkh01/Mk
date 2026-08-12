@@ -3,12 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Optional
-from config import thresholds
-
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from contracts.config import CoinConfig
 from monitoring.logger import get_logger
 from portfolio.performance import PerformanceCalculator
 from storage.redis_cache import RedisCache
@@ -39,6 +36,12 @@ class LivePriceResponse(BaseModel):
 
 
 class ThresholdsResponse(BaseModel):
+    # Keep dynamically added constants visible in the dashboard response. The
+    # endpoint collects all uppercase values from config.thresholds; without
+    # extra="allow", Pydantic silently discarded constants added after this
+    # response model was written.
+    model_config = ConfigDict(extra="allow")
+
     # Market Structure
     SWING_LOOKBACK: int
     MIN_SWING_SIZE_PCT: float
