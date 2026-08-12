@@ -182,6 +182,19 @@ The momentum model emits values in increments of roughly 1/6. A value of
 instead of allowing neutral or mixed momentum to pass on confidence alone.
 """
 
+# Signal-quality calibration. These controls are intentionally separate from
+# risk limits and the global confidence gate so they can be evaluated in
+# simulation without weakening portfolio protection.
+SIGNAL_QUALITY_VERSION = "v2-confluence-2026-08"
+MIN_ENTRY_VOLUME_SCORE = 0.60
+MIN_SUPPORTING_COMPONENTS = 2
+MAX_CONFIDENCE_WITHOUT_MOMENTUM = 0.60
+CONTRADICTION_PENALTY = 0.08
+MAX_CONTRADICTION_PENALTY = 0.25
+VOLUME_MIN_DELTA_RATIO = 0.02
+VOLUME_MIN_CVD_RATIO = 0.02
+VOLUME_STRENGTH_SCALE = 0.10
+
 ENTRY_LIMIT_OFFSET_PCT = 0.03
 """Limit order offset (% of price) in the favourable direction."""
 

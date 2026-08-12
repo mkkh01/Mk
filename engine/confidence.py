@@ -35,8 +35,14 @@ from typing import Optional
 
 from config.thresholds import (
     CONFIDENCE_THRESHOLD,
+    CONTRADICTION_PENALTY,
     HTF_ALIGNMENT_WEIGHT,
     LIQUIDITY_WEIGHT,
+    MAX_CONFIDENCE_WITHOUT_MOMENTUM,
+    MAX_CONTRADICTION_PENALTY,
+    MIN_ENTRY_MOMENTUM_SCORE,
+    MIN_ENTRY_VOLUME_SCORE,
+    MIN_SUPPORTING_COMPONENTS,
     MOMENTUM_WEIGHT,
     REGIME_MODIFIER_RANGING,
     REGIME_MODIFIER_TRENDING,
@@ -117,6 +123,81 @@ def aggregate_score(signals: list[StrategySignal]) -> float:
         return 0.0
     scores = [max(0.0, min(1.0, float(s.raw_score))) for s in signals]
     return sum(scores) / len(scores)
+
+
+def aggregate_directional_score(
+    signals: list[StrategySignal],
+    direction: str = "long",
+) -> float:
+    """Return the mean score of signals explicitly supporting ``direction``."""
+    supporting = [
+        max(0.0, min(1.0, float(signal.raw_score)))
+        for signal in signals
+        if signal.direction == direction
+    ]
+    if not supporting:
+        return 0.0
+    return sum(supporting) / len(supporting)
+
+
+def calculate_confluence_metrics(
+    *,
+    htf_ok: bool,
+    structure_ok: bool,
+    primary_direction: str,
+    momentum_score: float,
+    volume_score: float,
+) -> dict[str, float | int | bool]:
+    """Calculate directional support and contradiction metrics for Spot-long.
+
+    This is deliberately separate from the weighted confidence formula. A high
+    HTF or volume score must not compensate indefinitely for weak momentum or a
+    non-long primary direction.
+    """
+    momentum_ok = float(momentum_score) >= MIN_ENTRY_MOMENTUM_SCORE
+    volume_ok = float(volume_score) >= MIN_ENTRY_VOLUME_SCORE
+    direction_ok = primary_direction == "long"
+
+    support_flags = (htf_ok, structure_ok, direction_ok, momentum_ok, volume_ok)
+    contradiction_flags = (
+        not htf_ok,
+        not structure_ok,
+        primary_direction == "neutral",
+        not momentum_ok,
+        not volume_ok,
+    )
+    supporting_components = int(sum(bool(flag) for flag in support_flags))
+    contradiction_count = int(sum(bool(flag) for flag in contradiction_flags))
+    confluence_score = supporting_components / float(len(support_flags))
+    contradiction_penalty = min(
+        MAX_CONTRADICTION_PENALTY,
+        contradiction_count * CONTRADICTION_PENALTY,
+    )
+
+    return {
+        "confluence_score": confluence_score,
+        "contradiction_penalty": contradiction_penalty,
+        "supporting_components": supporting_components,
+        "contradiction_count": contradiction_count,
+        "momentum_ok": momentum_ok,
+        "volume_ok": volume_ok,
+        "direction_ok": direction_ok,
+        "minimum_support_ok": supporting_components >= MIN_SUPPORTING_COMPONENTS,
+    }
+
+
+def apply_confidence_safety_cap(
+    confidence: float,
+    metrics: dict[str, float | int | bool],
+) -> float:
+    """Apply contradiction penalty and the weak-momentum confidence cap."""
+    adjusted = max(
+        0.0,
+        min(1.0, float(confidence) - float(metrics["contradiction_penalty"])),
+    )
+    if not bool(metrics["momentum_ok"]):
+        adjusted = min(adjusted, MAX_CONFIDENCE_WITHOUT_MOMENTUM)
+    return adjusted
 
 
 # ---------------------------------------------------------------------------

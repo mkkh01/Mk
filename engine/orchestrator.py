@@ -57,11 +57,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import UUID
-
 from config.thresholds import (
     CONFIDENCE_THRESHOLD,
     MIN_ENTRY_MOMENTUM_SCORE,
+    MIN_ENTRY_VOLUME_SCORE,
+    MIN_SUPPORTING_COMPONENTS,
+    SIGNAL_QUALITY_VERSION,
+    VOLUME_MIN_CVD_RATIO,
+    VOLUME_MIN_DELTA_RATIO,
+    VOLUME_STRENGTH_SCALE,
     MIN_ENTRY_SIGNAL_SCORE,
     MOMENTUM_RSI_OVERBOUGHT,
     TIMEFRAME_TO_SECONDS,
@@ -77,7 +81,10 @@ from contracts.decision import (
 )
 from contracts.market import Candle, RegimeState
 from engine.confidence import (
+    aggregate_directional_score,
     aggregate_score,
+    apply_confidence_safety_cap,
+    calculate_confluence_metrics,
     calculate_confidence,
     confidence_gate,
 )
@@ -96,7 +103,6 @@ from monitoring.logger import get_logger
 from monitoring.workflow_logger import (
     log_analysis_start,
     log_analysis_step,
-    log_analysis_component,
     log_analysis_gates,
     log_decision_approved,
     log_decision_rejected,
@@ -522,8 +528,26 @@ class Orchestrator:
             session_score=session_score,
             symbol=symbol,
         )
+        ltf_component_signals = self._build_component_signals(ltf_analysis)
+        ltf_volume_score = next(
+            (
+                float(signal.raw_score)
+                for signal in ltf_component_signals
+                if signal.strategy_name == "volume"
+            ),
+            0.0,
+        )
+        confluence_metrics = calculate_confluence_metrics(
+            htf_ok=htf_ok,
+            structure_ok=structure_ok,
+            primary_direction=primary_signal.direction,
+            momentum_score=momentum_score,
+            volume_score=ltf_volume_score,
+        )
+        confidence = apply_confidence_safety_cap(confidence, confluence_metrics)
         confidence_ok = confidence_gate(confidence)
-        score = aggregate_score(component_signals)
+        legacy_score = aggregate_score(component_signals)
+        score = aggregate_directional_score(component_signals, direction="long")
 
         quality_failures: list[str] = []
         if score < MIN_ENTRY_SIGNAL_SCORE:
@@ -533,6 +557,19 @@ class Orchestrator:
         if momentum_score < MIN_ENTRY_MOMENTUM_SCORE:
             quality_failures.append(
                 f"momentum_score={momentum_score:.4f}<{MIN_ENTRY_MOMENTUM_SCORE:.4f}"
+            )
+        if ltf_volume_score < MIN_ENTRY_VOLUME_SCORE:
+            quality_failures.append(
+                f"volume_score={ltf_volume_score:.4f}<{MIN_ENTRY_VOLUME_SCORE:.4f}"
+            )
+        supporting_components = int(confluence_metrics["supporting_components"])
+        if supporting_components < MIN_SUPPORTING_COMPONENTS:
+            quality_failures.append(
+                f"supporting_components={supporting_components}<{MIN_SUPPORTING_COMPONENTS}"
+            )
+        if not bool(confluence_metrics["direction_ok"]):
+            quality_failures.append(
+                f"primary_direction={primary_signal.direction!r}!=\"long\""
             )
         signal_quality_ok = not quality_failures
         signal_quality_reason = (
@@ -547,9 +584,16 @@ class Orchestrator:
             signal_quality_reason or "بوابة جودة الإشارة اجتازت",
             {
                 "score": round(score, 4),
+                "legacy_score": round(legacy_score, 4),
                 "momentum_score": round(momentum_score, 4),
+                "volume_score": round(ltf_volume_score, 4),
                 "score_threshold": MIN_ENTRY_SIGNAL_SCORE,
                 "momentum_threshold": MIN_ENTRY_MOMENTUM_SCORE,
+                "volume_threshold": MIN_ENTRY_VOLUME_SCORE,
+                "confluence_score": round(float(confluence_metrics["confluence_score"]), 4),
+                "contradiction_penalty": round(float(confluence_metrics["contradiction_penalty"]), 4),
+                "supporting_components": supporting_components,
+                "quality_version": SIGNAL_QUALITY_VERSION,
                 "ok": signal_quality_ok,
             },
         )
@@ -1253,13 +1297,15 @@ class Orchestrator:
                 struct_score = 0.7
                 struct_reasons = [f"structure_trend=up (tf={tf})"]
             elif struct.trend_direction == "down":
-                # In Spot-only, bearish structure is neutral (no trade)
+                # In Spot-only, bearish structure is neutral and provides no
+                # positive conviction for a long entry.
                 struct_dir = "neutral"
-                struct_score = 0.7
+                struct_score = 0.0
                 struct_reasons = [f"structure_trend=down (tf={tf})"]
             else:
-                struct_dir = "long"
-                struct_score = 0.4
+                # Neutral structure is absence of evidence, not a weak long.
+                struct_dir = "neutral"
+                struct_score = 0.0
                 struct_reasons = [f"structure_trend=neutral (tf={tf})"]
             signals.append(
                 _build_strategy_signal(
@@ -1347,19 +1393,33 @@ class Orchestrator:
         vol = analysis.volume or {}
         cvd_slope = float(vol.get("cvd_slope", 0.0) or 0.0)
         delta = float(vol.get("delta", 0.0) or 0.0)
-        # Rising CVD -> bullish bias; falling -> bearish.
-        if cvd_slope > 0 or delta > 0:
+        # Require CVD and the latest taker delta to agree. A single positive
+        # input is not enough to manufacture long conviction.
+        last_volume = float(last_candle.volume or 0.0)
+        delta_ratio = delta / last_volume if last_volume > 0 else 0.0
+        cvd_ratio = cvd_slope / last_volume if last_volume > 0 else 0.0
+        cvd_bullish = cvd_ratio >= VOLUME_MIN_CVD_RATIO
+        delta_bullish = delta_ratio >= VOLUME_MIN_DELTA_RATIO
+        cvd_bearish = cvd_ratio <= -VOLUME_MIN_CVD_RATIO
+        delta_bearish = delta_ratio <= -VOLUME_MIN_DELTA_RATIO
+        if cvd_bullish and delta_bullish:
             vol_dir = "long"
-        elif cvd_slope < 0 or delta < 0:
+            cvd_strength = min(cvd_ratio / VOLUME_STRENGTH_SCALE, 1.0)
+            delta_strength = min(delta_ratio / VOLUME_STRENGTH_SCALE, 1.0)
+            vol_score = max(0.0, min(1.0, 0.5 * (cvd_strength + delta_strength)))
+        elif cvd_bearish and delta_bearish:
             vol_dir = "neutral"
+            vol_score = 0.0
         else:
             vol_dir = "neutral"
-        # Map |cvd_slope| to [0.4, 0.9] via a soft tanh-like transform.
-        vol_score = 0.4 + 0.5 * min(abs(cvd_slope) * 1e-3, 1.0)
+            vol_score = 0.0
         vol_reasons = list(vol.get("reasons", []))
         if not vol_reasons:
             vol_reasons = [
-                f"volume cvd_slope={cvd_slope:+.6f}, delta={delta:+.4f} (tf={tf})"
+                (
+                    f"volume cvd_slope={cvd_slope:+.6f}, delta={delta:+.4f}, "
+                    f"delta_ratio={delta_ratio:+.4f}, cvd_ratio={cvd_ratio:+.4f} (tf={tf})"
+                )
             ]
         signals.append(
             _build_strategy_signal(
@@ -1532,21 +1592,6 @@ class Orchestrator:
         instantiate the ``PaperTrader`` with the orchestrator's existing
         ``SupabaseClient`` to avoid a second connection pool.
         """
-        try:
-            # Lazy import to avoid a circular dependency at module load time.
-            from simulation.paper_trade import PaperTrader  # type: ignore
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "error",
-                timestamp=datetime.utcnow(),
-                module="engine.orchestrator",
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                event_kind="paper_trade_import_failed",
-                symbol=decision.symbol,
-            )
-            return
-
         # [MOD] Simulated trade opening responsibility is handled strictly in app/main.py
         # to prevent duplicate trade creation and race conditions.
         pass
