@@ -6,7 +6,7 @@ Provides structured, readable, and professional report formatting as per user re
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 
 
@@ -194,6 +194,8 @@ def format_cycle_summary(
     warnings_count: int,
     errors_count: int,
     system_health: str,
+    diagnostics: Optional[dict[str, Any]] = None,
+    health_components: Optional[dict[str, Any]] = None,
 ) -> str:
     """Format the cycle summary report block."""
     
@@ -205,10 +207,11 @@ def format_cycle_summary(
     lines.append(sep_heavy)
     lines.append("")
     
+    diag = diagnostics or {}
     lines.append(f"Pairs Analyzed           : {pairs_analyzed}")
-    lines.append(f"Bullish                  : {bullish_count}")
-    lines.append(f"Bearish                  : {bearish_count}")
-    lines.append(f"Sideways                 : {sideways_count}")
+    lines.append(f"Long Bias Observations   : {bullish_count}")
+    lines.append(f"Bearish Observations     : {bearish_count}")
+    lines.append(f"Non-Long Observations    : {sideways_count}")
     lines.append("")
     lines.append(f"Signals Found            : {signals_found}")
     lines.append(f"Approved                 : {approved_count}")
@@ -231,9 +234,29 @@ def format_cycle_summary(
     lines.append(f"Warnings                 : {warnings_count}")
     lines.append(f"Errors                   : {errors_count}")
     lines.append("")
-    
+
+    lines.append("v2-Confluence Diagnostics")
+    lines.append("--------------------------")
+    lines.append(f"Confluence Candidates    : {diag.get('confluence_candidates', 0)}")
+    lines.append(f"Confluence Passed        : {diag.get('confluence_passed', 0)}")
+    lines.append(f"Entry Timing Checked     : {diag.get('entry_timing_checked', 0)}")
+    lines.append(f"Entry Timing Passed      : {diag.get('entry_timing_passed', 0)}")
+    timing_reasons = diag.get("timing_rejection_reasons", {}) or {}
+    for reason, count in timing_reasons.items():
+        lines.append(f"Timing Rejection - {reason:<10}: {count}")
+    lines.append("")
+
     health_icon = "🟢" if system_health.upper() == "EXCELLENT" else "🟡" if system_health.upper() == "GOOD" else "🔴"
     lines.append(f"System Health            : {health_icon} {system_health.upper()}")
+    component_details = []
+    for name, component in (health_components or {}).items():
+        status = component.get("status", "UNKNOWN") if isinstance(component, dict) else "UNKNOWN"
+        status = getattr(status, "value", status)
+        if str(status) not in {"OK", "EXCELLENT"}:
+            message = component.get("message", "") if isinstance(component, dict) else ""
+            component_details.append(f"{name}={status}: {message}".strip())
+    if component_details:
+        lines.append("Health Detail            : " + " | ".join(component_details))
     lines.append(sep_heavy)
     
     return "\n".join(lines)

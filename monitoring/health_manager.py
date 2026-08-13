@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 from monitoring.logger import get_logger
@@ -57,6 +57,12 @@ class HealthManager:
             "warnings_count": 0,
             "opportunities_found": 0,
             "opportunities_rejected": 0,
+            # v2-confluence / conservative-entry observability counters.
+            "confluence_candidates": 0,
+            "confluence_passed": 0,
+            "entry_timing_checked": 0,
+            "entry_timing_passed": 0,
+            "timing_rejection_reasons": {},
             "telegram_sent": 0,
             "db_writes": 0,
             # Cycle-summary aggregation fields
@@ -124,6 +130,33 @@ class HealthManager:
             reasons[reason] = reasons.get(reason, 0) + 1
             self._stats["last_activity"] = datetime.now(timezone.utc)
 
+    async def record_confluence_result(
+        self,
+        *,
+        passed: bool,
+        timing_checked: bool = False,
+        timing_passed: bool = False,
+        timing_reason: str | None = None,
+    ) -> None:
+        """Record v2-confluence and conservative-entry gate observability.
+
+        These counters are diagnostic only. They do not alter any decision or
+        threshold and make it possible to distinguish an early confidence /
+        regime rejection from a later RSI, extension, or pullback rejection.
+        """
+        async with self._lock:
+            self._stats["confluence_candidates"] += 1
+            if passed:
+                self._stats["confluence_passed"] += 1
+            if timing_checked:
+                self._stats["entry_timing_checked"] += 1
+                if timing_passed:
+                    self._stats["entry_timing_passed"] += 1
+                elif timing_reason:
+                    reasons = self._stats["timing_rejection_reasons"]
+                    reasons[timing_reason] = reasons.get(timing_reason, 0) + 1
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
     async def accumulate_analysis(self, score: float, confidence: float, analysis_time_ms: float):
         """Accumulate score, confidence and analysis time for cycle-summary averages."""
         async with self._lock:
@@ -156,7 +189,6 @@ class HealthManager:
     async def get_overall_health(self) -> Dict[str, Any]:
         """Return a summary of the overall system health."""
         async with self._lock:
-            now = datetime.now(timezone.utc)
             summary = {
                 "uptime": self.get_uptime_seconds(),
                 "status": HealthStatus.OK,

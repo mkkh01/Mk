@@ -56,18 +56,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, Response, status, Request
+from fastapi import FastAPI, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from datetime import timedelta
-import uvicorn
-
 from monitoring.logger import configure_logging, get_logger
 
 from app.dashboard_endpoints import setup_dashboard_endpoints
@@ -870,7 +866,6 @@ class CTApplication:
             return
 
         # [TRACE] Consumer received
-        now = datetime.now(timezone.utc)
         await health_manager.update_component("Ingest", HealthStatus.OK, "Received candle", {"symbol": candle.symbol, "timeframe": candle.timeframe}, timeout=60.0)
         await health_manager.increment_stat("scan_cycles")
         
@@ -1251,6 +1246,14 @@ class CTApplication:
             warnings_count=stats.get("warnings_count", 0),
             errors_count=stats.get("errors_count", 0),
             system_health=status_map.get(health_summary["status"], "UNKNOWN"),
+            diagnostics={
+                "confluence_candidates": int(stats.get("confluence_candidates", 0)),
+                "confluence_passed": int(stats.get("confluence_passed", 0)),
+                "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
+                "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
+                "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),
+            },
+            health_components=health_summary.get("components", {}),
         )
 
     async def _run_health_logger_loop(self) -> None:
@@ -1285,8 +1288,7 @@ class CTApplication:
                     HealthStatus.CRITICAL: "CRITICAL"
                 }
 
-                # Pairs analyzed = unique symbols seen
-                unique_pair_count = len(stats.get("unique_symbols_seen", set()))
+                # Pairs analyzed = unique symbols seen (used by the formatter).
 
                 summary_text = self._format_cycle_summary_from_stats(
                     stats, health_summary, status_map,
@@ -1520,7 +1522,7 @@ async def readiness_check():
     return {"status": "ready" if is_running else "initializing", "engine_running": is_running, "message": "CT Web Server is ready"}
 
 @app.get("/", status_code=status.HTTP_200_OK)
-async def root():
+async def root_fallback():
     return {"message": "Welcome to CT Web Server"}
 
 # Workflow endpoints are now managed via app/workflow_endpoints.py

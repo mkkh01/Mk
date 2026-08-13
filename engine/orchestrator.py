@@ -665,6 +665,25 @@ class Orchestrator:
             fvg_list=list(ltf_analysis.smc.get("fvgs", [])),
             atr=ltf_analysis.atr,
         )
+        # Diagnostic-only counters: expose how far each candidate progressed
+        # through v2-confluence without changing any decision condition.
+        pre_timing_eligible = regime_ok and confidence_ok and signal_quality_ok
+        await health_manager.record_confluence_result(
+            passed=signal_quality_ok,
+            timing_checked=pre_timing_eligible,
+            timing_passed=(
+                pre_timing_eligible
+                and entry_timing.allowed
+                and rsi_ok
+                and entry_timing.rsi_ok
+            ),
+            timing_reason=(
+                entry_timing.reason
+                if pre_timing_eligible
+                and not (entry_timing.allowed and rsi_ok and entry_timing.rsi_ok)
+                else None
+            ),
+        )
         # Preserve the existing hard RSI gate and add the near-overbought
         # exhaustion rule; no existing safety threshold is weakened.
         rsi_ok = rsi_ok and entry_timing.rsi_ok

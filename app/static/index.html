@@ -50,7 +50,7 @@
                 </div>
                 <div class="text-center p-3 bg-gray-800 rounded-lg">
                     <div class="stat-value text-green-400" id="cs-bullish">-</div>
-                    <div class="stat-label">Bullish</div>
+                    <div class="stat-label">Long Bias</div>
                 </div>
                 <div class="text-center p-3 bg-gray-800 rounded-lg">
                     <div class="stat-value text-red-400" id="cs-bearish">-</div>
@@ -58,7 +58,7 @@
                 </div>
                 <div class="text-center p-3 bg-gray-800 rounded-lg">
                     <div class="stat-value text-gray-400" id="cs-sideways">-</div>
-                    <div class="stat-label">Sideways</div>
+                    <div class="stat-label">Non-Long</div>
                 </div>
                 <div class="text-center p-3 bg-gray-800 rounded-lg">
                     <div class="stat-value text-yellow-400" id="cs-signals">-</div>
@@ -122,6 +122,19 @@
                 <span id="cs-system-health" class="text-lg font-bold">-</span>
             </div>
 
+            <!-- v2-Confluence Diagnostics -->
+            <div class="mb-5">
+                <div class="text-sm font-semibold text-gray-300 mb-2">v2-Confluence Diagnostics</div>
+                <div class="grid-auto">
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Confluence Candidates</div><div class="text-lg font-bold text-blue-300" id="cs-confluence-candidates">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Confluence Passed</div><div class="text-lg font-bold text-green-300" id="cs-confluence-passed">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Timing Checked</div><div class="text-lg font-bold text-yellow-300" id="cs-timing-checked">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Timing Passed</div><div class="text-lg font-bold text-green-300" id="cs-timing-passed">-</div></div>
+                </div>
+                <div class="mt-3 text-xs text-gray-400" id="cs-timing-rejections">Timing rejection reasons: -</div>
+                <div class="mt-2 text-xs text-gray-400" id="cs-health-detail">Health detail: -</div>
+            </div>
+
             <!-- Raw Formatted Text -->
             <details class="mt-2">
                 <summary class="text-sm text-gray-400 cursor-pointer hover:text-gray-300">Show Raw Log Format</summary>
@@ -141,6 +154,8 @@
                 <p class="mb-2">Active Coins: <span id="active-coins" class="font-semibold text-sm">Loading...</span></p>
                 <p class="mb-2">Last Data: <span id="last-data-at" class="font-semibold">Loading...</span></p>
                 <p>Errors: <span id="system-errors" class="font-semibold">Loading...</span></p>
+                <p class="mb-2">Health: <span id="health-status" class="font-semibold">Loading...</span></p>
+                <p class="text-xs text-gray-400" id="health-detail">Health detail: Loading...</p>
             </div>
 
             <!-- Live Prices Card -->
@@ -224,6 +239,24 @@
                 document.getElementById('cs-warnings').textContent = data.warnings;
                 document.getElementById('cs-errors').textContent = data.errors;
 
+                // v2-confluence diagnostics
+                const diagnostics = data.diagnostics || {};
+                document.getElementById('cs-confluence-candidates').textContent = diagnostics.confluence_candidates ?? 0;
+                document.getElementById('cs-confluence-passed').textContent = diagnostics.confluence_passed ?? 0;
+                document.getElementById('cs-timing-checked').textContent = diagnostics.entry_timing_checked ?? 0;
+                document.getElementById('cs-timing-passed').textContent = diagnostics.entry_timing_passed ?? 0;
+                const timingReasons = diagnostics.timing_rejection_reasons || {};
+                const timingReasonText = Object.entries(timingReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ');
+                document.getElementById('cs-timing-rejections').textContent = `Timing rejection reasons: ${timingReasonText || 'none'}`;
+                const cycleComponents = data.health_components || {};
+                const cycleHealthDetails = Object.entries(cycleComponents)
+                    .map(([name, component]) => {
+                        const status = component && component.status ? String(component.status) : 'UNKNOWN';
+                        return status !== 'OK' ? `${name}=${status}: ${component.message || ''}` : null;
+                    })
+                    .filter(Boolean);
+                document.getElementById('cs-health-detail').textContent = `Health detail: ${cycleHealthDetails.join(' | ') || 'all components healthy'}`;
+
                 // System health with color
                 const healthEl = document.getElementById('cs-system-health');
                 const healthUpper = data.system_health.toUpperCase();
@@ -281,6 +314,18 @@
                 document.getElementById('last-data-at').textContent = data.last_data_at ? new Date(data.last_data_at).toLocaleString() : 'N/A';
                 document.getElementById('system-errors').textContent = data.errors;
                 document.getElementById('system-errors').className = data.errors > 0 ? 'font-semibold text-red-500' : 'font-semibold text-green-500';
+                const healthStatus = data.health_status || 'UNKNOWN';
+                const healthStatusEl = document.getElementById('health-status');
+                healthStatusEl.textContent = healthStatus;
+                healthStatusEl.className = healthStatus === 'EXCELLENT' ? 'font-semibold text-green-500' : healthStatus === 'GOOD' ? 'font-semibold text-yellow-500' : 'font-semibold text-red-500';
+                const components = data.health_components || {};
+                const details = Object.entries(components)
+                    .map(([name, component]) => {
+                        const status = component && component.status ? String(component.status) : 'UNKNOWN';
+                        return status !== 'OK' ? `${name}=${status}: ${component.message || ''}` : null;
+                    })
+                    .filter(Boolean);
+                document.getElementById('health-detail').textContent = details.length ? details.join(' | ') : 'All components healthy';
 
                 // Populate symbol select for strategy performance
                 const symbolSelect = document.getElementById('symbol-select');

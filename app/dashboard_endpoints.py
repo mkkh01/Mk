@@ -147,6 +147,9 @@ class SystemHealthResponse(BaseModel):
     telegram_sent: int
     engine_running: bool
     active_coins: list[str]
+    health_status: str
+    health_components: dict[str, dict[str, Any]]
+    diagnostics: dict[str, Any]
 
 
 class CycleSummaryResponse(BaseModel):
@@ -170,6 +173,8 @@ class CycleSummaryResponse(BaseModel):
     formatted_text: str
     analyses_executed: int
     scan_cycles: int
+    diagnostics: dict[str, Any]
+    health_components: dict[str, dict[str, Any]]
 
 
 class OverallPerformanceResponse(BaseModel):
@@ -201,6 +206,32 @@ class StrategyPerformanceResponse(BaseModel):
     profit_factor: Optional[float]
     consecutive_wins: int
     consecutive_losses: int
+
+
+# ============================================================================
+# Diagnostics helpers
+# ============================================================================
+def _diagnostics_from_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    """Return read-only v2-confluence and conservative-entry counters."""
+    return {
+        "confluence_candidates": int(stats.get("confluence_candidates", 0)),
+        "confluence_passed": int(stats.get("confluence_passed", 0)),
+        "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
+        "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
+        "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),
+    }
+
+
+def _health_status_label(status: Any) -> str:
+    """Map the internal HealthStatus enum to the public dashboard label."""
+    from monitoring.health_manager import HealthStatus
+
+    return {
+        HealthStatus.OK: "EXCELLENT",
+        HealthStatus.WARNING: "GOOD",
+        HealthStatus.ERROR: "POOR",
+        HealthStatus.CRITICAL: "CRITICAL",
+    }.get(status, "UNKNOWN")
 
 
 # ============================================================================
@@ -243,7 +274,7 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
     if not ct_app_instance:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Application not initialized")
 
-    from monitoring.health_manager import health_manager, HealthStatus
+    from monitoring.health_manager import health_manager
 
     stats = await health_manager.get_stats()
     analyzed_count = stats.get("analyses_executed", 0)
@@ -254,15 +285,12 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
     avg_conf = (stats.get("total_confidence_sum", 0.0) / analyses) * 100.0
     avg_time = stats.get("total_analysis_time_ms", 0.0) / analyses
 
-    # Derive system health
+    # Derive system health and expose the component-level reason for any
+    # WARNING/ERROR/CRITICAL status instead of hiding it in the API.
     health_summary = await health_manager.get_overall_health()
-    status_map = {
-        HealthStatus.OK: "EXCELLENT",
-        HealthStatus.WARNING: "GOOD",
-        HealthStatus.ERROR: "POOR",
-        HealthStatus.CRITICAL: "CRITICAL",
-    }
-    system_health = status_map.get(health_summary["status"], "UNKNOWN")
+    system_health = _health_status_label(health_summary["status"])
+    health_components = health_summary.get("components", {})
+    diagnostics = _diagnostics_from_stats(stats)
 
     # Build formatted text (same formatter used in logs)
     from monitoring.report_formatter import format_cycle_summary
@@ -283,6 +311,8 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
         warnings_count=stats.get("warnings_count", 0),
         errors_count=stats.get("errors_count", 0),
         system_health=system_health,
+        diagnostics=diagnostics,
+        health_components=health_components,
     )
 
     return CycleSummaryResponse(
@@ -305,6 +335,8 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
         formatted_text=formatted_text,
         analyses_executed=analyzed_count,
         scan_cycles=stats.get("scan_cycles", 0),
+        diagnostics=diagnostics,
+        health_components=health_components,
     )
 
 
@@ -316,7 +348,8 @@ async def get_system_health_endpoint(request: Request) -> SystemHealthResponse:
     
     from monitoring.health_manager import health_manager
     stats = await health_manager.get_stats()
-    
+    health_summary = await health_manager.get_overall_health()
+
     health_stats = {
         "scan_cycles": stats.get("scan_cycles", 0),
         "pairs_analyzed": stats.get("analyses_executed", 0),
@@ -332,6 +365,9 @@ async def get_system_health_endpoint(request: Request) -> SystemHealthResponse:
         "db_writes": stats.get("db_writes", 0),
         "telegram_sent": stats.get("telegram_sent", 0),
         "engine_running": ct_app_instance._engine_running,
+        "health_status": _health_status_label(health_summary["status"]),
+        "health_components": health_summary.get("components", {}),
+        "diagnostics": _diagnostics_from_stats(stats),
     }
     
     # Fetch active coins for the dashboard
