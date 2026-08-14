@@ -62,6 +62,7 @@ class HealthManager:
             "confluence_candidates": 0,
             # This is signal-quality pass, not full pre-timing eligibility.
             "signal_quality_passed": 0,
+            "signal_quality_observations": [],
             "pre_timing_eligible": 0,
             "pre_timing_block_reasons": {},
             "entry_timing_checked": 0,
@@ -133,6 +134,18 @@ class HealthManager:
         async with self._lock:
             reasons = self._stats["rejection_reasons"]
             reasons[reason] = reasons.get(reason, 0) + 1
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_quality_observation(self, observation: dict[str, Any]) -> None:
+        """Store a bounded, read-only sample of raw gate inputs.
+
+        This is observability only. The latest 30 samples are retained so the
+        dashboard can explain why quality failed without changing any gate.
+        """
+        async with self._lock:
+            observations = self._stats["signal_quality_observations"]
+            observations.append(deepcopy(observation))
+            del observations[:-30]
             self._stats["last_activity"] = datetime.now(timezone.utc)
 
     async def record_confluence_result(

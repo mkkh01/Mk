@@ -56,6 +56,7 @@ File: engine/orchestrator.py
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from typing import Any, Optional
 from config.thresholds import (
     CONFIDENCE_THRESHOLD,
@@ -681,6 +682,78 @@ class Orchestrator:
             pre_timing_block_reasons.append("confidence")
         if not signal_quality_ok:
             pre_timing_block_reasons.append("signal_quality")
+        def _diag_float(value: Any, default: float = 0.0) -> float:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return default
+            return number if math.isfinite(number) else default
+
+        volume_payload = ltf_analysis.volume or {}
+        profile_payload = volume_payload.get("profile", {}) or {}
+        momentum_payload = ltf_analysis.momentum or {}
+        trend_payload = ltf_analysis.trend or {}
+        quality_observation = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "symbol": symbol,
+            "timeframe": candle.timeframe,
+            "source_candle_open_time": candle.open_time.isoformat(),
+            "regime": regime.value,
+            "regime_ok": bool(regime_ok),
+            "confidence": _diag_float(confidence),
+            "confidence_threshold": _diag_float(CONFIDENCE_THRESHOLD),
+            "score": _diag_float(score),
+            "score_threshold": _diag_float(MIN_ENTRY_SIGNAL_SCORE),
+            "legacy_score": _diag_float(legacy_score),
+            "primary_direction": primary_signal.direction,
+            "supporting_components": supporting_components,
+            "confluence_score": _diag_float(confluence_metrics["confluence_score"]),
+            "contradiction_penalty": _diag_float(confluence_metrics["contradiction_penalty"]),
+            "htf_ok": bool(htf_ok),
+            "htf_alignment": bool(htf_result.alignment),
+            "htf_bias": htf_result.bias,
+            "structure_ok": bool(structure_ok),
+            "trend_direction": str(trend_payload.get("direction", "neutral")),
+            "trend_strength": _diag_float(trend_payload.get("strength")),
+            "adx": _diag_float(trend_payload.get("adx")),
+            "plus_di": _diag_float(trend_payload.get("plus_di")),
+            "minus_di": _diag_float(trend_payload.get("minus_di")),
+            "ema_fast": _diag_float(trend_payload.get("ema_fast")),
+            "ema_slow": _diag_float(trend_payload.get("ema_slow")),
+            "momentum_score": _diag_float(momentum_score),
+            "momentum_threshold": _diag_float(MIN_ENTRY_MOMENTUM_SCORE),
+            "momentum_direction": str(momentum_payload.get("direction", "neutral")),
+            "rsi": _diag_float(rsi_value),
+            "rsi_previous": _diag_float(momentum_payload.get("rsi_previous", momentum_payload.get("rsi_prev"))),
+            "macd_hist": _diag_float(momentum_payload.get("macd_hist")),
+            "stoch_k": _diag_float(momentum_payload.get("stoch_k")),
+            "stoch_d": _diag_float(momentum_payload.get("stoch_d")),
+            "volume_score": _diag_float(ltf_volume_score),
+            "volume_threshold": _diag_float(MIN_ENTRY_VOLUME_SCORE),
+            "volume_confirmation": _diag_float(volume_confirmation),
+            "volume_ratio": _diag_float(volume_payload.get("volume_ratio"), 1.0),
+            "cvd": _diag_float(volume_payload.get("cvd", [0.0])[-1] if volume_payload.get("cvd") else 0.0),
+            "cvd_slope": _diag_float(volume_payload.get("cvd_slope")),
+            "delta": _diag_float(volume_payload.get("delta")),
+            "poc": _diag_float(volume_payload.get("poc")),
+            "poc_volume": _diag_float(profile_payload.get("poc_volume")),
+            "profile_total_volume": _diag_float(profile_payload.get("total_volume")),
+            "value_area_high": _diag_float(volume_payload.get("value_area_high")),
+            "value_area_low": _diag_float(volume_payload.get("value_area_low")),
+            "quality_failure_reasons": list(quality_failure_reasons),
+            "confidence_ok": bool(confidence_ok),
+            "signal_quality_ok": bool(signal_quality_ok),
+            "pre_timing_eligible": bool(pre_timing_eligible),
+            "rsi_ok": bool(rsi_ok),
+            "entry_timing_ok": bool(entry_timing.allowed and rsi_ok and entry_timing.rsi_ok),
+            "timing_reason": entry_timing.reason,
+            "extension_atr": _diag_float(entry_timing.extension_atr),
+            "distance_to_swing_high_pct": _diag_float(entry_timing.distance_to_swing_high_pct),
+            "pullback_ok": bool(entry_timing.pullback_ok),
+            "bounce_confirmation_ok": bool(entry_timing.bounce_confirmation_ok),
+            "recovery_ok": bool(entry_timing.recovery_ok),
+        }
+        await health_manager.record_quality_observation(quality_observation)
         await health_manager.record_confluence_result(
             signal_quality_passed=signal_quality_ok,
             pre_timing_eligible=pre_timing_eligible,

@@ -252,6 +252,28 @@ def format_cycle_summary(
     timing_reasons = diag.get("timing_rejection_reasons", {}) or {}
     for reason, count in timing_reasons.items():
         lines.append(f"Timing Rejection - {reason:<10}: {count}")
+    observations = diag.get("quality_observations", []) or []
+    if observations:
+        latest = observations[-1]
+        lines.append(
+            "Latest Raw Values      : "
+            f"{latest.get('symbol', '-')} "
+            f"conf={latest.get('confidence', 0.0):.3f}/"
+            f"{latest.get('confidence_threshold', 0.0):.2f}, "
+            f"score={latest.get('score', 0.0):.3f}, "
+            f"momentum={latest.get('momentum_score', 0.0):.3f}, "
+            f"volume={latest.get('volume_score', 0.0):.3f}, "
+            f"RSI={latest.get('rsi', 0.0):.2f}, "
+            f"CVD slope={latest.get('cvd_slope', 0.0):.4f}, "
+            f"delta={latest.get('delta', 0.0):.2f}, "
+            f"direction={latest.get('primary_direction', 'neutral')}"
+        )
+        lines.append(
+            "Latest Quality Blocks  : "
+            + ", ".join(latest.get("quality_failure_reasons", []))
+            if latest.get("quality_failure_reasons")
+            else "Latest Quality Blocks  : none"
+        )
     lines.append("")
 
     health_icon = "🟢" if system_health.upper() == "EXCELLENT" else "🟡" if system_health.upper() == "GOOD" else "🔴"

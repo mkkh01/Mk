@@ -68,6 +68,57 @@ def test_health_stats_snapshot_is_deep_copy() -> None:
     assert second["signal_quality_failure_reasons"]["volume_score"] == 1
 
 
+def test_quality_observations_are_bounded_and_visible_in_summary() -> None:
+    async def scenario() -> dict:
+        manager = HealthManager()
+        for index in range(35):
+            await manager.record_quality_observation(
+                {
+                    "symbol": f"PAIR{index}",
+                    "confidence": 0.35,
+                    "confidence_threshold": 0.70,
+                    "score": 0.68,
+                    "momentum_score": 0.60,
+                    "volume_score": 0.55,
+                    "rsi": 58.0,
+                    "cvd_slope": -1.2,
+                    "delta": -20.0,
+                    "primary_direction": "neutral",
+                    "quality_failure_reasons": ["volume_score"],
+                }
+            )
+        return await manager.get_stats()
+
+    stats = asyncio.run(scenario())
+    observations = stats["signal_quality_observations"]
+    assert len(observations) == 30
+    assert observations[0]["symbol"] == "PAIR5"
+    assert observations[-1]["symbol"] == "PAIR34"
+
+    summary = format_cycle_summary(
+        pairs_analyzed=1,
+        bullish_count=1,
+        bearish_count=0,
+        sideways_count=0,
+        signals_found=1,
+        approved_count=0,
+        rejected_count=1,
+        rejection_reasons={"confidence_below_threshold": 1},
+        avg_strategy_score=68.0,
+        avg_confidence=35.0,
+        avg_analysis_time=100.0,
+        telegram_count=0,
+        database_writes=1,
+        warnings_count=0,
+        errors_count=0,
+        system_health="EXCELLENT",
+        diagnostics={"quality_observations": observations},
+        health_components={},
+    )
+    assert "Latest Raw Values      : PAIR34" in summary
+    assert "Latest Quality Blocks  : volume_score" in summary
+
+
 def test_cycle_summary_formatter_labels_long_only_and_diagnostics() -> None:
     summary = format_cycle_summary(
         pairs_analyzed=6,
