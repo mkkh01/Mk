@@ -60,6 +60,10 @@ import math
 from typing import Any, Optional
 from config.thresholds import (
     CONFIDENCE_THRESHOLD,
+    ALLOW_CONTROLLED_VOLATILE_ENTRIES,
+    VOLATILE_MAX_ENTRY_ATR_PERCENT,
+    VOLATILE_RISK_MULTIPLIER,
+    VOLATILE_MIN_RISK_REWARD_RATIO,
     MIN_ENTRY_MOMENTUM_SCORE,
     MIN_ENTRY_VOLUME_SCORE,
     MIN_SUPPORTING_COMPONENTS,
@@ -488,14 +492,29 @@ class Orchestrator:
         )
 
         # -------------------------------------------------------------
-        # 5. Regime check: use the HTF (or primary) regime; block VOLATILE.
+        # 5. Regime check: allow only controlled volatility. Extreme volatility
+        # remains blocked; controlled volatile entries are sized at 50% risk.
         # -------------------------------------------------------------
         regime = htf_analysis.regime if htf_analysis.regime else ltf_analysis.regime
-        regime_ok = regime != RegimeState.VOLATILE
+        latest_close = float(ltf_analysis.candles[-1].close) if ltf_analysis.candles else 0.0
+        atr_percent = (float(ltf_analysis.atr) / latest_close * 100.0) if latest_close > 0 else 0.0
+        volatile_controlled = (
+            regime == RegimeState.VOLATILE
+            and ALLOW_CONTROLLED_VOLATILE_ENTRIES
+            and 0.0 < atr_percent <= VOLATILE_MAX_ENTRY_ATR_PERCENT
+        )
+        regime_ok = regime != RegimeState.VOLATILE or volatile_controlled
+        regime_risk_multiplier = VOLATILE_RISK_MULTIPLIER if volatile_controlled else 1.0
         log_analysis_step(
             symbol, "regime_check", "success" if regime_ok else "failed",
-            f"فحص حالة السوق: {regime.value} ({'مقبول' if regime_ok else 'مرفوض - تذبذب عالي'})",
-            {"regime": regime.value, "regime_ok": regime_ok}
+            f"فحص حالة السوق: {regime.value} ({'تقلب منضبط - مخاطرة مخفضة' if volatile_controlled else 'مقبول' if regime_ok else 'مرفوض - تذبذب شديد'})",
+            {
+                "regime": regime.value,
+                "regime_ok": regime_ok,
+                "atr_percent": round(atr_percent, 4),
+                "volatile_controlled": volatile_controlled,
+                "risk_multiplier": regime_risk_multiplier,
+            }
         )
 
         # -------------------------------------------------------------
@@ -825,6 +844,12 @@ class Orchestrator:
                 coin_config=coin_config,
                 portfolio_state=portfolio_state,
                 atr=atr,
+                risk_multiplier=regime_risk_multiplier,
+                min_risk_reward_ratio=(
+                    VOLATILE_MIN_RISK_REWARD_RATIO
+                    if volatile_controlled
+                    else None
+                ),
             )
             log_analysis_step(
                 symbol, "risk_assessment", "success" if risk.allowed else "failed",

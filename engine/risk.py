@@ -331,6 +331,8 @@ def assess_risk(
     coin_config: CoinConfig,
     portfolio_state: dict,
     atr: float,
+    risk_multiplier: float = 1.0,
+    min_risk_reward_ratio: float | None = None,
 ) -> RiskAssessment:
     """Run every risk check and return a populated :class:`RiskAssessment`.
 
@@ -381,7 +383,13 @@ def assess_risk(
     direction = signal.direction
 
     capital = _safe_float(coin_config.capital)
-    risk_percent = _safe_float(coin_config.risk_percent)
+    risk_multiplier = min(max(_safe_float(risk_multiplier, 1.0), 0.0), 1.0)
+    risk_percent = _safe_float(coin_config.risk_percent) * risk_multiplier
+    min_risk_reward_ratio = (
+        _safe_float(min_risk_reward_ratio, thresholds.MIN_RISK_REWARD_RATIO)
+        if min_risk_reward_ratio is not None
+        else thresholds.MIN_RISK_REWARD_RATIO
+    )
     atr = _safe_float(atr)
 
     current_price = _portfolio_state_get(portfolio_state, "current_price")
@@ -439,6 +447,8 @@ def assess_risk(
         risk_reward_ratio=risk_reward,
         calculated_risk_percent=risk_percent,
         max_allowed_risk_percent=thresholds.MAX_DAILY_LOSS_PCT,
+        risk_multiplier=risk_multiplier,
+        min_risk_reward_ratio=min_risk_reward_ratio,
         capital=capital,
         allocated_capital=capital, # In this system, allocated_capital per coin is coin_config.capital
         position_size=position_size,
@@ -454,10 +464,10 @@ def assess_risk(
 
     # --- run the four checks in order; first failure wins ----------------
     # 1. R:R check
-    if risk_reward < thresholds.MIN_RISK_REWARD_RATIO:
+    if risk_reward < min_risk_reward_ratio:
         reason = (
             f"risk_reward_below_min: {risk_reward:.3f} < "
-            f"{thresholds.MIN_RISK_REWARD_RATIO:.3f}"
+            f"{min_risk_reward_ratio:.3f}"
         )
         return _build_rejection(
             symbol, reason, position_size, risk_amount,

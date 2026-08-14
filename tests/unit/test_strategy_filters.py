@@ -3,7 +3,7 @@ File: tests/unit/test_strategy_filters.py
 
 Unit tests for the losing-trades strategy enhancements applied on 2026-08-09:
 
-1. ``CONFIDENCE_THRESHOLD`` raised from 0.60 to 0.70.
+1. ``CONFIDENCE_THRESHOLD`` calibrated from 0.70 to the Balanced 0.65 profile.
 2. ``VOLATILITY_ATR_MULTIPLIER_SL`` raised from 1.8 to 2.5.
 3. RSI overbought gate in ``engine/orchestrator.py`` (reject longs when
    LTF RSI >= ``MOMENTUM_RSI_OVERBOUGHT`` == 70).
@@ -33,10 +33,10 @@ from tests.conftest import make_candle, make_dt
 # 1. Threshold updates
 # ---------------------------------------------------------------------------
 class TestThresholdUpdates:
-    """Verify the values raised by the 2026-08-09 strategy enhancements."""
+    """Verify the current Balanced strategy profile and safety gates."""
 
-    def test_confidence_threshold_is_070(self):
-        assert thresholds.CONFIDENCE_THRESHOLD == pytest.approx(0.70)
+    def test_confidence_threshold_is_065(self):
+        assert thresholds.CONFIDENCE_THRESHOLD == pytest.approx(0.65)
 
     def test_sl_atr_multiplier_is_25(self):
         assert thresholds.VOLATILITY_ATR_MULTIPLIER_SL == pytest.approx(2.5)
@@ -49,21 +49,21 @@ class TestThresholdUpdates:
 
 
 # ---------------------------------------------------------------------------
-# 2. Confidence gate behaviour at the new 0.70 level
+# 2. Confidence gate behaviour at the Balanced 0.65 level
 # ---------------------------------------------------------------------------
 class TestConfidenceGate:
-    """``confidence_gate`` must reject below 0.70 and accept at/above."""
+    """``confidence_gate`` must reject below 0.65 and accept at/above."""
 
     def test_below_threshold_rejected(self):
         from engine.confidence import confidence_gate
 
-        assert confidence_gate(0.69) is False
-        assert confidence_gate(0.60) is False  # old default must now fail
+        assert confidence_gate(0.64) is False
+        assert confidence_gate(0.60) is False
 
     def test_at_and_above_threshold_accepted(self):
         from engine.confidence import confidence_gate
 
-        assert confidence_gate(0.70) is True
+        assert confidence_gate(0.65) is True
         assert confidence_gate(0.90) is True
 
 

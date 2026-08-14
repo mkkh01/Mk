@@ -153,12 +153,12 @@ RISK_REWARD_TARGET = 1.8
 # ---------------------------------------------------------------------------
 # Confidence Scoring
 # ---------------------------------------------------------------------------
-CONFIDENCE_THRESHOLD = 0.70
-"""Minimum confidence (0..1) required for a signal to be acted on.
-Raised from 0.60 after a losing-trades review: signals scoring below 70%
-lacked sufficient multi-condition confluence (structure + momentum +
-liquidity) and were more likely to be whipsawed into the tight stop.
-See losing-trades analysis (2026-08-08)."""
+CONFIDENCE_THRESHOLD = 0.65
+"""Balanced profile: minimum confidence required for a signal to be acted on.
+The previous 0.70 threshold admitted very few candidates in replay. Signals
+below this threshold remain rejected; the reduced threshold is paired with
+smaller risk for controlled volatile entries and must be validated in paper
+trading before any live-capital increase."""
 
 HTF_ALIGNMENT_WEIGHT = 0.20
 STRUCTURE_WEIGHT = 0.30
@@ -171,6 +171,14 @@ REGIME_MODIFIER_TRENDING = 1.0
 REGIME_MODIFIER_RANGING = 0.90
 REGIME_MODIFIER_VOLATILE = 0.85
 """Confidence multipliers applied based on detected market regime."""
+
+# Balanced volatility profile. VOLATILE is not treated as a blanket ban when
+# normalized ATR is within this controlled band; the risk module halves the
+# per-trade risk for those entries. Extreme volatility remains blocked.
+ALLOW_CONTROLLED_VOLATILE_ENTRIES = True
+VOLATILE_MAX_ENTRY_ATR_PERCENT = 3.0
+VOLATILE_RISK_MULTIPLIER = 0.50
+VOLATILE_MIN_RISK_REWARD_RATIO = 1.80
 
 # ---------------------------------------------------------------------------
 # Entry Rules
