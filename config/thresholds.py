@@ -97,6 +97,14 @@ Raised from 3.2 alongside the SL multiplier (2.5) so that the default
 reward:risk ratio stays above MIN_RISK_REWARD_RATIO (1.4):
 4.0 / 2.5 = 1.6 > 1.4."""
 
+# Replay-only sensitivity profile. These constants are never used by the
+# production path unless a replay explicitly selects the ``1to1`` profile.
+REPLAY_1TO1_ATR_MULTIPLIER_TP = 2.5
+"""Replay-only TP distance; equal to the production SL distance."""
+
+REPLAY_1TO1_MIN_RR = 1.0
+"""Replay-only minimum reward:risk threshold for the 1:1 sensitivity run."""
+
 VOLATILITY_BB_PERIOD = 20
 VOLATILITY_BB_STD = 2.0
 HIGH_VOLATILITY_THRESHOLD = 1.8
@@ -345,6 +353,7 @@ __all__ = [
     "MOMENTUM_MACD_SLOW", "MOMENTUM_MACD_SIGNAL", "MOMENTUM_STOCH_PERIOD", "MOMENTUM_STOCH_SMOOTH_K",
     "MOMENTUM_STOCH_SMOOTH_D", "MOMENTUM_STOCH_OVERBOUGHT", "MOMENTUM_STOCH_OVERSOLD",
     "VOLATILITY_ATR_PERIOD", "VOLATILITY_ATR_MULTIPLIER_SL", "VOLATILITY_ATR_MULTIPLIER_TP",
+    "REPLAY_1TO1_ATR_MULTIPLIER_TP", "REPLAY_1TO1_MIN_RR",
     "VOLATILITY_BB_PERIOD", "VOLATILITY_BB_STD", "HIGH_VOLATILITY_THRESHOLD",
 "HIGH_VOLATILITY_VOLUME_SPIKE_RATIO", "VOLATILITY_BB_RANGING_PCT",
     "ASIAN_START_UTC", "ASIAN_END_UTC", "LONDON_START_UTC", "LONDON_END_UTC", "NY_START_UTC", "NY_END_UTC",

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import config.thresholds as thresholds
 from contracts.decision import DecisionResult, EntrySignal, RiskAssessment
 from contracts.market import Candle
 from replay.runner import ReplayRunner, ReplayStorage, _parse_binance_timestamp
@@ -43,6 +44,24 @@ async def test_replay_storage_hides_future_candles() -> None:
     storage.current_cutoff = candles[0].close_time
     visible = await storage.fetch_closed_candles("ADAUSDT", "15m", limit=200)
     assert [candle.open_time for candle in visible] == [candles[0].open_time]
+
+
+def test_replay_profile_1to1_isolated_and_restored() -> None:
+    runner = ReplayRunner({}, symbols=["ADAUSDT"], profile="1to1")
+    production_tp = thresholds.VOLATILITY_ATR_MULTIPLIER_TP
+    production_min_rr = thresholds.MIN_RISK_REWARD_RATIO
+
+    with runner._profile_context():
+        assert thresholds.VOLATILITY_ATR_MULTIPLIER_TP == thresholds.REPLAY_1TO1_ATR_MULTIPLIER_TP
+        assert thresholds.MIN_RISK_REWARD_RATIO == thresholds.REPLAY_1TO1_MIN_RR
+
+    assert thresholds.VOLATILITY_ATR_MULTIPLIER_TP == production_tp
+    assert thresholds.MIN_RISK_REWARD_RATIO == production_min_rr
+
+
+def test_replay_rejects_unknown_profile() -> None:
+    with pytest.raises(ValueError, match="unsupported replay profile"):
+        ReplayRunner({}, symbols=["ADAUSDT"], profile="unsafe")
 
 
 def test_replay_outcome_does_not_use_trigger_candle_for_fill() -> None:

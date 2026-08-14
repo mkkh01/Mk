@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 import json
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
+import config.thresholds as thresholds
 from contracts.config import CoinConfig
 from contracts.decision import DecisionResult
 from contracts.market import Candle
@@ -36,6 +38,7 @@ class ReplayReport:
     end: str
     trigger_timeframe: str
     symbols: list[str]
+    profile: str = "default"
     decisions: int = 0
     signals_found: int = 0
     approved: int = 0
@@ -140,6 +143,7 @@ class ReplayRunner:
         end: datetime | None = None,
         capital: float = 10_000.0,
         risk_percent: float = 2.0,
+        profile: str = "default",
     ) -> None:
         self.storage = ReplayStorage(candles)
         self.redis = ReplayRedis(self.storage)
@@ -150,6 +154,28 @@ class ReplayRunner:
         self.end = end
         self.capital = capital
         self.risk_percent = risk_percent
+        if profile not in {"default", "1to1"}:
+            raise ValueError(f"unsupported replay profile: {profile!r}")
+        self.profile = profile
+
+    @contextmanager
+    def _profile_context(self) -> Iterator[None]:
+        """Apply replay-only risk overrides and always restore production values."""
+        if self.profile == "default":
+            yield
+            return
+
+        original_tp = thresholds.VOLATILITY_ATR_MULTIPLIER_TP
+        original_min_rr = thresholds.MIN_RISK_REWARD_RATIO
+        try:
+            thresholds.VOLATILITY_ATR_MULTIPLIER_TP = (
+                thresholds.REPLAY_1TO1_ATR_MULTIPLIER_TP
+            )
+            thresholds.MIN_RISK_REWARD_RATIO = thresholds.REPLAY_1TO1_MIN_RR
+            yield
+        finally:
+            thresholds.VOLATILITY_ATR_MULTIPLIER_TP = original_tp
+            thresholds.MIN_RISK_REWARD_RATIO = original_min_rr
 
     async def run(self) -> ReplayReport:
         before = await health_manager.get_stats()
@@ -160,27 +186,29 @@ class ReplayRunner:
             end=(self.end or triggers[-1].close_time).isoformat() if triggers else "",
             trigger_timeframe=self.trigger_timeframe,
             symbols=self.symbols,
+            profile=self.profile,
         )
 
-        for trigger in triggers:
-            self.storage.current_cutoff = trigger.close_time
-            coin = CoinConfig(
-                symbol=trigger.symbol,
-                timeframes=[self.trigger_timeframe, "1h", "4h"],
-                capital=self.capital,
-                risk_percent=self.risk_percent,
-            )
-            result = await self.orchestrator.process_candle_safe(trigger, coin)
-            if result is None:
-                continue
-            report.decisions += 1
-            report.signals_found += len(result.component_signals)
-            if result.final_verdict:
-                report.approved += 1
-            else:
-                report.rejected += 1
-                reason = result.rejection_reason or "unknown"
-                report.rejection_reasons[reason] = report.rejection_reasons.get(reason, 0) + 1
+        with self._profile_context():
+            for trigger in triggers:
+                self.storage.current_cutoff = trigger.close_time
+                coin = CoinConfig(
+                    symbol=trigger.symbol,
+                    timeframes=[self.trigger_timeframe, "1h", "4h"],
+                    capital=self.capital,
+                    risk_percent=self.risk_percent,
+                )
+                result = await self.orchestrator.process_candle_safe(trigger, coin)
+                if result is None:
+                    continue
+                report.decisions += 1
+                report.signals_found += len(result.component_signals)
+                if result.final_verdict:
+                    report.approved += 1
+                else:
+                    report.rejected += 1
+                    reason = result.rejection_reason or "unknown"
+                    report.rejection_reasons[reason] = report.rejection_reasons.get(reason, 0) + 1
 
         after = await health_manager.get_stats()
         report.signal_quality_passed = after.get("signal_quality_passed", 0) - before.get("signal_quality_passed", 0)
