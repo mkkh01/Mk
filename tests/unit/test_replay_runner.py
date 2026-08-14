@@ -68,6 +68,7 @@ def test_replay_outcome_does_not_use_trigger_candle_for_fill() -> None:
     start = datetime(2026, 7, 31, tzinfo=UTC)
     trigger = make_candle(start, 100.0, low=95.0, high=105.0)
     next_candle = make_candle(start + timedelta(minutes=15), 100.0, low=100.0, high=101.0)
+    late_candle = make_candle(start + timedelta(minutes=45), 100.0, low=95.0, high=101.0)
     decision = DecisionResult(
         symbol="ADAUSDT",
         source_candle_open_time=trigger.open_time,
@@ -92,7 +93,10 @@ def test_replay_outcome_does_not_use_trigger_candle_for_fill() -> None:
         final_verdict=True,
         timestamp=trigger.close_time,
     )
-    runner = ReplayRunner({("ADAUSDT", "15m"): [trigger, next_candle]}, symbols=["ADAUSDT"])
+    runner = ReplayRunner(
+        {("ADAUSDT", "15m"): [trigger, next_candle, late_candle]},
+        symbols=["ADAUSDT"],
+    )
     outcome = runner._evaluate_decision(decision)
     assert outcome.filled is False
     assert outcome.outcome == "no_fill"

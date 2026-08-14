@@ -4,13 +4,14 @@ import csv
 import json
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 import config.thresholds as thresholds
 from contracts.config import CoinConfig
 from contracts.decision import DecisionResult
+from config.thresholds import ENTRY_TIMEOUT_MINUTES
 from contracts.market import Candle
 from engine.orchestrator import Orchestrator
 from monitoring.health_manager import health_manager
@@ -27,6 +28,7 @@ class ReplayTradeOutcome:
     outcome: str
     exit_price: float | None = None
     exit_time: str | None = None
+    fill_time: str | None = None
     r_multiple: float | None = None
     ambiguous_bar: bool = False
 
@@ -259,12 +261,33 @@ class ReplayRunner:
             for candle in self.storage.candles.get((decision.symbol, self.trigger_timeframe), [])
             if candle.is_closed and candle.open_time > decision.source_candle_open_time
         ]
-        valid_until = entry.valid_until
+        # ``EntrySignal.valid_until`` is created with wall-clock time by the
+        # live entry path. In replay that would make a July decision valid until
+        # the current runtime date, allowing fills days later. Re-anchor the
+        # timeout to the historical decision candle instead.
+        source_candle = next(
+            (
+                candle
+                for candle in self.storage.candles.get(
+                    (decision.symbol, self.trigger_timeframe), []
+                )
+                if candle.open_time == decision.source_candle_open_time
+            ),
+            None,
+        )
+        decision_close_time = (
+            source_candle.close_time
+            if source_candle is not None
+            else decision.source_candle_open_time
+        )
+        if decision_close_time.tzinfo is None:
+            decision_close_time = decision_close_time.replace(tzinfo=timezone.utc)
+        valid_until = decision_close_time + timedelta(minutes=ENTRY_TIMEOUT_MINUTES)
         fill_candle = next(
             (
                 candle
                 for candle in future
-                if candle.close_time <= valid_until and candle.low <= entry.entry_price
+                if candle.open_time < valid_until and candle.low <= entry.entry_price
             ),
             None,
         )
@@ -277,6 +300,7 @@ class ReplayRunner:
                 take_profit=entry.take_profit,
                 filled=False,
                 outcome="no_fill",
+                fill_time=None,
             )
 
         risk_per_unit = max(entry.entry_price - entry.stop_loss, 0.0)
@@ -305,6 +329,7 @@ class ReplayRunner:
                     outcome=outcome,
                     exit_price=exit_price,
                     exit_time=candle.close_time.isoformat(),
+                    fill_time=fill_candle.close_time.isoformat(),
                     r_multiple=r_multiple,
                     ambiguous_bar=ambiguous,
                 )
@@ -316,6 +341,7 @@ class ReplayRunner:
             take_profit=entry.take_profit,
             filled=True,
             outcome="open_at_end",
+            fill_time=fill_candle.close_time.isoformat(),
         )
 
 

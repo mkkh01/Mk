@@ -111,7 +111,8 @@
       "exit_price": null,
       "exit_time": null,
       "r_multiple": null,
-      "ambiguous_bar": false
+      "ambiguous_bar": false,
+      "fill_time": null
     },
     {
       "symbol": "XLMUSDT",
@@ -119,12 +120,13 @@
       "entry_price": 0.18934318000000003,
       "stop_loss": 0.1867014738280924,
       "take_profit": 0.1935699098750522,
-      "filled": true,
-      "outcome": "tp",
-      "exit_price": 0.1935699098750522,
-      "exit_time": "2026-07-11T15:14:59.999999+00:00",
-      "r_multiple": 1.5999999999999959,
-      "ambiguous_bar": false
+      "filled": false,
+      "outcome": "no_fill",
+      "exit_price": null,
+      "exit_time": null,
+      "r_multiple": null,
+      "ambiguous_bar": false,
+      "fill_time": null
     },
     {
       "symbol": "LINKUSDT",
@@ -132,12 +134,14 @@
       "entry_price": 8.422472500000001,
       "stop_loss": 8.30701898334185,
       "take_profit": 8.607198126653044,
-      "filled": true,
-      "outcome": "sl",
-      "exit_price": 8.30701898334185,
-      "exit_time": "2026-07-20T06:44:59.999999+00:00",
-      "r_multiple": -1.0,
-      "ambiguous_bar": false
+      "filled": false,
+      "outcome": "no_fill",
+      "exit_price": null,
+      "exit_time": null,
+      "r_multiple": null,
+      "ambiguous_bar": false,
+      "fill_time": null
     }
-  ]
+  ],
+  "replay_evaluation_version": "historical-limit-timeout-v2"
 }
