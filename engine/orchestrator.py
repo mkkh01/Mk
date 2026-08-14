@@ -152,6 +152,36 @@ def _order_timeframes(timeframes: list[str]) -> list[str]:
     return sorted(timeframes, key=_timeframe_seconds)
 
 
+def _classify_volume_state(candles: list[Candle], volume_payload: dict[str, Any]) -> str:
+    """Distinguish bullish, bearish, neutral, and missing volume evidence."""
+    closed = [candle for candle in candles if candle.is_closed]
+    if not closed:
+        return "missing"
+
+    try:
+        last_volume = float(closed[-1].volume)
+        cvd_slope = float(volume_payload.get("cvd_slope", 0.0) or 0.0)
+        delta = float(volume_payload.get("delta", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return "missing"
+    if not all(math.isfinite(value) for value in (last_volume, cvd_slope, delta)):
+        return "missing"
+    if last_volume <= 0.0:
+        return "missing"
+
+    delta_ratio = delta / last_volume
+    cvd_ratio = cvd_slope / last_volume
+    cvd_bullish = cvd_ratio >= VOLUME_MIN_CVD_RATIO
+    delta_bullish = delta_ratio >= VOLUME_MIN_DELTA_RATIO
+    cvd_bearish = cvd_ratio <= -VOLUME_MIN_CVD_RATIO
+    delta_bearish = delta_ratio <= -VOLUME_MIN_DELTA_RATIO
+    if cvd_bullish and delta_bullish:
+        return "bullish"
+    if cvd_bearish and delta_bearish:
+        return "bearish"
+    return "neutral"
+
+
 # ---------------------------------------------------------------------------
 # Rejection-reason prioritisation
 # ---------------------------------------------------------------------------
@@ -748,6 +778,7 @@ class Orchestrator:
             "stoch_k": _diag_float(momentum_payload.get("stoch_k")),
             "stoch_d": _diag_float(momentum_payload.get("stoch_d")),
             "volume_score": _diag_float(ltf_volume_score),
+            "volume_state": _classify_volume_state(ltf_analysis.candles, volume_payload),
             "volume_threshold": _diag_float(MIN_ENTRY_VOLUME_SCORE),
             "volume_confirmation": _diag_float(volume_confirmation),
             "volume_ratio": _diag_float(volume_payload.get("volume_ratio"), 1.0),
@@ -1586,18 +1617,15 @@ class Orchestrator:
         last_volume = float(last_candle.volume or 0.0)
         delta_ratio = delta / last_volume if last_volume > 0 else 0.0
         cvd_ratio = cvd_slope / last_volume if last_volume > 0 else 0.0
-        cvd_bullish = cvd_ratio >= VOLUME_MIN_CVD_RATIO
-        delta_bullish = delta_ratio >= VOLUME_MIN_DELTA_RATIO
-        cvd_bearish = cvd_ratio <= -VOLUME_MIN_CVD_RATIO
-        delta_bearish = delta_ratio <= -VOLUME_MIN_DELTA_RATIO
-        if cvd_bullish and delta_bullish:
+        volume_state = _classify_volume_state(analysis.candles, vol)
+        if volume_state == "bullish":
             vol_dir = "long"
             cvd_strength = min(cvd_ratio / VOLUME_STRENGTH_SCALE, 1.0)
             delta_strength = min(delta_ratio / VOLUME_STRENGTH_SCALE, 1.0)
             vol_score = max(0.0, min(1.0, 0.5 * (cvd_strength + delta_strength)))
-        elif cvd_bearish and delta_bearish:
+        elif volume_state == "neutral":
             vol_dir = "neutral"
-            vol_score = 0.0
+            vol_score = 0.5
         else:
             vol_dir = "neutral"
             vol_score = 0.0
@@ -1605,8 +1633,9 @@ class Orchestrator:
         if not vol_reasons:
             vol_reasons = [
                 (
-                    f"volume cvd_slope={cvd_slope:+.6f}, delta={delta:+.4f}, "
-                    f"delta_ratio={delta_ratio:+.4f}, cvd_ratio={cvd_ratio:+.4f} (tf={tf})"
+                    f"volume_state={volume_state}, cvd_slope={cvd_slope:+.6f}, "
+                    f"delta={delta:+.4f}, delta_ratio={delta_ratio:+.4f}, "
+                    f"cvd_ratio={cvd_ratio:+.4f} (tf={tf})"
                 )
             ]
         signals.append(

@@ -259,7 +259,7 @@
                 const observations = diagnostics.quality_observations || [];
                 const latest = observations.length ? observations[observations.length - 1] : null;
                 document.getElementById('cs-raw-values').textContent = latest
-                    ? `Latest raw: ${latest.symbol} | confidence=${Number(latest.confidence ?? 0).toFixed(3)}/${Number(latest.confidence_threshold ?? 0).toFixed(2)} | score=${Number(latest.score ?? 0).toFixed(3)} | momentum=${Number(latest.momentum_score ?? 0).toFixed(3)} | volume=${Number(latest.volume_score ?? 0).toFixed(3)} | RSI=${Number(latest.rsi ?? 0).toFixed(2)} | CVD slope=${Number(latest.cvd_slope ?? 0).toFixed(4)} | delta=${Number(latest.delta ?? 0).toFixed(2)} | direction=${latest.primary_direction ?? 'neutral'}`
+                    ? `Latest raw: ${latest.symbol} | confidence=${Number(latest.confidence ?? 0).toFixed(3)}/${Number(latest.confidence_threshold ?? 0).toFixed(2)} | score=${Number(latest.score ?? 0).toFixed(3)} | momentum=${Number(latest.momentum_score ?? 0).toFixed(3)} | volume=${Number(latest.volume_score ?? 0).toFixed(3)} (${latest.volume_state ?? 'unknown'}) | RSI=${Number(latest.rsi ?? 0).toFixed(2)} | CVD slope=${Number(latest.cvd_slope ?? 0).toFixed(4)} | delta=${Number(latest.delta ?? 0).toFixed(2)} | direction=${latest.primary_direction ?? 'neutral'}`
                     : 'Latest raw values: no observation yet';
                 const cycleComponents = data.health_components || {};
                 const cycleHealthDetails = Object.entries(cycleComponents)
