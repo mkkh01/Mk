@@ -13,6 +13,7 @@ def test_confluence_telemetry_separates_quality_and_pre_timing() -> None:
             signal_quality_passed=False,
             pre_timing_eligible=False,
             pre_timing_block_reasons=["confidence", "signal_quality"],
+            quality_failure_reasons=["aggregate_score", "volume_score"],
         )
         await manager.record_confluence_result(
             signal_quality_passed=True,
@@ -39,6 +40,32 @@ def test_confluence_telemetry_separates_quality_and_pre_timing() -> None:
     assert stats["entry_timing_checked"] == 2
     assert stats["entry_timing_passed"] == 1
     assert stats["timing_rejection_reasons"] == {"pullback_not_confirmed": 1}
+    assert stats["signal_quality_failure_reasons"] == {
+        "aggregate_score": 1,
+        "volume_score": 1,
+    }
+
+
+def test_health_stats_snapshot_is_deep_copy() -> None:
+    async def scenario() -> tuple[dict, dict]:
+        manager = HealthManager()
+        await manager.record_confluence_result(
+            signal_quality_passed=False,
+            pre_timing_eligible=False,
+            pre_timing_block_reasons=["confidence"],
+            quality_failure_reasons=["volume_score"],
+        )
+        first = await manager.get_stats()
+        first["pre_timing_block_reasons"]["confidence"] = 99
+        first["signal_quality_failure_reasons"]["volume_score"] = 99
+        second = await manager.get_stats()
+        return first, second
+
+    first, second = asyncio.run(scenario())
+    assert first["pre_timing_block_reasons"]["confidence"] == 99
+    assert first["signal_quality_failure_reasons"]["volume_score"] == 99
+    assert second["pre_timing_block_reasons"]["confidence"] == 1
+    assert second["signal_quality_failure_reasons"]["volume_score"] == 1
 
 
 def test_cycle_summary_formatter_labels_long_only_and_diagnostics() -> None:

@@ -220,6 +220,8 @@ def _diagnostics_from_stats(stats: dict[str, Any]) -> dict[str, Any]:
         "signal_quality_passed": int(stats.get("signal_quality_passed", 0)),
         "pre_timing_eligible": int(stats.get("pre_timing_eligible", 0)),
         "pre_timing_block_reasons": dict(stats.get("pre_timing_block_reasons", {})),
+        "signal_quality_failure_reasons": dict(stats.get("signal_quality_failure_reasons", {})),
+        "db_write_failures": int(stats.get("db_write_failures", 0)),
         "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
         "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
         "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),

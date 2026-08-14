@@ -249,9 +249,12 @@
                 document.getElementById('cs-pre-timing-eligible').textContent = diagnostics.pre_timing_eligible ?? 0;
                 const preTimingReasons = diagnostics.pre_timing_block_reasons || {};
                 const preTimingReasonText = Object.entries(preTimingReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ');
+                const qualityReasons = diagnostics.signal_quality_failure_reasons || {};
+                const qualityReasonText = Object.entries(qualityReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ');
                 const timingReasons = diagnostics.timing_rejection_reasons || {};
                 const timingReasonText = Object.entries(timingReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ');
-                document.getElementById('cs-timing-rejections').textContent = `Pre-timing blocks: ${preTimingReasonText || 'none'} | Timing rejections: ${timingReasonText || 'none'}`;
+                const writeFailures = diagnostics.db_write_failures ?? 0;
+                document.getElementById('cs-timing-rejections').textContent = `Quality blocks: ${qualityReasonText || 'none'} | Pre-timing blocks: ${preTimingReasonText || 'none'} | Timing rejections: ${timingReasonText || 'none'} | DB write failures: ${writeFailures}`;
                 const cycleComponents = data.health_components || {};
                 const cycleHealthDetails = Object.entries(cycleComponents)
                     .map(([name, component]) => {

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from enum import Enum
+from copy import deepcopy
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
@@ -68,6 +69,7 @@ class HealthManager:
             "timing_rejection_reasons": {},
             "telegram_sent": 0,
             "db_writes": 0,
+            "db_write_failures": 0,
             # Cycle-summary aggregation fields
             "bullish_count": 0,
             "bearish_count": 0,
@@ -141,17 +143,23 @@ class HealthManager:
         pre_timing_block_reasons: list[str] | None = None,
         timing_passed: bool = False,
         timing_reason: str | None = None,
+        quality_failure_reasons: list[str] | None = None,
     ) -> None:
         """Record v2-confluence and conservative-entry gate observability.
 
         These counters are diagnostic only. They do not alter any decision or
         threshold and make it possible to distinguish an early confidence /
-        regime rejection from a later RSI, extension, or pullback rejection.
+        regime rejection from a quality failure or a later RSI, extension, or
+        pullback rejection.
         """
         async with self._lock:
             self._stats["confluence_candidates"] += 1
             if signal_quality_passed:
                 self._stats["signal_quality_passed"] += 1
+            else:
+                for reason in quality_failure_reasons or []:
+                    reasons = self._stats.setdefault("signal_quality_failure_reasons", {})
+                    reasons[reason] = reasons.get(reason, 0) + 1
             if pre_timing_eligible:
                 self._stats["pre_timing_eligible"] += 1
                 self._stats["entry_timing_checked"] += 1
@@ -193,7 +201,7 @@ class HealthManager:
     async def get_stats(self) -> Dict[str, Any]:
         """Return a snapshot of current stats (alias for heartbeat callers)."""
         async with self._lock:
-            return self._stats.copy()
+            return deepcopy(self._stats)
 
     async def get_overall_health(self) -> Dict[str, Any]:
         """Return a summary of the overall system health."""

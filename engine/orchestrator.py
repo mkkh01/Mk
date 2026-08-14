@@ -555,24 +555,30 @@ class Orchestrator:
         score = aggregate_directional_score(component_signals, direction="long")
 
         quality_failures: list[str] = []
+        quality_failure_reasons: list[str] = []
         if score < MIN_ENTRY_SIGNAL_SCORE:
+            quality_failure_reasons.append("aggregate_score")
             quality_failures.append(
                 f"aggregate_score={score:.4f}<{MIN_ENTRY_SIGNAL_SCORE:.4f}"
             )
         if momentum_score < MIN_ENTRY_MOMENTUM_SCORE:
+            quality_failure_reasons.append("momentum_score")
             quality_failures.append(
                 f"momentum_score={momentum_score:.4f}<{MIN_ENTRY_MOMENTUM_SCORE:.4f}"
             )
         if ltf_volume_score < MIN_ENTRY_VOLUME_SCORE:
+            quality_failure_reasons.append("volume_score")
             quality_failures.append(
                 f"volume_score={ltf_volume_score:.4f}<{MIN_ENTRY_VOLUME_SCORE:.4f}"
             )
         supporting_components = int(confluence_metrics["supporting_components"])
         if supporting_components < MIN_SUPPORTING_COMPONENTS:
+            quality_failure_reasons.append("supporting_components")
             quality_failures.append(
                 f"supporting_components={supporting_components}<{MIN_SUPPORTING_COMPONENTS}"
             )
         if not bool(confluence_metrics["direction_ok"]):
+            quality_failure_reasons.append("primary_direction")
             quality_failures.append(
                 f"primary_direction={primary_signal.direction!r}!=\"long\""
             )
@@ -679,6 +685,7 @@ class Orchestrator:
             signal_quality_passed=signal_quality_ok,
             pre_timing_eligible=pre_timing_eligible,
             pre_timing_block_reasons=pre_timing_block_reasons,
+            quality_failure_reasons=quality_failure_reasons,
             timing_passed=(
                 pre_timing_eligible
                 and entry_timing.allowed
@@ -871,13 +878,16 @@ class Orchestrator:
         try:
             # [TRACE] Decision started (saving to DB)
             logger.info("trace_decision_started", symbol=symbol, verdict=final_verdict)
-            await self._supabase.upsert_decision(decision)
+            persisted = await self._supabase.upsert_decision(decision)
+            if persisted:
+                await health_manager.increment_stat("db_writes")
             # [TRACE] Decision finished (saved to DB)
-            logger.info("trace_decision_finished", symbol=symbol, decision_id=str(decision.id))
+            logger.info("trace_decision_finished", symbol=symbol, decision_id=str(decision.id), persisted=bool(persisted))
         except Exception as exc:  # noqa: BLE001
             # Storage failure MUST NOT block the in-memory decision -- the
             # orchestrator still returns the DecisionResult so the bot can
             # display it.  The error is logged for visibility.
+            await health_manager.increment_stat("db_write_failures")
             logger.error(
                 "error",
                 timestamp=datetime.utcnow(),

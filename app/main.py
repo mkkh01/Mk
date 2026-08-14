@@ -983,7 +983,8 @@ class CTApplication:
                     result.symbol,
                     primary_direction,
                 )
-                await health_manager.increment_stat("db_writes")
+                # db_writes is incremented by the orchestrator only after a
+                # successful durable upsert_decision call.
                 
                 # Count total component signals emitted (not just approved verdicts)
                 signal_count = len(result.component_signals) if result.component_signals else 0
@@ -1253,6 +1254,8 @@ class CTApplication:
                 "signal_quality_passed": int(stats.get("signal_quality_passed", 0)),
                 "pre_timing_eligible": int(stats.get("pre_timing_eligible", 0)),
                 "pre_timing_block_reasons": dict(stats.get("pre_timing_block_reasons", {})),
+                "signal_quality_failure_reasons": dict(stats.get("signal_quality_failure_reasons", {})),
+                "db_write_failures": int(stats.get("db_write_failures", 0)),
                 "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
                 "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
                 "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),

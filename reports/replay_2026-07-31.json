@@ -1,0 +1,41 @@
+{
+  "source": "Binance Data Vision spot monthly klines",
+  "start": "2026-07-31T00:00:00+00:00",
+  "end": "2026-07-31T23:59:59+00:00",
+  "trigger_timeframe": "15m",
+  "symbols": [
+    "ADAUSDT",
+    "DOTUSDT",
+    "LINKUSDT",
+    "NEARUSDT",
+    "XLMUSDT",
+    "XRPUSDT"
+  ],
+  "decisions": 570,
+  "signals_found": 10260,
+  "approved": 0,
+  "rejected": 570,
+  "rejection_reasons": {
+    "confidence_below_threshold: 0.70 required": 566,
+    "signal_quality_gate_failed: primary_direction='neutral'!=\"long\"": 3,
+    "signal_quality_gate_failed: volume_score=0.0000<0.6000": 1
+  },
+  "signal_quality_passed": 3,
+  "signal_quality_failure_reasons": {
+    "aggregate_score": 197,
+    "momentum_score": 450,
+    "primary_direction": 482,
+    "volume_score": 479
+  },
+  "pre_timing_eligible": 0,
+  "pre_timing_block_reasons": {
+    "confidence": 566,
+    "signal_quality": 567
+  },
+  "entry_timing_checked": 0,
+  "entry_timing_passed": 0,
+  "timing_rejection_reasons": {},
+  "db_writes": 570,
+  "db_write_failures": 0,
+  "outcomes": []
+}
