@@ -127,7 +127,8 @@
                 <div class="text-sm font-semibold text-gray-300 mb-2">v2-Confluence Diagnostics</div>
                 <div class="grid-auto">
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Confluence Candidates</div><div class="text-lg font-bold text-blue-300" id="cs-confluence-candidates">-</div></div>
-                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Confluence Passed</div><div class="text-lg font-bold text-green-300" id="cs-confluence-passed">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Signal Quality Passed</div><div class="text-lg font-bold text-green-300" id="cs-confluence-passed">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Pre-Timing Eligible</div><div class="text-lg font-bold text-cyan-300" id="cs-pre-timing-eligible">-</div></div>
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Timing Checked</div><div class="text-lg font-bold text-yellow-300" id="cs-timing-checked">-</div></div>
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Timing Passed</div><div class="text-lg font-bold text-green-300" id="cs-timing-passed">-</div></div>
                 </div>
@@ -245,9 +246,12 @@
                 document.getElementById('cs-confluence-passed').textContent = diagnostics.confluence_passed ?? 0;
                 document.getElementById('cs-timing-checked').textContent = diagnostics.entry_timing_checked ?? 0;
                 document.getElementById('cs-timing-passed').textContent = diagnostics.entry_timing_passed ?? 0;
+                document.getElementById('cs-pre-timing-eligible').textContent = diagnostics.pre_timing_eligible ?? 0;
+                const preTimingReasons = diagnostics.pre_timing_block_reasons || {};
+                const preTimingReasonText = Object.entries(preTimingReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ');
                 const timingReasons = diagnostics.timing_rejection_reasons || {};
                 const timingReasonText = Object.entries(timingReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ');
-                document.getElementById('cs-timing-rejections').textContent = `Timing rejection reasons: ${timingReasonText || 'none'}`;
+                document.getElementById('cs-timing-rejections').textContent = `Pre-timing blocks: ${preTimingReasonText || 'none'} | Timing rejections: ${timingReasonText || 'none'}`;
                 const cycleComponents = data.health_components || {};
                 const cycleHealthDetails = Object.entries(cycleComponents)
                     .map(([name, component]) => {

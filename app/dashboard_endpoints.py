@@ -215,7 +215,11 @@ def _diagnostics_from_stats(stats: dict[str, Any]) -> dict[str, Any]:
     """Return read-only v2-confluence and conservative-entry counters."""
     return {
         "confluence_candidates": int(stats.get("confluence_candidates", 0)),
-        "confluence_passed": int(stats.get("confluence_passed", 0)),
+        # Backward-compatible alias; the new explicit name avoids ambiguity.
+        "confluence_passed": int(stats.get("signal_quality_passed", 0)),
+        "signal_quality_passed": int(stats.get("signal_quality_passed", 0)),
+        "pre_timing_eligible": int(stats.get("pre_timing_eligible", 0)),
+        "pre_timing_block_reasons": dict(stats.get("pre_timing_block_reasons", {})),
         "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
         "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
         "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),

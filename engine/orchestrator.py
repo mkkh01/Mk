@@ -668,9 +668,17 @@ class Orchestrator:
         # Diagnostic-only counters: expose how far each candidate progressed
         # through v2-confluence without changing any decision condition.
         pre_timing_eligible = regime_ok and confidence_ok and signal_quality_ok
+        pre_timing_block_reasons = []
+        if not regime_ok:
+            pre_timing_block_reasons.append("regime")
+        if not confidence_ok:
+            pre_timing_block_reasons.append("confidence")
+        if not signal_quality_ok:
+            pre_timing_block_reasons.append("signal_quality")
         await health_manager.record_confluence_result(
-            passed=signal_quality_ok,
-            timing_checked=pre_timing_eligible,
+            signal_quality_passed=signal_quality_ok,
+            pre_timing_eligible=pre_timing_eligible,
+            pre_timing_block_reasons=pre_timing_block_reasons,
             timing_passed=(
                 pre_timing_eligible
                 and entry_timing.allowed

@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+
 from monitoring.health_manager import HealthManager, HealthStatus
 from monitoring.report_formatter import format_cycle_summary
 
 
-def test_confluence_telemetry_separates_early_and_timing_rejections() -> None:
+def test_confluence_telemetry_separates_quality_and_pre_timing() -> None:
     async def scenario() -> dict:
         manager = HealthManager()
-        await manager.record_confluence_result(passed=False)
         await manager.record_confluence_result(
-            passed=True,
-            timing_checked=True,
+            signal_quality_passed=False,
+            pre_timing_eligible=False,
+            pre_timing_block_reasons=["confidence", "signal_quality"],
+        )
+        await manager.record_confluence_result(
+            signal_quality_passed=True,
+            pre_timing_eligible=True,
             timing_passed=False,
             timing_reason="pullback_not_confirmed",
         )
         await manager.record_confluence_result(
-            passed=True,
-            timing_checked=True,
+            signal_quality_passed=True,
+            pre_timing_eligible=True,
             timing_passed=True,
         )
         return await manager.get_stats()
@@ -25,7 +30,12 @@ def test_confluence_telemetry_separates_early_and_timing_rejections() -> None:
     stats = asyncio.run(scenario())
 
     assert stats["confluence_candidates"] == 3
-    assert stats["confluence_passed"] == 2
+    assert stats["signal_quality_passed"] == 2
+    assert stats["pre_timing_eligible"] == 2
+    assert stats["pre_timing_block_reasons"] == {
+        "confidence": 1,
+        "signal_quality": 1,
+    }
     assert stats["entry_timing_checked"] == 2
     assert stats["entry_timing_passed"] == 1
     assert stats["timing_rejection_reasons"] == {"pullback_not_confirmed": 1}
@@ -51,7 +61,9 @@ def test_cycle_summary_formatter_labels_long_only_and_diagnostics() -> None:
         system_health="CRITICAL",
         diagnostics={
             "confluence_candidates": 14,
-            "confluence_passed": 2,
+            "signal_quality_passed": 2,
+            "pre_timing_eligible": 2,
+            "pre_timing_block_reasons": {"confidence": 12},
             "entry_timing_checked": 2,
             "entry_timing_passed": 1,
             "timing_rejection_reasons": {"pullback_not_confirmed": 1},
@@ -67,6 +79,9 @@ def test_cycle_summary_formatter_labels_long_only_and_diagnostics() -> None:
     assert "Long Bias Observations   : 12" in summary
     assert "Non-Long Observations    : 2" in summary
     assert "Confluence Candidates    : 14" in summary
+    assert "Signal Quality Passed    : 2" in summary
+    assert "Pre-Timing Eligible      : 2" in summary
+    assert "Pre-Timing Block - confidence" in summary
     assert "Entry Timing Checked     : 2" in summary
     assert "Timing Rejection - pullback_not_confirmed" in summary
     assert "WebSocket=CRITICAL: Component stale" in summary

@@ -59,7 +59,10 @@ class HealthManager:
             "opportunities_rejected": 0,
             # v2-confluence / conservative-entry observability counters.
             "confluence_candidates": 0,
-            "confluence_passed": 0,
+            # This is signal-quality pass, not full pre-timing eligibility.
+            "signal_quality_passed": 0,
+            "pre_timing_eligible": 0,
+            "pre_timing_block_reasons": {},
             "entry_timing_checked": 0,
             "entry_timing_passed": 0,
             "timing_rejection_reasons": {},
@@ -133,8 +136,9 @@ class HealthManager:
     async def record_confluence_result(
         self,
         *,
-        passed: bool,
-        timing_checked: bool = False,
+        signal_quality_passed: bool,
+        pre_timing_eligible: bool,
+        pre_timing_block_reasons: list[str] | None = None,
         timing_passed: bool = False,
         timing_reason: str | None = None,
     ) -> None:
@@ -146,15 +150,20 @@ class HealthManager:
         """
         async with self._lock:
             self._stats["confluence_candidates"] += 1
-            if passed:
-                self._stats["confluence_passed"] += 1
-            if timing_checked:
+            if signal_quality_passed:
+                self._stats["signal_quality_passed"] += 1
+            if pre_timing_eligible:
+                self._stats["pre_timing_eligible"] += 1
                 self._stats["entry_timing_checked"] += 1
                 if timing_passed:
                     self._stats["entry_timing_passed"] += 1
                 elif timing_reason:
                     reasons = self._stats["timing_rejection_reasons"]
                     reasons[timing_reason] = reasons.get(timing_reason, 0) + 1
+            else:
+                for reason in pre_timing_block_reasons or []:
+                    reasons = self._stats["pre_timing_block_reasons"]
+                    reasons[reason] = reasons.get(reason, 0) + 1
             self._stats["last_activity"] = datetime.now(timezone.utc)
 
     async def accumulate_analysis(self, score: float, confidence: float, analysis_time_ms: float):

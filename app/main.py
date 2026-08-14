@@ -97,7 +97,8 @@ PAPER_TRADER_POLL_SECONDS = 15
 
 # How often to log a heartbeat for the orchestrator subscriber (so Render's
 # log stream shows the process is alive even on quiet markets).
-SUBSCRIBER_HEARTBEAT_SECONDS = 300
+# Must be shorter than ComponentHealth's 60-second stale timeout.
+SUBSCRIBER_HEARTBEAT_SECONDS = 30
 
 # Sentinel values for the engine state machine.
 _ENGINE_STATE_LOCK = asyncio.Lock()
@@ -1248,7 +1249,10 @@ class CTApplication:
             system_health=status_map.get(health_summary["status"], "UNKNOWN"),
             diagnostics={
                 "confluence_candidates": int(stats.get("confluence_candidates", 0)),
-                "confluence_passed": int(stats.get("confluence_passed", 0)),
+                "confluence_passed": int(stats.get("signal_quality_passed", 0)),
+                "signal_quality_passed": int(stats.get("signal_quality_passed", 0)),
+                "pre_timing_eligible": int(stats.get("pre_timing_eligible", 0)),
+                "pre_timing_block_reasons": dict(stats.get("pre_timing_block_reasons", {})),
                 "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
                 "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
                 "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),

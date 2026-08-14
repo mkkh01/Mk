@@ -238,7 +238,11 @@ def format_cycle_summary(
     lines.append("v2-Confluence Diagnostics")
     lines.append("--------------------------")
     lines.append(f"Confluence Candidates    : {diag.get('confluence_candidates', 0)}")
-    lines.append(f"Confluence Passed        : {diag.get('confluence_passed', 0)}")
+    lines.append(f"Signal Quality Passed    : {diag.get('signal_quality_passed', diag.get('confluence_passed', 0))}")
+    lines.append(f"Pre-Timing Eligible      : {diag.get('pre_timing_eligible', 0)}")
+    pre_timing_reasons = diag.get("pre_timing_block_reasons", {}) or {}
+    for reason, count in pre_timing_reasons.items():
+        lines.append(f"Pre-Timing Block - {reason:<8}: {count}")
     lines.append(f"Entry Timing Checked     : {diag.get('entry_timing_checked', 0)}")
     lines.append(f"Entry Timing Passed      : {diag.get('entry_timing_passed', 0)}")
     timing_reasons = diag.get("timing_rejection_reasons", {}) or {}
