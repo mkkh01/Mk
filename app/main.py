@@ -63,7 +63,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from monitoring.logger import configure_logging, get_logger
 
 from app.dashboard_endpoints import setup_dashboard_endpoints
@@ -1473,6 +1473,7 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     # Store instances in app.state for dependency injection
+    app.state.startup_error = None
     global ct_app_instance
     try:
         from config.settings import settings
@@ -1492,14 +1493,15 @@ async def startup_event():
         await ct_app_instance.start()
         logger.info("FastAPI startup complete, CTApplication started.")
     except Exception as exc:  # noqa: BLE001
+        app.state.startup_error = f"{type(exc).__name__}: {exc}"
         logger.error(
             "error",
             timestamp=datetime.now(timezone.utc),
             module="app.main",
             error_type=type(exc).__name__,
-            error_message=f"CRITICAL: CTApplication failed to start: {exc}. The web dashboard will remain active, but the bot and engine may be offline.",
+            error_message=f"CRITICAL: CTApplication failed to start: {exc}",
         )
-        # We don't exit here so the web server stays alive for debugging/logs.
+        # Keep HTTP available for diagnostics, but readiness must fail.
     app.state.redis = ct_app_instance._redis
     app.state.supabase = ct_app_instance._supabase
     app.state.performance_calculator = ct_app_instance._performance_calc
@@ -1526,12 +1528,18 @@ async def health_check():
 @app.get("/ready", status_code=status.HTTP_200_OK)
 async def readiness_check():
     global ct_app_instance
-    is_running = ct_app_instance and ct_app_instance._engine_running
-    return {"status": "ready" if is_running else "initializing", "engine_running": is_running, "message": "CT Web Server is ready"}
-
-@app.get("/", status_code=status.HTTP_200_OK)
-async def root_fallback():
-    return {"message": "Welcome to CT Web Server"}
+    startup_error = getattr(app.state, "startup_error", None)
+    is_running = bool(ct_app_instance and ct_app_instance._engine_running)
+    if startup_error or not is_running:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "unready",
+                "engine_running": is_running,
+                "message": "CT Web Server is not ready",
+            },
+        )
+    return {"status": "ready", "engine_running": True, "message": "CT Web Server is ready"}
 
 # Workflow endpoints are now managed via app/workflow_endpoints.py
 # and registered in the startup_event.

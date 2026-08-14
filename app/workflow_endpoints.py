@@ -10,14 +10,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, List
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from contracts.decision import DecisionResult
-from contracts.simulation import SimulatedTrade
 from storage.supabase import SupabaseClient
 from storage.redis_cache import RedisCache
+from app.auth import require_dashboard_auth
 
-router = APIRouter(prefix="/api/workflow", tags=["workflow"])
+router = APIRouter(
+    prefix="/api/workflow",
+    tags=["workflow"],
+    dependencies=[Depends(require_dashboard_auth)],
+)
 
 # ============================================================================
 # Dependencies

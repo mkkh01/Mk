@@ -17,3 +17,5 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
+      - key: DASHBOARD_API_TOKEN
+        sync: false

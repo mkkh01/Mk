@@ -148,7 +148,7 @@ cp config/settings.example.py config/settings.py
 $EDITOR config/settings.py
 ```
 
-`config/settings.py` is gitignored — never commit it. If you accidentally commit it, **rotate all credentials immediately**.
+`config/settings.py` contains only environment-variable wiring; credentials must never be placed in it. If you accidentally commit it, **rotate all credentials immediately**.
 
 ### Set up the database
 
@@ -177,9 +177,9 @@ Open Telegram, find your bot, send `/start`.
 
 ## Configuration
 
-### `config/settings.py` (Plain Values, No .env)
+### `config/settings.py` (Environment Variables)
 
-Per the spec's explicit policy, configuration is **plain Python values**, not environment variables. This trades a small security risk (must keep `settings.py` out of git) for simplicity on free-tier infrastructure.
+`config/settings.py` is a tracked, sanitized runtime adapter that reads credentials exclusively from environment variables. Never place real tokens, keys, passwords, or DSNs directly in this file. Missing required variables cause the application to remain unready.
 
 ```python
 from contracts.config import SystemConfig
@@ -361,7 +361,7 @@ pytest tests/ -v
 
 ### Render.com Deployment Checklist (Section 23)
 
-- [ ] `config/settings.py` exists and is in `.gitignore`
+- [ ] Required credentials are supplied through environment variables and are absent from source files
 - [ ] `config/settings.example.py` is committed with placeholder values
 - [ ] All migrations in `storage/migrations/` are applied to Supabase
 - [ ] Redis instance is accessible from Render
@@ -420,3 +420,5 @@ CT is simulation-only by design. When real order placement is genuinely being bu
 Private project. See the master guide (`CT_AI_System_Master_Guide_v6.md`) for the authoritative specification.
 \n# System Status: Updated with 418 Fixes
  
+
+DASHBOARD_API_TOKEN is required for /api/dashboard and /api/workflow.

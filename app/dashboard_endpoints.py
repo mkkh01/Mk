@@ -10,10 +10,15 @@ from monitoring.logger import get_logger
 from portfolio.performance import PerformanceCalculator
 from storage.redis_cache import RedisCache
 from storage.supabase import SupabaseClient
+from app.auth import require_dashboard_auth
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+router = APIRouter(
+    prefix="/api/dashboard",
+    tags=["dashboard"],
+    dependencies=[Depends(require_dashboard_auth)],
+)
 
 # Dependency to get SupabaseClient and RedisCache instances
 def get_supabase_client(request: Request) -> SupabaseClient:
