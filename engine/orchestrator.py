@@ -583,6 +583,8 @@ class Orchestrator:
             session_score=session_score,
             symbol=symbol,
         )
+        volume_payload = ltf_analysis.volume or {}
+        volume_state = _classify_volume_state(ltf_analysis.candles, volume_payload)
         ltf_component_signals = self._build_component_signals(ltf_analysis)
         ltf_volume_score = next(
             (
@@ -616,10 +618,10 @@ class Orchestrator:
             quality_failures.append(
                 f"momentum_score={momentum_score:.4f}<{MIN_ENTRY_MOMENTUM_SCORE:.4f}"
             )
-        if ltf_volume_score < MIN_ENTRY_VOLUME_SCORE:
-            quality_failure_reasons.append("volume_score")
+        if volume_state in {"bearish", "missing"}:
+            quality_failure_reasons.append("volume_state")
             quality_failures.append(
-                f"volume_score={ltf_volume_score:.4f}<{MIN_ENTRY_VOLUME_SCORE:.4f}"
+                f"volume_state={volume_state!r} blocks long entries"
             )
         supporting_components = int(confluence_metrics["supporting_components"])
         if supporting_components < MIN_SUPPORTING_COMPONENTS:
@@ -648,6 +650,7 @@ class Orchestrator:
                 "legacy_score": round(legacy_score, 4),
                 "momentum_score": round(momentum_score, 4),
                 "volume_score": round(ltf_volume_score, 4),
+                "volume_state": volume_state,
                 "score_threshold": MIN_ENTRY_SIGNAL_SCORE,
                 "momentum_threshold": MIN_ENTRY_MOMENTUM_SCORE,
                 "volume_threshold": MIN_ENTRY_VOLUME_SCORE,
@@ -738,7 +741,6 @@ class Orchestrator:
                 return default
             return number if math.isfinite(number) else default
 
-        volume_payload = ltf_analysis.volume or {}
         profile_payload = volume_payload.get("profile", {}) or {}
         momentum_payload = ltf_analysis.momentum or {}
         trend_payload = ltf_analysis.trend or {}
@@ -778,7 +780,7 @@ class Orchestrator:
             "stoch_k": _diag_float(momentum_payload.get("stoch_k")),
             "stoch_d": _diag_float(momentum_payload.get("stoch_d")),
             "volume_score": _diag_float(ltf_volume_score),
-            "volume_state": _classify_volume_state(ltf_analysis.candles, volume_payload),
+            "volume_state": volume_state,
             "volume_threshold": _diag_float(MIN_ENTRY_VOLUME_SCORE),
             "volume_confirmation": _diag_float(volume_confirmation),
             "volume_ratio": _diag_float(volume_payload.get("volume_ratio"), 1.0),
@@ -1624,9 +1626,12 @@ class Orchestrator:
             delta_strength = min(delta_ratio / VOLUME_STRENGTH_SCALE, 1.0)
             vol_score = max(0.0, min(1.0, 0.5 * (cvd_strength + delta_strength)))
         elif volume_state == "neutral":
+            # Neutral flow is not positive confirmation, but it should not
+            # veto a valid long when structure, momentum, and confidence agree.
             vol_dir = "neutral"
-            vol_score = 0.5
+            vol_score = MIN_ENTRY_VOLUME_SCORE
         else:
+            # Bearish flow and missing data remain hard blocks for Spot-long.
             vol_dir = "neutral"
             vol_score = 0.0
         vol_reasons = list(vol.get("reasons", []))

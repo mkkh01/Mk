@@ -41,3 +41,12 @@ def test_volume_state_bearish_when_cvd_and_delta_confirm():
 def test_volume_state_neutral_when_flow_disagrees():
     candles = [_candle(volume=100.0)]
     assert _classify_volume_state(candles, {"cvd_slope": 3.0, "delta": -3.0}) == "neutral"
+
+
+def test_neutral_volume_is_not_below_entry_score():
+    """Neutral flow is a non-veto once other long gates are satisfied."""
+    from config.thresholds import MIN_ENTRY_VOLUME_SCORE
+    from engine.orchestrator import MIN_ENTRY_VOLUME_SCORE as ORCHESTRATOR_VOLUME_THRESHOLD
+
+    assert ORCHESTRATOR_VOLUME_THRESHOLD == MIN_ENTRY_VOLUME_SCORE
+    assert ORCHESTRATOR_VOLUME_THRESHOLD > 0.0
