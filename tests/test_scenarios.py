@@ -1,8 +1,6 @@
 
 import pytest
-import asyncio
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock
 from engine.orchestrator import Orchestrator
 from contracts.config import CoinConfig
 from tests.conftest import bullish_seq, bearish_seq, make_candle
@@ -17,16 +15,16 @@ async def test_scenario_volatile_market_rejection(mock_supabase, mock_redis):
     timeframes = ["15m", "1h", "4h"]
     
     # Create a volatile sequence (large wicks, high ATR)
-    base_time = datetime.now(timezone.utc) - timedelta(days=1)
+    base_time = datetime.now(timezone.utc) - timedelta(minutes=49 * 15 + 5)
     volatile_candles = []
     for i in range(50):
         o = 100.0
         c = 105.0 if i % 2 == 0 else 95.0
         h = 120.0
-        l = 80.0
+        low_price = 80.0
         volatile_candles.append(make_candle(
             symbol=symbol, timeframe="15m", open_time=base_time + timedelta(minutes=i*15),
-            open=o, high=h, low=l, close=c
+            open=o, high=h, low=low_price, close=c
         ))
     
     # Setup mocks
@@ -49,16 +47,28 @@ async def test_scenario_perfect_bullish_setup(mock_supabase, mock_redis):
     symbol = "BTCUSDT"
     timeframes = ["15m", "1h", "4h"]
     
-    # Create a smooth bullish sequence
-    base_time = datetime.now(timezone.utc) - timedelta(days=2)
-    bull_candles = bullish_seq(n=100, start_price=100.0, step=0.5, symbol=symbol, timeframe="15m", base_time=base_time)
-    bull_candles_1h = bullish_seq(n=100, start_price=100.0, step=2.0, symbol=symbol, timeframe="1h", base_time=base_time)
-    bull_candles_4h = bullish_seq(n=100, start_price=100.0, step=8.0, symbol=symbol, timeframe="4h", base_time=base_time)
+    # Create a smooth bullish sequence whose latest candle is fresh on each TF.
+    now = datetime.now(timezone.utc)
+    bull_candles = bullish_seq(
+        n=100, start_price=100.0, step=0.5, symbol=symbol, timeframe="15m",
+        base_time=now - timedelta(minutes=99 * 15 + 5),
+    )
+    bull_candles_1h = bullish_seq(
+        n=100, start_price=100.0, step=2.0, symbol=symbol, timeframe="1h",
+        base_time=now - timedelta(hours=99 + 1 / 12),
+    )
+    bull_candles_4h = bullish_seq(
+        n=100, start_price=100.0, step=8.0, symbol=symbol, timeframe="4h",
+        base_time=now - timedelta(hours=99 * 4 + 1 / 12),
+    )
     
     def mock_fetch(symbol, timeframe, limit):
-        if timeframe == "15m": return bull_candles[-limit:]
-        if timeframe == "1h": return bull_candles_1h[-limit:]
-        if timeframe == "4h": return bull_candles_4h[-limit:]
+        if timeframe == "15m":
+            return bull_candles[-limit:]
+        if timeframe == "1h":
+            return bull_candles_1h[-limit:]
+        if timeframe == "4h":
+            return bull_candles_4h[-limit:]
         return []
 
     mock_supabase.fetch_closed_candles.side_effect = mock_fetch

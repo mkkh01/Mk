@@ -74,6 +74,7 @@ from config.thresholds import (
     MIN_ENTRY_SIGNAL_SCORE,
     MOMENTUM_RSI_OVERBOUGHT,
     TIMEFRAME_TO_SECONDS,
+    ANALYSIS_CANDLE_FRESHNESS_MULTIPLIER,
     VOLATILITY_ATR_PERIOD,
 )
 from contracts.config import CoinConfig
@@ -443,6 +444,7 @@ class Orchestrator:
         # -------------------------------------------------------------
         per_tf: dict[str, _TimeframeAnalysis] = {}
         component_signals: list[StrategySignal] = []
+        stale_timeframes: list[str] = []
 
         for tf in ordered_tfs:
             log_analysis_step(symbol, f"analysis_{tf}", "started", f"بدء تحليل الإطار الزمني {tf}")
@@ -458,12 +460,17 @@ class Orchestrator:
             logger.info("trace_strategy_finished", symbol=symbol, timeframe=tf)
 
             # Log detailed analysis results per timeframe (Requested Log #1 & #10)
-            last_candle_time = analysis.candles[-1].open_time if analysis.candles else None
+            last_candle_time = analysis.candles[-1].close_time if analysis.candles else None
             data_freshness = "fresh"
             if last_candle_time:
                 seconds_diff = (datetime.now(timezone.utc) - last_candle_time.replace(tzinfo=timezone.utc)).total_seconds()
-                if seconds_diff > TIMEFRAME_TO_SECONDS.get(tf, 60) * 2:
+                freshness_limit = TIMEFRAME_TO_SECONDS.get(tf, 60) * ANALYSIS_CANDLE_FRESHNESS_MULTIPLIER
+                if seconds_diff > freshness_limit:
                     data_freshness = "stale"
+                    stale_timeframes.append(f"{tf}:{seconds_diff:.0f}s>{freshness_limit:.0f}s")
+            else:
+                data_freshness = "missing"
+                stale_timeframes.append(f"{tf}:no_closed_candle")
 
             logger.info(
                 "timeframe_scan_completed",
@@ -485,6 +492,23 @@ class Orchestrator:
                 symbol, f"analysis_{tf}", "success", 
                 f"اكتمل تحليل {tf}: تم استخراج {len(tf_signals)} إشارات استراتيجية",
                 {"signals_count": len(tf_signals), "timeframe": tf}
+            )
+
+        if stale_timeframes:
+            freshness_reason = "stale_analysis_data:" + ",".join(stale_timeframes)
+            return self._build_and_log_failure(
+                symbol=symbol,
+                source_open_time=source_open_time,
+                score=0.0,
+                confidence=0.0,
+                reason=freshness_reason,
+                component_signals=component_signals,
+                regime_check_passed=False,
+                structure_alignment_passed=False,
+                htf_bias_aligned=False,
+                risk=RiskAssessment(allowed=False, reason=freshness_reason),
+                entry=None,
+                trigger_timeframe=candle.timeframe,
             )
 
         # -------------------------------------------------------------
@@ -1669,37 +1693,75 @@ class Orchestrator:
         ltf_analysis: _TimeframeAnalysis,
         component_signals: list[StrategySignal],
     ) -> StrategySignal:
-        """Pick the primary LTF signal for the HTF filter and risk assessment.
+        """Pick the most defensible directional signal on the LTF.
 
-        Preference order:
-          1. The LTF trend signal (highest structural weight).
-          2. The LTF momentum signal.
-          3. The first component signal on the LTF timeframe.
-          4. A default long signal at score 0.5.
+        A neutral trend is not a veto and must not hide an actionable structure,
+        SMC, or volume signal. An explicitly bearish trend remains a veto for
+        Spot-long mode, preventing a bullish component from overriding a clear
+        local downtrend. This keeps primary direction consistent with the
+        evidence used by the quality gate.
         """
         ltf_tf = ltf_analysis.timeframe
-        # 1. Trend signal.
-        for sig in component_signals:
-            if sig.timeframe == ltf_tf and sig.strategy_name == "trend":
-                return sig
-        # 2. Momentum signal.
-        for sig in component_signals:
-            if sig.timeframe == ltf_tf and sig.strategy_name == "momentum":
-                return sig
-        # 3. Any LTF signal.
-        for sig in component_signals:
-            if sig.timeframe == ltf_tf:
-                return sig
-        # 4. Default.
+        ltf_signals = [sig for sig in component_signals if sig.timeframe == ltf_tf]
+        trend_signal = next(
+            (sig for sig in ltf_signals if sig.strategy_name == "trend"),
+            None,
+        )
+        trend_direction = str((ltf_analysis.trend or {}).get("direction", "neutral"))
+
+        # A confirmed local downtrend must not be overridden by a single
+        # bullish component in Spot-long mode.
+        if trend_direction == "bearish":
+            if trend_signal is not None:
+                return trend_signal
+            return next(
+                (sig for sig in ltf_signals if sig.direction == "neutral"),
+                self._default_signal(ltf_analysis),
+            )
+
+        # When trend is bullish, prefer it. When trend is neutral, select the
+        # strongest actionable LTF component instead of returning neutral.
+        if trend_signal is not None and trend_signal.direction == "long":
+            return trend_signal
+
+        strategy_priority = {
+            "structure": 5,
+            "smc": 4,
+            "volume": 3,
+            "momentum": 2,
+            "session": 1,
+        }
+        long_candidates = [sig for sig in ltf_signals if sig.direction == "long"]
+        if long_candidates:
+            return max(
+                long_candidates,
+                key=lambda sig: (
+                    float(sig.raw_score),
+                    strategy_priority.get(sig.strategy_name, 0),
+                ),
+            )
+
+        if trend_signal is not None:
+            return trend_signal
+        return next(
+            (sig for sig in ltf_signals if sig.strategy_name == "momentum"),
+            next(
+                (sig for sig in ltf_signals),
+                self._default_signal(ltf_analysis),
+            ),
+        )
+
+    def _default_signal(self, ltf_analysis: _TimeframeAnalysis) -> StrategySignal:
+        """Build a neutral-safe fallback signal when no LTF component exists."""
         last_candle = ltf_analysis.candles[-1] if ltf_analysis.candles else None
         open_time = last_candle.open_time if last_candle else datetime.now(timezone.utc)
         symbol = last_candle.symbol if last_candle else ""
         return _build_strategy_signal(
             strategy_name="default",
             symbol=symbol,
-            timeframe=ltf_tf,
-            direction="long",
-            raw_score=0.5,
+            timeframe=ltf_analysis.timeframe,
+            direction="neutral",
+            raw_score=0.0,
             reasons=["default_signal: no component signal available"],
             source_candle_open_time=open_time,
         )

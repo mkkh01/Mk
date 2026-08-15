@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from contracts.decision import StrategySignal
 from engine.htf_filter import filter_by_htf
 from tests.conftest import bearish_seq, bullish_seq
@@ -57,6 +55,17 @@ class TestHTFFilter:
         # In Spot-only, we still block longs if the HTF trend is bearish.
         if result.bias == "bearish":
             assert result.alignment is False
+
+    def test_neutral_ltf_does_not_pass_through_bearish_htf(self):
+        """Neutral LTF must not be aligned with a bearish HTF in Spot mode."""
+        result = filter_by_htf(
+            ltf_signal=make_signal("neutral"),
+            htf_candles=bearish_seq(n=30, timeframe="4h"),
+            htf_timeframe="4h", ltf_timeframe="15m",
+        )
+        if result.bias == "bearish":
+            assert result.alignment is False
+            assert result.reason.endswith("ltf_neutral_in_bearish_htf")
 
     def test_neutral_pass_through_returns_true(self):
         """A neutral HTF bias must return alignment=True (no filtering applied)."""

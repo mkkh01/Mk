@@ -298,6 +298,9 @@ WS_STABLE_RESET_SECONDS = 30
 WS_STALE_MULTIPLIER = 2.0
 """A stream is considered stale when no message arrives for (interval * this) seconds."""
 
+ANALYSIS_CANDLE_FRESHNESS_MULTIPLIER = 2.0
+"""Maximum age multiplier for the latest closed candle used in analysis."""
+
 WS_REST_RETRY_COUNT = 3
 """Number of REST retries on gap-fill failure."""
 

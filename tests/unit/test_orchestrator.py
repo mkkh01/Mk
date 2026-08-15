@@ -13,15 +13,17 @@ File: tests/unit/test_orchestrator.py
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from contracts.config import CoinConfig
 from contracts.decision import DecisionResult
-from contracts.market import Candle
-from engine.orchestrator import Orchestrator
+from engine.orchestrator import (
+    Orchestrator,
+    _TimeframeAnalysis,
+    _build_strategy_signal,
+)
 from tests.conftest import make_candle, make_dt
 
 
@@ -133,6 +135,50 @@ class TestIdempotency:
             assert args is not None
             decision = args.args[0] if args.args else args.kwargs.get("decision")
             assert isinstance(decision, DecisionResult)
+
+
+class TestPrimarySignalSelection:
+    """Regression coverage for neutral trend masking actionable structure."""
+
+    def test_neutral_trend_does_not_hide_long_structure(self, orchestrator):
+        analysis = _TimeframeAnalysis("15m")
+        analysis.trend = {"direction": "neutral"}
+        now = make_dt(0)
+        signals = [
+            _build_strategy_signal(
+                strategy_name="trend", symbol="BTCUSDT", timeframe="15m",
+                direction="neutral", raw_score=0.80,
+                reasons=["ema_inconclusive"], source_candle_open_time=now,
+            ),
+            _build_strategy_signal(
+                strategy_name="structure", symbol="BTCUSDT", timeframe="15m",
+                direction="long", raw_score=0.70,
+                reasons=["structure_trend=up"], source_candle_open_time=now,
+            ),
+        ]
+        selected = orchestrator._pick_primary_signal(analysis, signals)
+        assert selected.strategy_name == "structure"
+        assert selected.direction == "long"
+
+    def test_bearish_trend_remains_a_long_veto(self, orchestrator):
+        analysis = _TimeframeAnalysis("15m")
+        analysis.trend = {"direction": "bearish"}
+        now = make_dt(0)
+        signals = [
+            _build_strategy_signal(
+                strategy_name="trend", symbol="BTCUSDT", timeframe="15m",
+                direction="neutral", raw_score=0.80,
+                reasons=["ema_down"], source_candle_open_time=now,
+            ),
+            _build_strategy_signal(
+                strategy_name="structure", symbol="BTCUSDT", timeframe="15m",
+                direction="long", raw_score=0.90,
+                reasons=["structure_trend=up"], source_candle_open_time=now,
+            ),
+        ]
+        selected = orchestrator._pick_primary_signal(analysis, signals)
+        assert selected.direction == "neutral"
+        assert selected.strategy_name == "trend"
 
 
 class TestDecisionResultShape:

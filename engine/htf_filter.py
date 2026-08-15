@@ -105,23 +105,21 @@ def _check_alignment(
 ) -> tuple[bool, str]:
     """Return ``(alignment, reason)`` for the LTF/HTF pair in Spot mode.
 
-      * LTF long  + HTF bullish  -> aligned (True).
-      * LTF neutral              -> aligned (True, pass-through).
-      * HTF neutral              -> aligned (True, pass-through -- no filter).
-      * LTF long  + HTF bearish  -> NOT aligned (False).
-
-    The reason string is human-readable and unique per case so the
-    orchestrator can surface it as the rejection_reason.
+    A bearish HTF is never aligned for a Spot-long decision, including when
+    the LTF is neutral. LTF neutrality is only a pass-through when the HTF is
+    neutral or bullish; it must not turn a bearish context into a positive
+    confidence contribution.
     """
-    # LTF neutral: the market has no clear direction -- pass through.
-    if ltf_direction == "neutral":
-        return True, "ltf_neutral_pass_through"
+    if htf_bias == "bearish":
+        if ltf_direction == "long":
+            return False, "ltf_long_contradicts_htf_bearish"
+        return False, "ltf_neutral_in_bearish_htf"
     if htf_bias == "neutral":
         return True, "htf_neutral_pass_through"
     if ltf_direction == "long" and htf_bias == "bullish":
         return True, "ltf_long_aligned_with_htf_bullish"
-    if ltf_direction == "long" and htf_bias == "bearish":
-        return False, "ltf_long_contradicts_htf_bearish"
+    if ltf_direction == "neutral" and htf_bias == "bullish":
+        return True, "ltf_neutral_in_bullish_htf_watchlist"
     # Defensive default -- should never be reached given the Literal types.
     return False, f"htf_alignment_unknown:{ltf_direction}:{htf_bias}"
 
