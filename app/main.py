@@ -390,6 +390,10 @@ class CTApplication:
             # 2. Build the swing orchestrator and independent Scalp monitor.
             self._orchestrator = self._build_orchestrator()
             self._scalp_monitor = ScalpMonitor(self._supabase)
+            await health_manager.set_scalp_state(
+                "STARTING",
+                "Scalp monitor initialized; waiting for the next closed 5m candle",
+            )
             await health_manager.update_component(
                 "ScalpMonitor",
                 HealthStatus.OK,
@@ -490,6 +494,7 @@ class CTApplication:
                 )
                 # Ensure Redis agrees -- a previous crash may have left it set.
                 try:
+                    await health_manager.set_scalp_state("STOPPED", "engine is stopped")
                     await self._redis.set_engine_running(False)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
@@ -585,6 +590,7 @@ class CTApplication:
                 )
 
             self._engine_running = False
+            await health_manager.set_scalp_state("STOPPED", "engine is stopped")
             self._ws_client = None
             self._orchestrator = None
 
@@ -1157,6 +1163,10 @@ class CTApplication:
                             "paper_only": True,
                         }
                     )
+                await health_manager.set_scalp_state(
+                    "RUNNING",
+                    f"last closed 5m cycle: {scalp_decision.status}",
+                )
                 await health_manager.update_component(
                     "ScalpMonitor",
                     HealthStatus.OK,
@@ -1181,6 +1191,7 @@ class CTApplication:
                 )
             except Exception as exc:  # noqa: BLE001
                 await health_manager.increment_stat("errors_count")
+                await health_manager.set_scalp_state("ERROR", f"Scalp evaluation failed: {exc}")
                 await health_manager.update_component(
                     "ScalpMonitor",
                     HealthStatus.ERROR,

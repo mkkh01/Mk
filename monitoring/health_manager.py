@@ -88,6 +88,8 @@ class HealthManager:
                 "approved": 0,
                 "rejected": 0,
                 "paper_only": True,
+                "state": "STOPPED",
+                "state_reason": "Scalp monitor has not started",
                 "rejection_reasons": {},
                 "near_misses": 0,
                 "score_sum": 0.0,
@@ -159,10 +161,20 @@ class HealthManager:
             reasons[reason] = reasons.get(reason, 0) + 1
             self._stats["last_activity"] = datetime.now(timezone.utc)
 
+    async def set_scalp_state(self, state: str, reason: str) -> None:
+        """Set Scalp monitor lifecycle state independently from Swing."""
+        async with self._lock:
+            scalp = self._stats["scalp"]
+            scalp["state"] = str(state).upper()
+            scalp["state_reason"] = str(reason)
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
     async def record_scalp_decision(self, decision: dict[str, Any]) -> None:
         """Record one independent Scalp decision for dashboard and logs."""
         async with self._lock:
             scalp = self._stats["scalp"]
+            scalp["state"] = "RUNNING"
+            scalp["state_reason"] = "5m cycle evaluated"
             scalp["candidates"] += 1
             scalp["score_sum"] += float(decision.get("score", 0.0) or 0.0)
             scalp["confidence_sum"] += float(decision.get("confidence", 0.0) or 0.0)
@@ -183,6 +195,8 @@ class HealthManager:
         """Add or replace one independent paper Scalp position."""
         async with self._lock:
             scalp = self._stats["scalp"]
+            scalp["state"] = "RUNNING"
+            scalp["state_reason"] = "paper position opened"
             scalp["entries"] += 1
             open_trades = scalp["open_trades"]
             trade_id = str(trade.get("id") or trade.get("symbol") or "unknown")
@@ -196,6 +210,8 @@ class HealthManager:
         """Refresh one open Scalp position snapshot without counting a new entry."""
         async with self._lock:
             scalp = self._stats["scalp"]
+            scalp["state"] = "RUNNING"
+            scalp["state_reason"] = "monitoring open paper position"
             open_trades = scalp["open_trades"]
             trade_id = str(trade.get("id") or trade.get("symbol") or "unknown")
             open_trades[:] = [item for item in open_trades if item.get("id") != trade_id]
@@ -208,6 +224,8 @@ class HealthManager:
         """Move one Scalp position to the independent closed-trade history."""
         async with self._lock:
             scalp = self._stats["scalp"]
+            scalp["state"] = "RUNNING"
+            scalp["state_reason"] = "paper position closed"
             trade_id = str(trade.get("id") or trade.get("symbol") or "unknown")
             scalp["open_trades"][:] = [item for item in scalp["open_trades"] if item.get("id") != trade_id]
             closed = deepcopy(trade)

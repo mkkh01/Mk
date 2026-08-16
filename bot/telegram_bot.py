@@ -1530,7 +1530,9 @@ class CTTelegramBot:
         closed_trades = scalp.get("closed_trades", [])
         winners = [trade for trade in closed_trades if float(trade.get("net_pnl_pct", 0.0) or 0.0) > 0]
         lines = [
-            "Scalp Balanced Monitor (Paper Only)",
+            "Scalp Status (Paper Only)",
+            f"Monitor State: {str(scalp.get('state', 'UNKNOWN')).upper()}",
+            f"State Detail: {scalp.get('state_reason', 'no state recorded')}",
             "",
             f"Candidates: {scalp.get('candidates', 0)}",
             f"Approved: {scalp.get('approved', 0)}",
@@ -1544,9 +1546,10 @@ class CTTelegramBot:
         ]
         if open_trades:
             lines.extend(
-                f"- {trade.get('symbol', '-')} entry={float(trade.get('entry_price', 0.0)):.6f} "
-                f"current={float(trade.get('current_price', 0.0)):.6f} "
-                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                f"- {trade.get('symbol', '-')} | HOLDING | entry={float(trade.get('entry_price', 0.0)):.6f} "
+                f"current={float(trade.get('current_price', 0.0)):.6f} | "
+                f"move={float(trade.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
+                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%"
                 for trade in open_trades[-5:]
             )
         else:
@@ -1559,8 +1562,8 @@ class CTTelegramBot:
         )
         if winners:
             lines.extend(
-                f"- {trade.get('symbol', '-')} {trade.get('exit_status', 'closed')} "
-                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                f"- {trade.get('symbol', '-')} | WIN | exit={trade.get('exit_status', 'closed')} "
+                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%"
                 for trade in winners[-5:]
             )
         else:
@@ -1585,7 +1588,9 @@ class CTTelegramBot:
         open_trades = scalp.get("open_trades", [])
         closed_trades = scalp.get("closed_trades", [])
         lines = [
-            "Scalp Trades (Paper Only)",
+            "Scalp Trades Ledger (Paper Only)",
+            f"Monitor State: {str(scalp.get('state', 'UNKNOWN')).upper()}",
+            f"State Detail: {scalp.get('state_reason', 'no state recorded')}",
             "",
             f"Open: {len(open_trades)} | Closed: {len(closed_trades)} | Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)}",
             f"Net result: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%",
@@ -1594,9 +1599,10 @@ class CTTelegramBot:
         ]
         if open_trades:
             lines.extend(
-                f"{trade.get('symbol', '-')} | entry={float(trade.get('entry_price', 0.0)):.6f} | "
+                f"{trade.get('symbol', '-')} | HOLDING | entry={float(trade.get('entry_price', 0.0)):.6f} | "
                 f"current={float(trade.get('current_price', 0.0)):.6f} | "
-                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                f"move={float(trade.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
+                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%"
                 for trade in open_trades[-10:]
             )
         else:
@@ -1604,9 +1610,11 @@ class CTTelegramBot:
         lines.extend(["", "CLOSED:"])
         if closed_trades:
             lines.extend(
-                f"{trade.get('symbol', '-')} | {trade.get('exit_status', 'closed')} | "
-                f"entry={float(trade.get('entry_price', 0.0)):.6f} | exit={float(trade.get('exit_price', 0.0)):.6f} | "
-                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                f"{trade.get('symbol', '-')} | WIN/LOSS={'WIN' if float(trade.get('net_pnl_pct', 0.0) or 0.0) > 0 else 'LOSS'} | "
+                f"exit={trade.get('exit_status', 'closed')} | entry={float(trade.get('entry_price', 0.0)):.6f} | "
+                f"exit_price={float(trade.get('exit_price', 0.0)):.6f} | "
+                f"gross={float(trade.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
+                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%"
                 for trade in closed_trades[-10:]
             )
         else:
