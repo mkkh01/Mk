@@ -80,7 +80,19 @@ class HealthManager:
             "total_analysis_time_ms": 0.0,
             "unique_symbols_seen": set(),
             "rejection_reasons": {},
-            "last_activity": datetime.now(timezone.utc)
+            "last_activity": datetime.now(timezone.utc),
+            "scalp": {
+                "profile": "scalp_balanced",
+                "timeframes": ["5m", "15m", "30m", "1h"],
+                "candidates": 0,
+                "approved": 0,
+                "rejected": 0,
+                "paper_only": True,
+                "rejection_reasons": {},
+                "last_decision": None,
+                "last_cycle_at": None,
+                "errors": 0,
+            },
         }
 
     async def update_component(
@@ -134,6 +146,22 @@ class HealthManager:
         async with self._lock:
             reasons = self._stats["rejection_reasons"]
             reasons[reason] = reasons.get(reason, 0) + 1
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_scalp_decision(self, decision: dict[str, Any]) -> None:
+        """Record one independent Scalp decision for dashboard and logs."""
+        async with self._lock:
+            scalp = self._stats["scalp"]
+            scalp["candidates"] += 1
+            if decision.get("approved"):
+                scalp["approved"] += 1
+            else:
+                scalp["rejected"] += 1
+                reason = str(decision.get("reason") or "unknown")
+                reasons = scalp["rejection_reasons"]
+                reasons[reason] = reasons.get(reason, 0) + 1
+            scalp["last_decision"] = deepcopy(decision)
+            scalp["last_cycle_at"] = datetime.now(timezone.utc)
             self._stats["last_activity"] = datetime.now(timezone.utc)
 
     async def record_quality_observation(self, observation: dict[str, Any]) -> None:

@@ -19,7 +19,7 @@ from uuid import uuid4
 import pytest
 
 from contracts.config import CoinConfig
-from contracts.decision import DecisionResult, RiskAssessment
+from contracts.decision import DecisionResult
 from contracts.market import Candle
 from contracts.simulation import SimulatedTrade
 from storage.supabase import (
@@ -30,7 +30,6 @@ from storage.supabase import (
     _trade_from_row,
 )
 from storage.redis_cache import RedisCache
-from tests.conftest import make_candle, make_dt
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +117,7 @@ class TestCoinFromRow:
         coin = _coin_from_row(row)
         assert isinstance(coin, CoinConfig)
         assert coin.symbol == "BTCUSDT"
-        assert coin.timeframes == ["15m", "1h", "4h"]
+        assert coin.timeframes == ["5m", "15m", "30m", "1h", "4h"]
 
 
 # ---------------------------------------------------------------------------

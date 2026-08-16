@@ -137,7 +137,7 @@ class TestSystemConfig:
         assert cfg.telegram_bot_token == "token"
         assert cfg.max_active_coins == 10  # default
         assert cfg.simulation_mode is True  # default
-        assert cfg.default_timeframes == ["15m", "1h", "4h"]  # default
+        assert cfg.default_timeframes == ["5m", "15m", "30m", "1h", "4h"]  # fixed runtime set
 
     def test_system_config_simulation_mode_can_be_disabled(self):
         cfg = SystemConfig(

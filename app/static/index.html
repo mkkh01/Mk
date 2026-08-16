@@ -137,6 +137,19 @@
                 <div class="mt-2 text-xs text-gray-400" id="cs-health-detail">Health detail: -</div>
             </div>
 
+            <!-- Scalp Balanced Monitor -->
+            <div class="mb-5 p-4 bg-gray-900 rounded-lg border border-cyan-900">
+                <div class="text-sm font-semibold text-cyan-300 mb-2">Scalp Balanced Monitor (Paper Only)</div>
+                <div class="grid-auto">
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Candidates</div><div class="text-lg font-bold text-cyan-300" id="scalp-candidates">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Approved</div><div class="text-lg font-bold text-green-300" id="scalp-approved">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Rejected</div><div class="text-lg font-bold text-yellow-300" id="scalp-rejected">-</div></div>
+                </div>
+                <div class="mt-3 text-xs text-gray-400" id="scalp-profile">Profile: scalp_balanced | Timeframes: 5m, 15m, 30m, 1h | Paper only</div>
+                <div class="mt-2 text-xs text-gray-400" id="scalp-last">Last Scalp decision: -</div>
+                <div class="mt-2 text-xs text-gray-400" id="scalp-rejections">Scalp rejection reasons: -</div>
+            </div>
+
             <!-- Raw Formatted Text -->
             <details class="mt-2">
                 <summary class="text-sm text-gray-400 cursor-pointer hover:text-gray-300">Show Raw Log Format</summary>
@@ -240,6 +253,19 @@
                 document.getElementById('cs-db-writes').textContent = data.database_writes;
                 document.getElementById('cs-warnings').textContent = data.warnings;
                 document.getElementById('cs-errors').textContent = data.errors;
+
+                // Scalp Balanced diagnostics
+                const scalp = data.scalp_summary || (data.diagnostics || {}).scalp || {};
+                document.getElementById('scalp-candidates').textContent = scalp.candidates ?? 0;
+                document.getElementById('scalp-approved').textContent = scalp.approved ?? 0;
+                document.getElementById('scalp-rejected').textContent = scalp.rejected ?? 0;
+                document.getElementById('scalp-profile').textContent = `Profile: ${scalp.profile || 'scalp_balanced'} | Timeframes: ${(scalp.timeframes || ['5m', '15m', '30m', '1h']).join(', ')} | ${scalp.paper_only ? 'Paper only' : 'Live'}`;
+                const lastScalp = scalp.last_decision;
+                document.getElementById('scalp-last').textContent = lastScalp
+                    ? `Last Scalp decision: ${lastScalp.symbol || '-'} | status=${lastScalp.status || '-'} | score=${Number(lastScalp.score || 0).toFixed(3)} | confidence=${Number(lastScalp.confidence || 0).toFixed(3)} | volume=${lastScalp.volume_state || '-'} | reason=${lastScalp.reason || '-'}`
+                    : 'Last Scalp decision: no cycle yet';
+                const scalpReasons = scalp.rejection_reasons || {};
+                document.getElementById('scalp-rejections').textContent = `Scalp rejection reasons: ${Object.entries(scalpReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'}`;
 
                 // v2-confluence diagnostics
                 const diagnostics = data.diagnostics || {};

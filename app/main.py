@@ -72,6 +72,7 @@ from storage.redis_cache import RedisCache
 from storage.supabase import SupabaseClient
 from monitoring.health_manager import health_manager, HealthStatus
 from monitoring.heartbeat import run_heartbeat_loop
+from engine.scalp import ScalpMonitor
 
 # Type-only imports (avoid hard runtime dependency on layers that may not yet
 # exist when this file is imported in isolation -- e.g. during unit testing).
@@ -144,6 +145,7 @@ class CTApplication:
 
         # Engine -- built lazily in start_engine().
         self._orchestrator: Optional[Any] = None
+        self._scalp_monitor: Optional[ScalpMonitor] = None
         self._ws_client: Optional[Any] = None  # ingest.binance_ws.BinanceWSClient
 
         # Background tasks. Held so we can cancel them on shutdown.
@@ -380,8 +382,16 @@ class CTApplication:
                 self._engine_running = False
                 return
 
-            # 2. Build the orchestrator (lazy import to avoid cycles).
+            # 2. Build the swing orchestrator and independent Scalp monitor.
             self._orchestrator = self._build_orchestrator()
+            self._scalp_monitor = ScalpMonitor(self._supabase)
+            await health_manager.update_component(
+                "ScalpMonitor",
+                HealthStatus.OK,
+                "Scalp Balanced monitor is active in paper-only mode",
+                {"timeframes": ["5m", "15m", "30m", "1h"], "paper_only": True},
+                timeout=120.0,
+            )
 
             # 3. Build the BinanceWSClient (lazy import).
             self._ws_client = self._build_ws_client(coins)
@@ -1069,6 +1079,48 @@ class CTApplication:
                 timeframe=candle.timeframe,
             )
 
+        # Scalp evaluates only on a closed 5m trigger. It is independent from
+        # Swing and is paper-only until its own performance is validated.
+        if candle.is_closed and candle.timeframe == "5m" and self._scalp_monitor:
+            try:
+                scalp_decision = await self._scalp_monitor.evaluate(candle.symbol)
+                await health_manager.record_scalp_decision(scalp_decision.to_dict())
+                await health_manager.update_component(
+                    "ScalpMonitor",
+                    HealthStatus.OK,
+                    scalp_decision.reason,
+                    scalp_decision.to_dict(),
+                    timeout=120.0,
+                )
+                logger.info(
+                    "scalp_cycle_summary",
+                    symbol=candle.symbol,
+                    profile="scalp_balanced",
+                    trigger_timeframe="5m",
+                    status=scalp_decision.status,
+                    score=round(scalp_decision.score, 4),
+                    confidence=round(scalp_decision.confidence, 4),
+                    volume_state=scalp_decision.volume_state,
+                    reason=scalp_decision.reason,
+                    paper_only=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                await health_manager.increment_stat("errors_count")
+                await health_manager.update_component(
+                    "ScalpMonitor",
+                    HealthStatus.ERROR,
+                    f"Scalp evaluation failed: {exc}",
+                    timeout=120.0,
+                )
+                logger.error(
+                    "scalp_cycle_failed",
+                    timestamp=datetime.now(timezone.utc),
+                    module="app.main",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    symbol=candle.symbol,
+                )
+
     async def _run_paper_trader_guarded(self) -> None:
         """Periodically scan for open paper trades and close any that have hit
         their stop-loss or take-profit.
@@ -1231,7 +1283,7 @@ class CTApplication:
         avg_time: float,
     ) -> str:
         from monitoring.report_formatter import format_cycle_summary
-        return format_cycle_summary(
+        base_summary = format_cycle_summary(
             pairs_analyzed=len(stats.get("unique_symbols_seen", set())),
             bullish_count=stats.get("bullish_count", 0),
             bearish_count=stats.get("bearish_count", 0),
@@ -1263,6 +1315,24 @@ class CTApplication:
             },
             health_components=health_summary.get("components", {}),
         )
+        scalp = stats.get("scalp", {})
+        last = scalp.get("last_decision") or {}
+        scalp_reasons = scalp.get("rejection_reasons", {})
+        scalp_summary = (
+            "\n\n═════════SCALP CYCLE SUMMARY═════════\n"
+            f"Profile                 : {scalp.get('profile', 'scalp_balanced')}\n"
+            f"Mode                    : {'PAPER ONLY' if scalp.get('paper_only', True) else 'LIVE'}\n"
+            f"Timeframes              : {', '.join(scalp.get('timeframes', ['5m', '15m', '30m', '1h']))}\n"
+            f"Candidates              : {scalp.get('candidates', 0)}\n"
+            f"Approved                : {scalp.get('approved', 0)}\n"
+            f"Rejected                : {scalp.get('rejected', 0)}\n"
+            f"Rejection Reasons       : {scalp_reasons or 'none'}\n"
+            f"Latest                  : {last.get('symbol', '-')} status={last.get('status', '-')} "
+            f"score={float(last.get('score', 0.0)):.3f} confidence={float(last.get('confidence', 0.0)):.3f} "
+            f"volume={last.get('volume_state', '-')} reason={last.get('reason', 'no cycle yet')}\n"
+            "════════════════════════════════════\n"
+        )
+        return base_summary + scalp_summary
 
     async def _run_health_logger_loop(self) -> None:
         """Periodically log health stats and diagnostic reports (Requested Log #9 & #11)."""
@@ -1308,6 +1378,18 @@ class CTApplication:
                 logger.info(
                     "health_summary",
                     message_text=summary_text,
+                )
+                scalp_stats = stats.get("scalp", {})
+                logger.info(
+                    "scalp_health_summary",
+                    message_text=(
+                        f"SCALP profile={scalp_stats.get('profile', 'scalp_balanced')} "
+                        f"paper_only={scalp_stats.get('paper_only', True)} "
+                        f"candidates={scalp_stats.get('candidates', 0)} "
+                        f"approved={scalp_stats.get('approved', 0)} "
+                        f"rejected={scalp_stats.get('rejected', 0)} "
+                        f"reasons={scalp_stats.get('rejection_reasons', {})}"
+                    ),
                 )
 
                 # Heartbeat to confirm active monitoring

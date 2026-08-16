@@ -177,6 +177,7 @@ class CycleSummaryResponse(BaseModel):
     scan_cycles: int
     diagnostics: dict[str, Any]
     health_components: dict[str, dict[str, Any]]
+    scalp_summary: dict[str, Any]
 
 
 class OverallPerformanceResponse(BaseModel):
@@ -228,7 +229,16 @@ def _diagnostics_from_stats(stats: dict[str, Any]) -> dict[str, Any]:
         "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
         "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
         "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),
+        "scalp": _scalp_summary_from_stats(stats),
     }
+
+
+def _scalp_summary_from_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    scalp = dict(stats.get("scalp", {}))
+    scalp.setdefault("profile", "scalp_balanced")
+    scalp.setdefault("timeframes", ["5m", "15m", "30m", "1h"])
+    scalp.setdefault("paper_only", True)
+    return scalp
 
 
 def _health_status_label(status: Any) -> str:
@@ -300,6 +310,7 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
     system_health = _health_status_label(health_summary["status"])
     health_components = health_summary.get("components", {})
     diagnostics = _diagnostics_from_stats(stats)
+    scalp_summary = _scalp_summary_from_stats(stats)
 
     # Build formatted text (same formatter used in logs)
     from monitoring.report_formatter import format_cycle_summary
@@ -346,6 +357,7 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
         scan_cycles=stats.get("scan_cycles", 0),
         diagnostics=diagnostics,
         health_components=health_components,
+        scalp_summary=scalp_summary,
     )
 
 
