@@ -89,6 +89,11 @@ class HealthManager:
                 "rejected": 0,
                 "paper_only": True,
                 "rejection_reasons": {},
+                "near_misses": 0,
+                "score_sum": 0.0,
+                "confidence_sum": 0.0,
+                "exit_counts": {},
+                "last_exit": None,
                 "last_decision": None,
                 "last_cycle_at": None,
                 "errors": 0,
@@ -153,6 +158,8 @@ class HealthManager:
         async with self._lock:
             scalp = self._stats["scalp"]
             scalp["candidates"] += 1
+            scalp["score_sum"] += float(decision.get("score", 0.0) or 0.0)
+            scalp["confidence_sum"] += float(decision.get("confidence", 0.0) or 0.0)
             if decision.get("approved"):
                 scalp["approved"] += 1
             else:
@@ -160,7 +167,20 @@ class HealthManager:
                 reason = str(decision.get("reason") or "unknown")
                 reasons = scalp["rejection_reasons"]
                 reasons[reason] = reasons.get(reason, 0) + 1
+                if float(decision.get("score", 0.0) or 0.0) >= 0.50 or float(decision.get("confidence", 0.0) or 0.0) >= 0.45:
+                    scalp["near_misses"] += 1
             scalp["last_decision"] = deepcopy(decision)
+            scalp["last_cycle_at"] = datetime.now(timezone.utc)
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_scalp_exit(self, exit_decision: dict[str, Any]) -> None:
+        """Record a Scalp-only exit decision without touching Swing trade stats."""
+        async with self._lock:
+            scalp = self._stats["scalp"]
+            status = str(exit_decision.get("status") or "hold")
+            counts = scalp["exit_counts"]
+            counts[status] = counts.get(status, 0) + 1
+            scalp["last_exit"] = deepcopy(exit_decision)
             scalp["last_cycle_at"] = datetime.now(timezone.utc)
             self._stats["last_activity"] = datetime.now(timezone.utc)
 

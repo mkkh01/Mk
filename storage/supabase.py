@@ -35,7 +35,6 @@ from contracts.decision import DecisionResult, EntrySignal, RiskAssessment
 from contracts.market import Candle
 from contracts.portfolio import PerformanceMetrics
 from contracts.simulation import SimulatedTrade
-from config.profiles import fixed_timeframes
 from monitoring.logger import get_logger
 
 logger = get_logger(__name__)
@@ -163,9 +162,7 @@ def _trade_from_row(row: asyncpg.Record) -> SimulatedTrade:
 def _coin_from_row(row: asyncpg.Record) -> CoinConfig:
     return CoinConfig(
         symbol=row["symbol"],
-        # Runtime profiles use a fixed union; legacy DB timeframe arrays are
-        # retained for compatibility but are no longer user-controlled.
-        timeframes=fixed_timeframes(),
+        timeframes=list(row["timeframes"]),
         capital=float(row["capital"]),
         risk_percent=float(row["risk_percent"]),
         is_active=bool(row["is_active"]),

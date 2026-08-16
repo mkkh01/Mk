@@ -1,0 +1,1 @@
+{"project_id":"lvvcbqqtjygqlxyhiabm","query":"SELECT d.id, d.symbol, d.source_candle_open_time, d.score, d.confidence, d.rejection_reason, s.idx, s.payload FROM public.decisions d JOIN public.decision_component_signals s ON s.decision_id = d.id WHERE d.created_at >= now() - interval '2 hours' AND d.score >= 0.70 ORDER BY d.created_at DESC, s.idx LIMIT 200"}

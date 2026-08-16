@@ -52,6 +52,7 @@ from contracts.market import Candle
 from data.cleaners import normalize_volume
 from data.validators import InvalidCandleError, validate_binance_kline, validate_candle
 from monitoring.logger import get_logger
+from config.profiles import runtime_fetch_timeframes
 from storage.redis_cache import RedisCache, LIVE_PRICE_TTL_SECONDS
 from storage.supabase import SupabaseClient
 from monitoring.health_manager import health_manager, HealthStatus
@@ -1191,7 +1192,7 @@ class BinanceWSClient:
         for coin in coins:
             if not coin.is_active:
                 continue
-            for tf in coin.timeframes:
+            for tf in runtime_fetch_timeframes(coin.timeframes):
                 key = (coin.symbol, tf)
                 if key in seen:
                     continue

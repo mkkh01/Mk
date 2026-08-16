@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import asdict
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,6 +74,7 @@ from storage.supabase import SupabaseClient
 from monitoring.health_manager import health_manager, HealthStatus
 from monitoring.heartbeat import run_heartbeat_loop
 from engine.scalp import ScalpMonitor
+from config.profiles import runtime_fetch_timeframes
 
 # Type-only imports (avoid hard runtime dependency on layers that may not yet
 # exist when this file is imported in isolation -- e.g. during unit testing).
@@ -146,6 +148,9 @@ class CTApplication:
         # Engine -- built lazily in start_engine().
         self._orchestrator: Optional[Any] = None
         self._scalp_monitor: Optional[ScalpMonitor] = None
+        # Scalp-only paper ledger. It is intentionally separate from Swing's
+        # PaperTrader and is never persisted as a Swing simulated trade.
+        self._scalp_positions: dict[str, dict[str, Any]] = {}
         self._ws_client: Optional[Any] = None  # ingest.binance_ws.BinanceWSClient
 
         # Background tasks. Held so we can cancel them on shutdown.
@@ -764,7 +769,7 @@ class CTApplication:
 
         channels: list[str] = []
         for coin in coins:
-            for tf in coin.timeframes:
+            for tf in runtime_fetch_timeframes(coin.timeframes):
                 channels.append(f"new_candle:{coin.symbol}:{tf}")
 
         if not channels:
@@ -1085,6 +1090,25 @@ class CTApplication:
             try:
                 scalp_decision = await self._scalp_monitor.evaluate(candle.symbol)
                 await health_manager.record_scalp_decision(scalp_decision.to_dict())
+
+                scalp_exit = None
+                position = self._scalp_positions.get(candle.symbol)
+                if position:
+                    scalp_exit = self._scalp_monitor.evaluate_exit(
+                        entry_price=float(position["entry_price"]),
+                        current_price=float(candle.close),
+                        opened_at=position["opened_at"],
+                        now=datetime.now(timezone.utc),
+                    )
+                    await health_manager.record_scalp_exit(asdict(scalp_exit))
+                    if scalp_exit.status != "hold":
+                        self._scalp_positions.pop(candle.symbol, None)
+                if scalp_decision.approved and candle.symbol not in self._scalp_positions:
+                    self._scalp_positions[candle.symbol] = {
+                        "entry_price": float(candle.close),
+                        "opened_at": datetime.now(timezone.utc),
+                        "mode": scalp_decision.mode,
+                    }
                 await health_manager.update_component(
                     "ScalpMonitor",
                     HealthStatus.OK,
@@ -1102,6 +1126,9 @@ class CTApplication:
                     confidence=round(scalp_decision.confidence, 4),
                     volume_state=scalp_decision.volume_state,
                     reason=scalp_decision.reason,
+                    position_count=len(self._scalp_positions),
+                    exit_status=None if scalp_exit is None else scalp_exit.status,
+                    exit_reason=None if scalp_exit is None else scalp_exit.reason,
                     paper_only=True,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -1326,6 +1353,11 @@ class CTApplication:
             f"Candidates              : {scalp.get('candidates', 0)}\n"
             f"Approved                : {scalp.get('approved', 0)}\n"
             f"Rejected                : {scalp.get('rejected', 0)}\n"
+            f"Near-Misses             : {scalp.get('near_misses', 0)}\n"
+            f"Average Score           : {(float(scalp.get('score_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
+            f"Average Confidence      : {(float(scalp.get('confidence_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
+            f"Exit Counts             : {scalp.get('exit_counts', {}) or 'none'}\n"
+            f"Last Exit               : {scalp.get('last_exit') or 'none'}\n"
             f"Rejection Reasons       : {scalp_reasons or 'none'}\n"
             f"Latest                  : {last.get('symbol', '-')} status={last.get('status', '-')} "
             f"score={float(last.get('score', 0.0)):.3f} confidence={float(last.get('confidence', 0.0)):.3f} "

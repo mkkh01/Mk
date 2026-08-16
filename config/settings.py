@@ -6,6 +6,7 @@ reading from environment variables with safe fallbacks.
 """
 
 import os
+import sys
 from contracts.config import SystemConfig
 
 # ---------------------------------------------------------------------------
@@ -29,14 +30,10 @@ REDIS_URL = os.environ.get("REDIS_URL")
 def validate_and_format():
     global DATABASE_URL, REDIS_URL
     missing = []
-    if not TELEGRAM_TOKEN:
-        missing.append("TELEGRAM_BOT_TOKEN")
-    if not DATABASE_URL:
-        missing.append("SUPABASE_URL (Postgres DSN)")
-    if not SUPABASE_KEY:
-        missing.append("SUPABASE_KEY")
-    if not REDIS_URL:
-        missing.append("REDIS_URL")
+    if not TELEGRAM_TOKEN: missing.append("TELEGRAM_BOT_TOKEN")
+    if not DATABASE_URL: missing.append("SUPABASE_URL (Postgres DSN)")
+    if not SUPABASE_KEY: missing.append("SUPABASE_KEY")
+    if not REDIS_URL: missing.append("REDIS_URL")
     
     if missing:
         print(f"CRITICAL CONFIG ERROR: Missing environment variables: {', '.join(missing)}")
@@ -61,7 +58,7 @@ settings = SystemConfig(
     supabase_url=DATABASE_URL or "postgresql://localhost/missing_db",
     supabase_key=SUPABASE_KEY or "MISSING_KEY",
     redis_url=REDIS_URL or "redis://localhost:6379/0",
-    default_timeframes=["5m", "15m", "30m", "1h", "4h"],
+    default_timeframes=["15m", "1h", "4h"],
     max_active_coins=10,
     simulation_mode=True,
     telegram_chat_id=TELEGRAM_CHAT_ID or "0",

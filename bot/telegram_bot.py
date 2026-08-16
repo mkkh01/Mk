@@ -72,11 +72,11 @@ from telegram.ext import (
 from pydantic import ValidationError
 
 from config.thresholds import VALID_TIMEFRAMES
-from config.profiles import fixed_timeframes
 from contracts.config import CoinConfig, SystemConfig
 from contracts.portfolio import PerformanceMetrics
 from contracts.simulation import SimulatedTrade
 from monitoring.logger import get_logger
+from monitoring.health_manager import health_manager
 from storage.redis_cache import RedisCache
 from storage.supabase import SupabaseClient
 from analysis.result_aggregator import ResultAggregator
@@ -111,8 +111,8 @@ CB_STOP_ENGINE = "stop_engine"
 CB_LIVE_PRICES = "live_prices"
 CB_TRADE_HISTORY = "trade_history"
 CB_SYS_PERF = "sys_perf"
-CB_SCALP_STATUS = "scalp_status"
 CB_SYS_PERF_PERIOD = "perf_period:"       # perf_period:<period-key>
+CB_SCALP_STATUS = "scalp_status"
 CB_CONFIRM_YES = "confirm_yes"
 CB_CONFIRM_NO = "confirm_no"
 CB_CANCEL = "cancel"
@@ -244,8 +244,9 @@ class CTTelegramBot:
         # Add-coin conversation flow (Section 7).
         add_coin_conversation = ConversationHandler(
             entry_points=[CallbackQueryHandler(self.cmd_add_coin, pattern=f"^{CB_ADD_COIN}$")],
-                states={
+            states={
                 SYMBOL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self._add_coin_symbol)],
+                TIMEFRAMES: [MessageHandler(filters.TEXT & ~filters.COMMAND, self._add_coin_timeframes)],
                 CAPITAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self._add_coin_capital)],
                 RISK: [MessageHandler(filters.TEXT & ~filters.COMMAND, self._add_coin_risk)],
                 CONFIRM: [
@@ -506,26 +507,24 @@ class CTTelegramBot:
             return SYMBOL
 
         context.user_data["add_symbol"] = symbol
-        fixed = fixed_timeframes()
-        context.user_data["add_timeframes"] = fixed
         await self._reply_safe(
             update,
             context,
             (
                 f"Symbol: {symbol}\n\n"
-                f"Fixed monitoring timeframes: {', '.join(fixed)}\n"
-                "Enter allocated capital (USDT). Must be greater than 0."
+                "Enter timeframes (minimum 3, comma-separated).\n"
+                "Example: 15m,1h,4h\n\n"
+                f"Valid timeframes: {', '.join(sorted(VALID_TIMEFRAMES))}"
             ),
         )
         logger.info(
             "bot_reply",
             timestamp=datetime.now(timezone.utc),
             user_id=user_id,
-            reply_kind="add_coin_fixed_timeframes",
+            reply_kind="add_coin_prompt_timeframes",
             symbol=symbol,
-            timeframes=fixed,
         )
-        return CAPITAL
+        return TIMEFRAMES
 
     async def _add_coin_timeframes(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Validate timeframes and ask for capital."""
@@ -828,7 +827,7 @@ class CTTelegramBot:
     async def _edit_coin_show_options(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str
     ) -> None:
-        """Show the fixed profile timeframes and editable capital/risk actions."""
+        """Show the Edit Timeframes / Edit Capital / Edit Risk / Delete buttons."""
         try:
             coin = await self._supabase.fetch_coin(symbol)
         except Exception as exc:  # noqa: BLE001
@@ -849,7 +848,7 @@ class CTTelegramBot:
 
         body = (
             f"Edit Coin -- {coin.symbol}\n\n"
-            f"- Fixed timeframes: {', '.join(fixed_timeframes())}\n"
+            f"- Timeframes: {', '.join(coin.timeframes)}\n"
             f"- Capital: {coin.capital} USDT\n"
             f"- Risk per trade: {coin.risk_percent}%\n"
             f"- Active: {'yes' if coin.is_active else 'no'}\n\n"
@@ -857,7 +856,10 @@ class CTTelegramBot:
         )
         keyboard = InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("Edit Capital", callback_data=f"{CB_EDIT_CAPITAL}{symbol}")],
+                [
+                    InlineKeyboardButton("Edit Timeframes", callback_data=f"{CB_EDIT_TIMEFRAMES}{symbol}"),
+                    InlineKeyboardButton("Edit Capital", callback_data=f"{CB_EDIT_CAPITAL}{symbol}"),
+                ],
                 [
                     InlineKeyboardButton("Edit Risk", callback_data=f"{CB_EDIT_RISK}{symbol}"),
                     InlineKeyboardButton("Delete Coin", callback_data=f"{CB_DELETE_COIN}{symbol}"),
@@ -1515,6 +1517,29 @@ class CTTelegramBot:
     # =====================================================================
     # Helpers -- navigation
     # =====================================================================
+    async def _show_scalp_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show Scalp-only observability without touching Swing metrics."""
+        stats = await health_manager.get_stats()
+        scalp = stats.get("scalp", {})
+        last = scalp.get("last_decision") or {}
+        reasons = scalp.get("rejection_reasons", {})
+        text = (
+            "Scalp Balanced Monitor (Paper Only)\\n\\n"
+            f"Candidates: {scalp.get('candidates', 0)}\\n"
+            f"Approved: {scalp.get('approved', 0)}\\n"
+            f"Rejected: {scalp.get('rejected', 0)}\\n"
+            f"Near-misses: {scalp.get('near_misses', 0)}\\n"
+            f"Average score/confidence: {(float(scalp.get('score_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}/"
+            f"{(float(scalp.get('confidence_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
+            f"Exit counts: {scalp.get('exit_counts', {}) or 'none'}\n"
+            "Timeframes: 5m, 15m, 30m, 1h\n"
+            f"Reasons: {reasons or 'none'}\n"
+            f"Last: {last.get('symbol', '-')} status={last.get('status', '-')} "
+            f"volume={last.get('volume_state', '-')} reason={last.get('reason', 'no cycle yet')}\n\n"
+            f"{SIM_WARNING_ENGINE}"
+        )
+        await self._reply_safe(update, context, text, reply_markup=self._build_main_menu())
+
     async def _show_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Re-display the main menu."""
         if update.effective_chat is None:
@@ -1603,32 +1628,6 @@ class CTTelegramBot:
                 error_type="TelegramApiRetriesExhausted",
                 error_message=f"giving up after 3 attempts: {last_exc}",
             )
-
-    async def _show_scalp_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Render the independent Scalp Balanced monitor status."""
-        from monitoring.health_manager import health_manager
-
-        stats = await health_manager.get_stats()
-        scalp = stats.get("scalp", {})
-        last = scalp.get("last_decision") or {}
-        reasons = scalp.get("rejection_reasons", {})
-        reason_text = " | ".join(f"{key}: {value}" for key, value in reasons.items()) or "none"
-        text = (
-            "Scalp Balanced Status\n\n"
-            "Mode: Paper only\n"
-            "Timeframes: 5m, 15m, 30m, 1h\n"
-            f"Candidates: {scalp.get('candidates', 0)}\n"
-            f"Approved: {scalp.get('approved', 0)}\n"
-            f"Rejected: {scalp.get('rejected', 0)}\n"
-            f"Rejection reasons: {reason_text}\n\n"
-            f"Last: {last.get('symbol', '-')} | {last.get('status', '-')} | "
-            f"score={float(last.get('score', 0.0)):.3f} | "
-            f"confidence={float(last.get('confidence', 0.0)):.3f}\n"
-            f"Volume: {last.get('volume_state', '-')}\n"
-            f"Reason: {last.get('reason', 'no cycle yet')}\n\n"
-            f"{SIM_WARNING_ENGINE}"
-        )
-        await self._reply_safe(update, context, text, reply_markup=self._build_main_menu())
 
     # =====================================================================
     # Helpers -- formatting (Section 20 templates)

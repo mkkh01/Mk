@@ -23,7 +23,7 @@ settings = SystemConfig(
     supabase_url="https://YOUR-PROJECT.supabase.co",
     supabase_key="YOUR-SUPABASE-SERVICE-KEY",
     redis_url="redis://localhost:6379/0",
-    default_timeframes=["5m", "15m", "30m", "1h", "4h"],
+    default_timeframes=["15m", "1h", "4h"],
     max_active_coins=10,
     simulation_mode=True,
 )
