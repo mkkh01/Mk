@@ -176,6 +176,7 @@
                 <p class="mb-2">Active Coins: <span id="active-coins" class="font-semibold text-sm">Loading...</span></p>
                 <p class="mb-2">Last Data: <span id="last-data-at" class="font-semibold">Loading...</span></p>
                 <p>Errors: <span id="system-errors" class="font-semibold">Loading...</span></p>
+                <p>Limit not filled: <span id="limit-not-filled" class="font-semibold">0</span></p>
                 <p class="mb-2">Health: <span id="health-status" class="font-semibold">Loading...</span></p>
                 <p class="text-xs text-red-300" id="last-error">Last error: none</p>
                 <p class="text-xs text-gray-400" id="health-detail">Health detail: Loading...</p>
@@ -377,6 +378,7 @@
                 document.getElementById('last-data-at').textContent = data.last_data_at ? new Date(data.last_data_at).toLocaleString() : 'N/A';
                 document.getElementById('system-errors').textContent = data.errors;
                 document.getElementById('system-errors').className = data.errors > 0 ? 'font-semibold text-red-500' : 'font-semibold text-green-500';
+                document.getElementById('limit-not-filled').textContent = data.limit_not_filled || 0;
                 const lastError = data.last_error;
                 document.getElementById('last-error').textContent = lastError
                     ? `Last error: ${lastError.error_type || 'Error'} | ${lastError.module || '-'} | ${lastError.message || '-'} | ${lastError.at || '-'}`

@@ -1030,9 +1030,23 @@ class CTApplication:
                     # prerequisite for recording an approved decision.
                     if result.entry:
                         try:
-                            from simulation.paper_trade import PaperTrader
+                            from simulation.paper_trade import LimitNotFilledError, PaperTrader
                             trader = PaperTrader(self._supabase, redis=self._redis)
                             trade = await trader.open_trade(result)
+                        except LimitNotFilledError as trade_exc:
+                            await health_manager.record_limit_not_filled(
+                                candle.symbol, str(trade_exc)
+                            )
+                            logger.warning(
+                                "limit_not_filled_operational",
+                                timestamp=datetime.now(timezone.utc),
+                                module="app.main",
+                                error_type=type(trade_exc).__name__,
+                                error_message=str(trade_exc),
+                                decision_id=str(result.id),
+                                symbol=candle.symbol,
+                                note="approved paper limit was not filled; no simulated position created",
+                            )
                         except Exception as trade_exc:
                             logger.error(
                                 "trade_open_failed",

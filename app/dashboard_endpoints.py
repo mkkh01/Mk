@@ -153,6 +153,8 @@ class SystemHealthResponse(BaseModel):
     health_components: dict[str, dict[str, Any]]
     diagnostics: dict[str, Any]
     last_error: Optional[dict[str, Any]] = None
+    limit_not_filled: int = 0
+    operational_rejection_reasons: dict[str, int] = {}
 
 
 class CycleSummaryResponse(BaseModel):
@@ -180,6 +182,8 @@ class CycleSummaryResponse(BaseModel):
     health_components: dict[str, dict[str, Any]]
     scalp_summary: dict[str, Any]
     last_error: Optional[dict[str, Any]] = None
+    limit_not_filled: int = 0
+    operational_rejection_reasons: dict[str, int] = {}
 
 
 class OverallPerformanceResponse(BaseModel):
@@ -228,6 +232,8 @@ def _diagnostics_from_stats(stats: dict[str, Any]) -> dict[str, Any]:
         "signal_quality_failure_reasons": dict(stats.get("signal_quality_failure_reasons", {})),
         "quality_observations": list(stats.get("signal_quality_observations", [])),
         "db_write_failures": int(stats.get("db_write_failures", 0)),
+        "limit_not_filled": int(stats.get("limit_not_filled_count", 0)),
+        "operational_rejection_reasons": dict(stats.get("operational_rejection_reasons", {})),
         "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
         "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
         "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),
@@ -361,6 +367,8 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
         health_components=health_components,
         scalp_summary=scalp_summary,
         last_error=stats.get("last_error"),
+        limit_not_filled=stats.get("limit_not_filled_count", 0),
+        operational_rejection_reasons=stats.get("operational_rejection_reasons", {}),
     )
 
 
@@ -393,6 +401,8 @@ async def get_system_health_endpoint(request: Request) -> SystemHealthResponse:
         "health_components": health_summary.get("components", {}),
         "diagnostics": _diagnostics_from_stats(stats),
         "last_error": stats.get("last_error"),
+        "limit_not_filled": stats.get("limit_not_filled_count", 0),
+        "operational_rejection_reasons": stats.get("operational_rejection_reasons", {}),
     }
     
     # Fetch active coins for the dashboard

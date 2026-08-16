@@ -56,6 +56,8 @@ class HealthManager:
             "trades_simulated": 0,
             "errors_count": 0,
             "last_error": None,
+            "limit_not_filled_count": 0,
+            "operational_rejection_reasons": {},
             "warnings_count": 0,
             "opportunities_found": 0,
             "opportunities_rejected": 0,
@@ -162,6 +164,14 @@ class HealthManager:
                 "message": str(message),
                 "at": datetime.now(timezone.utc).isoformat(),
             }
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_limit_not_filled(self, symbol: str, message: str) -> None:
+        """Record a paper limit that did not fill as an operational outcome."""
+        async with self._lock:
+            self._stats["limit_not_filled_count"] += 1
+            reasons = self._stats["operational_rejection_reasons"]
+            reasons["limit_not_filled"] = reasons.get("limit_not_filled", 0) + 1
             self._stats["last_activity"] = datetime.now(timezone.utc)
 
     async def increment_stat(self, key: str, amount: int = 1):

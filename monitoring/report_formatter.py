@@ -247,6 +247,10 @@ def format_cycle_summary(
     for reason, count in pre_timing_reasons.items():
         lines.append(f"Pre-Timing Block - {reason:<8}: {count}")
     lines.append(f"DB Write Failures        : {diag.get('db_write_failures', 0)}")
+    lines.append(f"Limit Not Filled         : {diag.get('limit_not_filled', 0)}")
+    operational_reasons = diag.get("operational_rejection_reasons", {}) or {}
+    if operational_reasons:
+        lines.append(f"Operational Rejections   : {operational_reasons}")
     lines.append(f"Entry Timing Checked     : {diag.get('entry_timing_checked', 0)}")
     lines.append(f"Entry Timing Passed      : {diag.get('entry_timing_passed', 0)}")
     timing_reasons = diag.get("timing_rejection_reasons", {}) or {}

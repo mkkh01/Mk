@@ -80,6 +80,18 @@ def test_scalp_exit_uses_net_target_and_time_limit():
 
 
 @pytest.mark.asyncio
+async def test_limit_not_filled_is_operational_not_system_error():
+    manager = HealthManager()
+    await manager.record_limit_not_filled("ATOMUSDT", "limit moved away")
+
+    stats = await manager.get_stats()
+
+    assert stats["limit_not_filled_count"] == 1
+    assert stats["operational_rejection_reasons"] == {"limit_not_filled": 1}
+    assert stats["errors_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_health_manager_exposes_last_error_and_downgrades_health():
     manager = HealthManager()
     await manager.record_error("app.main", "TestError", "synthetic test diagnostic")
