@@ -68,6 +68,7 @@ class ScalpExitDecision:
     gross_pnl_pct: float
     net_pnl_pct: float
     held_minutes: float
+    exit_price: float = 0.0
 
 
 class ScalpMonitor:
@@ -176,23 +177,45 @@ class ScalpMonitor:
         opened_at: datetime,
         now: datetime | None = None,
         direction: str = "long",
+        low_price: float | None = None,
+        high_price: float | None = None,
     ) -> ScalpExitDecision:
         """Compute Scalp-only exit reasons; never used by Swing paper trades."""
         now = now or datetime.now(timezone.utc)
         opened_at = opened_at.replace(tzinfo=timezone.utc) if opened_at.tzinfo is None else opened_at
         held_minutes = max(0.0, (now - opened_at).total_seconds() / 60.0)
         if entry_price <= 0 or current_price <= 0:
-            return ScalpExitDecision("hold", "invalid_price", 0.0, 0.0, held_minutes)
-        sign = -1.0 if direction == "short" else 1.0
+            return ScalpExitDecision("hold", "invalid_price", 0.0, 0.0, held_minutes, current_price)
+        is_short = direction == "short"
+        sign = -1.0 if is_short else 1.0
         gross = sign * (current_price - entry_price) / entry_price
+        exit_price = current_price
+        target_price = entry_price * (1.0 - SCALP_TARGET_PCT if is_short else 1.0 + SCALP_TARGET_PCT)
+        stop_price = entry_price * (1.0 + SCALP_STOP_PCT if is_short else 1.0 - SCALP_STOP_PCT)
+        target_touched = (
+            high_price is not None and low_price is not None and
+            ((is_short and low_price <= target_price) or (not is_short and high_price >= target_price))
+        )
+        stop_touched = (
+            low_price is not None and high_price is not None and
+            ((is_short and high_price >= stop_price) or (not is_short and low_price <= stop_price))
+        )
+        if stop_touched or gross <= -SCALP_STOP_PCT:
+            exit_price = stop_price if stop_touched else current_price
+            gross = sign * (exit_price - entry_price) / entry_price
+            net = gross - SCALP_ROUND_TRIP_COST_PCT
+            return ScalpExitDecision("stop_loss", "scalp_stop_reached", gross, net, held_minutes, exit_price)
+        if target_touched:
+            exit_price = target_price
+            gross = sign * (exit_price - entry_price) / entry_price
+            net = gross - SCALP_ROUND_TRIP_COST_PCT
+            return ScalpExitDecision("take_profit", "net_target_reached_intrabar", gross, net, held_minutes, exit_price)
         net = gross - SCALP_ROUND_TRIP_COST_PCT
-        if net >= SCALP_TARGET_PCT - SCALP_ROUND_TRIP_COST_PCT:
-            return ScalpExitDecision("take_profit", "net_target_reached", gross, net, held_minutes)
-        if gross <= -SCALP_STOP_PCT:
-            return ScalpExitDecision("stop_loss", "scalp_stop_reached", gross, net, held_minutes)
+        if gross >= SCALP_TARGET_PCT:
+            return ScalpExitDecision("take_profit", "net_target_reached", gross, net, held_minutes, exit_price)
         if held_minutes >= SCALP_MAX_HOLD_MINUTES:
-            return ScalpExitDecision("time_exit", "max_hold_minutes", gross, net, held_minutes)
-        return ScalpExitDecision("hold", "within_scalp_limits", gross, net, held_minutes)
+            return ScalpExitDecision("time_exit", "max_hold_minutes", gross, net, held_minutes, exit_price)
+        return ScalpExitDecision("hold", "within_scalp_limits", gross, net, held_minutes, exit_price)
 
     @staticmethod
     def _classify_volume(candles: list[Any], payload: dict[str, Any]) -> str:

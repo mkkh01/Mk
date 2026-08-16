@@ -142,8 +142,9 @@
                 <div class="text-sm font-semibold text-cyan-300 mb-2">Scalp Balanced Monitor (Paper Only)</div>
                 <div class="grid-auto">
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Candidates</div><div class="text-lg font-bold text-cyan-300" id="scalp-candidates">-</div></div>
-                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Approved</div><div class="text-lg font-bold text-green-300" id="scalp-approved">-</div></div>
-                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Rejected</div><div class="text-lg font-bold text-yellow-300" id="scalp-rejected">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Approved Signals</div><div class="text-lg font-bold text-green-300" id="scalp-approved">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Rejected Signals</div><div class="text-lg font-bold text-yellow-300" id="scalp-rejected">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Entries</div><div class="text-lg font-bold text-cyan-300" id="scalp-entries">-</div></div>
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Open Trades</div><div class="text-lg font-bold text-blue-300" id="scalp-open">-</div></div>
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Closed Trades</div><div class="text-lg font-bold text-purple-300" id="scalp-closed">-</div></div>
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Wins</div><div class="text-lg font-bold text-green-300" id="scalp-wins">-</div></div>
@@ -267,6 +268,7 @@
                 document.getElementById('scalp-rejected').textContent = scalp.rejected ?? 0;
                 const scalpOpen = scalp.open_trades || [];
                 const scalpClosed = scalp.closed_trades || [];
+                document.getElementById('scalp-entries').textContent = scalp.entries ?? 0;
                 document.getElementById('scalp-open').textContent = scalpOpen.length;
                 document.getElementById('scalp-closed').textContent = scalpClosed.length;
                 document.getElementById('scalp-wins').textContent = scalp.wins ?? 0;
@@ -282,7 +284,8 @@
                     : `No open trades | Closed net: ${(Number(scalp.net_pnl_pct || 0) * 100).toFixed(3)}%`;
                 document.getElementById('scalp-trades').textContent = `Scalp trades: ${scalpTradeText}`;
                 const scalpReasons = scalp.rejection_reasons || {};
-                document.getElementById('scalp-rejections').textContent = `Scalp rejection reasons: ${Object.entries(scalpReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'}`;
+                const scalpEntryBlocks = scalp.entry_block_reasons || {};
+                document.getElementById('scalp-rejections').textContent = `Scalp rejection reasons: ${Object.entries(scalpReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'} | Entry blocks: ${Object.entries(scalpEntryBlocks).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'}`;
 
                 // v2-confluence diagnostics
                 const diagnostics = data.diagnostics || {};

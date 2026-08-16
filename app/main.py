@@ -74,7 +74,7 @@ from storage.supabase import SupabaseClient
 from monitoring.health_manager import health_manager, HealthStatus
 from monitoring.heartbeat import run_heartbeat_loop
 from engine.scalp import ScalpMonitor
-from config.profiles import runtime_fetch_timeframes
+from config.profiles import SCALP_REENTRY_COOLDOWN_MINUTES, runtime_fetch_timeframes
 
 # Type-only imports (avoid hard runtime dependency on layers that may not yet
 # exist when this file is imported in isolation -- e.g. during unit testing).
@@ -151,6 +151,7 @@ class CTApplication:
         # Scalp-only paper ledger. It is intentionally separate from Swing's
         # PaperTrader and is never persisted as a Swing simulated trade.
         self._scalp_positions: dict[str, dict[str, Any]] = {}
+        self._scalp_last_closed_at: dict[str, datetime] = {}
         self._ws_client: Optional[Any] = None  # ingest.binance_ws.BinanceWSClient
 
         # Background tasks. Held so we can cancel them on shutdown.
@@ -1105,6 +1106,8 @@ class CTApplication:
                         current_price=float(candle.close),
                         opened_at=position["opened_at"],
                         now=datetime.now(timezone.utc),
+                        low_price=float(candle.low),
+                        high_price=float(candle.high),
                     )
                     await health_manager.record_scalp_exit(asdict(scalp_exit))
                     if scalp_exit.status != "hold":
@@ -1114,16 +1117,20 @@ class CTApplication:
                                 "symbol": candle.symbol,
                                 "direction": "long",
                                 "entry_price": float(position["entry_price"]),
-                                "exit_price": float(candle.close),
+                                "exit_price": float(scalp_exit.exit_price or candle.close),
                                 "opened_at": position["opened_at"].isoformat(),
                                 "closed_at": datetime.now(timezone.utc).isoformat(),
                                 "exit_status": scalp_exit.status,
                                 "exit_reason": scalp_exit.reason,
+                                "signal_score": position.get("signal_score", 0.0),
+                                "signal_confidence": position.get("signal_confidence", 0.0),
+                                "signal_evaluated_at": position.get("signal_evaluated_at", ""),
                                 "gross_pnl_pct": scalp_exit.gross_pnl_pct,
                                 "net_pnl_pct": scalp_exit.net_pnl_pct,
                                 "paper_only": True,
                             }
                         )
+                        self._scalp_last_closed_at[candle.symbol] = datetime.now(timezone.utc)
                         self._scalp_positions.pop(candle.symbol, None)
                     else:
                         await health_manager.record_scalp_position(
@@ -1138,16 +1145,32 @@ class CTApplication:
                                 "gross_pnl_pct": scalp_exit.gross_pnl_pct,
                                 "net_pnl_pct": scalp_exit.net_pnl_pct,
                                 "mode": position.get("mode", "balanced"),
+                                "signal_score": position.get("signal_score", 0.0),
+                                "signal_confidence": position.get("signal_confidence", 0.0),
+                                "signal_evaluated_at": position.get("signal_evaluated_at", ""),
                                 "paper_only": True,
                             }
                         )
-                if scalp_decision.approved and candle.symbol not in self._scalp_positions:
+                closed_at = self._scalp_last_closed_at.get(candle.symbol)
+                cooldown_active = bool(
+                    closed_at
+                    and (datetime.now(timezone.utc) - closed_at).total_seconds()
+                    < SCALP_REENTRY_COOLDOWN_MINUTES * 60
+                )
+                if scalp_decision.approved and candle.symbol in self._scalp_positions:
+                    await health_manager.record_scalp_entry_block("position_already_open")
+                elif scalp_decision.approved and cooldown_active:
+                    await health_manager.record_scalp_entry_block("reentry_cooldown_after_exit")
+                elif scalp_decision.approved:
                     opened_at = datetime.now(timezone.utc)
                     position = {
                         "id": f"scalp-{candle.symbol}-{opened_at.strftime('%Y%m%dT%H%M%S')}",
                         "entry_price": float(candle.close),
                         "opened_at": opened_at,
                         "mode": scalp_decision.mode,
+                        "signal_score": scalp_decision.score,
+                        "signal_confidence": scalp_decision.confidence,
+                        "signal_evaluated_at": scalp_decision.evaluated_at,
                     }
                     self._scalp_positions[candle.symbol] = position
                     await health_manager.record_scalp_entry(
@@ -1160,6 +1183,10 @@ class CTApplication:
                             "opened_at": opened_at.isoformat(),
                             "status": "open",
                             "mode": position["mode"],
+                            "signal_score": scalp_decision.score,
+                            "signal_confidence": scalp_decision.confidence,
+                            "signal_evaluated_at": scalp_decision.evaluated_at,
+                            "signal_reason": scalp_decision.reason,
                             "paper_only": True,
                         }
                     )
@@ -1410,10 +1437,11 @@ class CTApplication:
             f"Mode                    : {'PAPER ONLY' if scalp.get('paper_only', True) else 'LIVE'}\n"
             f"Timeframes              : {', '.join(scalp.get('timeframes', ['5m', '15m', '30m', '1h']))}\n"
             f"Candidates              : {scalp.get('candidates', 0)}\n"
-            f"Approved                : {scalp.get('approved', 0)}\n"
-            f"Rejected                : {scalp.get('rejected', 0)}\n"
+            f"Approved Signals        : {scalp.get('approved', 0)}\n"
+            f"Rejected Signals        : {scalp.get('rejected', 0)}\n"
             f"Near-Misses             : {scalp.get('near_misses', 0)}\n"
             f"Entries/Open/Closed     : {scalp.get('entries', 0)}/{len(scalp.get('open_trades', []))}/{len(scalp.get('closed_trades', []))}\n"
+            f"Entry Blocks            : {scalp.get('entry_block_reasons', {}) or 'none'}\n"
             f"Wins/Losses/Net         : {scalp.get('wins', 0)}/{scalp.get('losses', 0)}/{float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%\n"
             f"Average Score           : {(float(scalp.get('score_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
             f"Average Confidence      : {(float(scalp.get('confidence_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"

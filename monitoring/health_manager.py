@@ -96,6 +96,7 @@ class HealthManager:
                 "confidence_sum": 0.0,
                 "exit_counts": {},
                 "entries": 0,
+                "entry_block_reasons": {},
                 "wins": 0,
                 "losses": 0,
                 "net_pnl_pct": 0.0,
@@ -188,6 +189,16 @@ class HealthManager:
                 if float(decision.get("score", 0.0) or 0.0) >= 0.50 or float(decision.get("confidence", 0.0) or 0.0) >= 0.45:
                     scalp["near_misses"] += 1
             scalp["last_decision"] = deepcopy(decision)
+            scalp["last_cycle_at"] = datetime.now(timezone.utc)
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_scalp_entry_block(self, reason: str) -> None:
+        """Explain an approved signal that did not open a second paper position."""
+        async with self._lock:
+            scalp = self._stats["scalp"]
+            reasons = scalp["entry_block_reasons"]
+            key = str(reason or "unknown")
+            reasons[key] = reasons.get(key, 0) + 1
             scalp["last_cycle_at"] = datetime.now(timezone.utc)
             self._stats["last_activity"] = datetime.now(timezone.utc)
 

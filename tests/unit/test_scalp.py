@@ -42,11 +42,28 @@ def test_balanced_reversal_requires_strong_5m_and_15m_bullish_structure():
     )
 
 
+def test_scalp_intrabar_stop_is_capped_at_configured_stop_price():
+    monitor = ScalpMonitor(None)
+    opened_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    exit_decision = monitor.evaluate_exit(
+        entry_price=100.0,
+        current_price=99.0,
+        opened_at=opened_at,
+        low_price=98.0,
+        high_price=101.0,
+    )
+
+    assert exit_decision.status == "stop_loss"
+    assert exit_decision.exit_price == pytest.approx(99.75)
+    assert exit_decision.gross_pnl_pct == pytest.approx(-0.0025)
+    assert exit_decision.net_pnl_pct == pytest.approx(-0.0035)
+
+
 def test_scalp_exit_uses_net_target_and_time_limit():
     opened = datetime(2026, 1, 1, tzinfo=timezone.utc)
     target = ScalpMonitor.evaluate_exit(
         entry_price=100.0,
-        current_price=100.4,
+        current_price=100.6,
         opened_at=opened,
         now=opened + timedelta(minutes=5),
     )
@@ -60,6 +77,25 @@ def test_scalp_exit_uses_net_target_and_time_limit():
     assert target.status == "take_profit"
     assert target.net_pnl_pct > 0
     assert timed.status == "time_exit"
+
+
+@pytest.mark.asyncio
+async def test_scalp_approved_signal_and_entry_are_separate_counters():
+    manager = HealthManager()
+    await manager.record_scalp_decision(
+        {
+            "symbol": "BTCUSDT",
+            "approved": True,
+            "score": 0.80,
+            "confidence": 0.75,
+        }
+    )
+    await manager.record_scalp_entry_block("position_already_open")
+    stats = (await manager.get_stats())["scalp"]
+
+    assert stats["approved"] == 1
+    assert stats["entries"] == 0
+    assert stats["entry_block_reasons"] == {"position_already_open": 1}
 
 
 @pytest.mark.asyncio

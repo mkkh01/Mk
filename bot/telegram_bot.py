@@ -1535,10 +1535,11 @@ class CTTelegramBot:
             f"State Detail: {scalp.get('state_reason', 'no state recorded')}",
             "",
             f"Candidates: {scalp.get('candidates', 0)}",
-            f"Approved: {scalp.get('approved', 0)}",
-            f"Rejected: {scalp.get('rejected', 0)}",
+            f"Approved Signals: {scalp.get('approved', 0)}",
+            f"Rejected Signals: {scalp.get('rejected', 0)}",
             f"Near-misses: {scalp.get('near_misses', 0)}",
             f"Entries: {scalp.get('entries', 0)} | Open: {len(open_trades)} | Closed: {len(closed_trades)}",
+            f"Entry blocks: {scalp.get('entry_block_reasons', {}) or 'none'}",
             f"Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)} | Net: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%",
             f"Successful trades: {len(winners)}",
             "",
@@ -1549,7 +1550,8 @@ class CTTelegramBot:
                 f"- {trade.get('symbol', '-')} | HOLDING | entry={float(trade.get('entry_price', 0.0)):.6f} "
                 f"current={float(trade.get('current_price', 0.0)):.6f} | "
                 f"move={float(trade.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
-                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%"
+                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
+                f"signal={float(trade.get('signal_score', 0.0) or 0.0):.3f}/{float(trade.get('signal_confidence', 0.0) or 0.0):.3f}"
                 for trade in open_trades[-5:]
             )
         else:
@@ -1563,7 +1565,8 @@ class CTTelegramBot:
         if winners:
             lines.extend(
                 f"- {trade.get('symbol', '-')} | WIN | exit={trade.get('exit_status', 'closed')} "
-                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%"
+                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
+                f"signal={float(trade.get('signal_score', 0.0) or 0.0):.3f}/{float(trade.get('signal_confidence', 0.0) or 0.0):.3f}"
                 for trade in winners[-5:]
             )
         else:
@@ -1592,7 +1595,7 @@ class CTTelegramBot:
             f"Monitor State: {str(scalp.get('state', 'UNKNOWN')).upper()}",
             f"State Detail: {scalp.get('state_reason', 'no state recorded')}",
             "",
-            f"Open: {len(open_trades)} | Closed: {len(closed_trades)} | Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)}",
+            f"Entries: {scalp.get('entries', 0)} | Open: {len(open_trades)} | Closed: {len(closed_trades)} | Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)}",
             f"Net result: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%",
             "",
             "OPEN:",
@@ -1602,7 +1605,8 @@ class CTTelegramBot:
                 f"{trade.get('symbol', '-')} | HOLDING | entry={float(trade.get('entry_price', 0.0)):.6f} | "
                 f"current={float(trade.get('current_price', 0.0)):.6f} | "
                 f"move={float(trade.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
-                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%"
+                f"net-after-cost={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | "
+                f"signal={float(trade.get('signal_score', 0.0) or 0.0):.3f}/{float(trade.get('signal_confidence', 0.0) or 0.0):.3f}"
                 for trade in open_trades[-10:]
             )
         else:
