@@ -113,6 +113,7 @@ CB_TRADE_HISTORY = "trade_history"
 CB_SYS_PERF = "sys_perf"
 CB_SYS_PERF_PERIOD = "perf_period:"       # perf_period:<period-key>
 CB_SCALP_STATUS = "scalp_status"
+CB_SCALP_TRADES = "scalp_trades"
 CB_CONFIRM_YES = "confirm_yes"
 CB_CONFIRM_NO = "confirm_no"
 CB_CANCEL = "cancel"
@@ -374,6 +375,8 @@ class CTTelegramBot:
                 await self._system_performance_prompt_period(update, context)
             elif data == CB_SCALP_STATUS:
                 await self._show_scalp_status(update, context)
+            elif data == CB_SCALP_TRADES:
+                await self._show_scalp_trades(update, context)
             elif data.startswith(CB_SYS_PERF_PERIOD):
                 period_key = data[len(CB_SYS_PERF_PERIOD):]
                 await self.cmd_system_performance(update, context, period_key)
@@ -1518,27 +1521,98 @@ class CTTelegramBot:
     # Helpers -- navigation
     # =====================================================================
     async def _show_scalp_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show Scalp-only observability without touching Swing metrics."""
+        """Show Scalp counters plus open/closed paper-trade outcomes."""
         stats = await health_manager.get_stats()
         scalp = stats.get("scalp", {})
         last = scalp.get("last_decision") or {}
         reasons = scalp.get("rejection_reasons", {})
-        text = (
-            "Scalp Balanced Monitor (Paper Only)\\n\\n"
-            f"Candidates: {scalp.get('candidates', 0)}\\n"
-            f"Approved: {scalp.get('approved', 0)}\\n"
-            f"Rejected: {scalp.get('rejected', 0)}\\n"
-            f"Near-misses: {scalp.get('near_misses', 0)}\\n"
-            f"Average score/confidence: {(float(scalp.get('score_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}/"
-            f"{(float(scalp.get('confidence_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
-            f"Exit counts: {scalp.get('exit_counts', {}) or 'none'}\n"
-            "Timeframes: 5m, 15m, 30m, 1h\n"
-            f"Reasons: {reasons or 'none'}\n"
-            f"Last: {last.get('symbol', '-')} status={last.get('status', '-')} "
-            f"volume={last.get('volume_state', '-')} reason={last.get('reason', 'no cycle yet')}\n\n"
-            f"{SIM_WARNING_ENGINE}"
+        open_trades = scalp.get("open_trades", [])
+        closed_trades = scalp.get("closed_trades", [])
+        winners = [trade for trade in closed_trades if float(trade.get("net_pnl_pct", 0.0) or 0.0) > 0]
+        lines = [
+            "Scalp Balanced Monitor (Paper Only)",
+            "",
+            f"Candidates: {scalp.get('candidates', 0)}",
+            f"Approved: {scalp.get('approved', 0)}",
+            f"Rejected: {scalp.get('rejected', 0)}",
+            f"Near-misses: {scalp.get('near_misses', 0)}",
+            f"Entries: {scalp.get('entries', 0)} | Open: {len(open_trades)} | Closed: {len(closed_trades)}",
+            f"Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)} | Net: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%",
+            f"Successful trades: {len(winners)}",
+            "",
+            "Open Scalp trades:",
+        ]
+        if open_trades:
+            lines.extend(
+                f"- {trade.get('symbol', '-')} entry={float(trade.get('entry_price', 0.0)):.6f} "
+                f"current={float(trade.get('current_price', 0.0)):.6f} "
+                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                for trade in open_trades[-5:]
+            )
+        else:
+            lines.append("- none")
+        lines.extend(
+            [
+                "",
+                "Latest successful Scalp trades:",
+            ]
         )
-        await self._reply_safe(update, context, text, reply_markup=self._build_main_menu())
+        if winners:
+            lines.extend(
+                f"- {trade.get('symbol', '-')} {trade.get('exit_status', 'closed')} "
+                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                for trade in winners[-5:]
+            )
+        else:
+            lines.append("- none yet")
+        lines.extend(
+            [
+                "",
+                f"Timeframes: {', '.join(scalp.get('timeframes', ['5m', '15m', '30m', '1h']))}",
+                f"Reasons: {reasons or 'none'}",
+                f"Last decision: {last.get('symbol', '-')} status={last.get('status', '-')} "
+                f"volume={last.get('volume_state', '-')} reason={last.get('reason', 'no cycle yet')}",
+                "",
+                SIM_WARNING_ENGINE,
+            ]
+        )
+        await self._reply_safe(update, context, chr(10).join(lines), reply_markup=self._build_main_menu())
+
+    async def _show_scalp_trades(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show the dedicated Scalp paper-trade ledger, never Swing history."""
+        stats = await health_manager.get_stats()
+        scalp = stats.get("scalp", {})
+        open_trades = scalp.get("open_trades", [])
+        closed_trades = scalp.get("closed_trades", [])
+        lines = [
+            "Scalp Trades (Paper Only)",
+            "",
+            f"Open: {len(open_trades)} | Closed: {len(closed_trades)} | Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)}",
+            f"Net result: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%",
+            "",
+            "OPEN:",
+        ]
+        if open_trades:
+            lines.extend(
+                f"{trade.get('symbol', '-')} | entry={float(trade.get('entry_price', 0.0)):.6f} | "
+                f"current={float(trade.get('current_price', 0.0)):.6f} | "
+                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                for trade in open_trades[-10:]
+            )
+        else:
+            lines.append("none")
+        lines.extend(["", "CLOSED:"])
+        if closed_trades:
+            lines.extend(
+                f"{trade.get('symbol', '-')} | {trade.get('exit_status', 'closed')} | "
+                f"entry={float(trade.get('entry_price', 0.0)):.6f} | exit={float(trade.get('exit_price', 0.0)):.6f} | "
+                f"net={float(trade.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%"
+                for trade in closed_trades[-10:]
+            )
+        else:
+            lines.append("none yet")
+        lines.extend(["", SIM_WARNING_ENGINE])
+        await self._reply_safe(update, context, chr(10).join(lines), reply_markup=self._build_main_menu())
 
     async def _show_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Re-display the main menu."""
@@ -1649,7 +1723,10 @@ class CTTelegramBot:
                     InlineKeyboardButton("Trade History", callback_data=CB_TRADE_HISTORY),
                 ],
                 [InlineKeyboardButton("System Performance", callback_data=CB_SYS_PERF)],
-                [InlineKeyboardButton("Scalp Status", callback_data=CB_SCALP_STATUS)],
+                [
+                    InlineKeyboardButton("Scalp Status", callback_data=CB_SCALP_STATUS),
+                    InlineKeyboardButton("Scalp Trades", callback_data=CB_SCALP_TRADES),
+                ],
             ]
         )
 

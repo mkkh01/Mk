@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from config.profiles import (
     ALL_MONITORED_TIMEFRAMES,
     SCALP_TIMEFRAMES,
@@ -10,6 +12,7 @@ from config.profiles import (
     runtime_fetch_timeframes,
 )
 from engine.scalp import ScalpMonitor
+from monitoring.health_manager import HealthManager
 from tests.conftest import make_candle
 
 
@@ -57,6 +60,51 @@ def test_scalp_exit_uses_net_target_and_time_limit():
     assert target.status == "take_profit"
     assert target.net_pnl_pct > 0
     assert timed.status == "time_exit"
+
+
+@pytest.mark.asyncio
+async def test_scalp_trade_ledger_tracks_open_and_successful_closed_trade():
+    manager = HealthManager()
+    await manager.record_scalp_entry(
+        {
+            "id": "scalp-BTC-1",
+            "symbol": "BTCUSDT",
+            "entry_price": 100.0,
+            "current_price": 100.0,
+            "status": "open",
+            "paper_only": True,
+        }
+    )
+    await manager.record_scalp_position(
+        {
+            "id": "scalp-BTC-1",
+            "symbol": "BTCUSDT",
+            "entry_price": 100.0,
+            "current_price": 100.3,
+            "net_pnl_pct": 0.002,
+            "status": "open",
+            "paper_only": True,
+        }
+    )
+    await manager.record_scalp_close(
+        {
+            "id": "scalp-BTC-1",
+            "symbol": "BTCUSDT",
+            "entry_price": 100.0,
+            "exit_price": 100.4,
+            "exit_status": "take_profit",
+            "net_pnl_pct": 0.003,
+            "paper_only": True,
+        }
+    )
+    stats = (await manager.get_stats())["scalp"]
+
+    assert stats["entries"] == 1
+    assert stats["open_trades"] == []
+    assert stats["wins"] == 1
+    assert stats["losses"] == 0
+    assert stats["closed_trades"][0]["exit_status"] == "take_profit"
+    assert stats["net_pnl_pct"] == pytest.approx(0.003)
 
 
 def test_scalp_volume_state_distinguishes_bullish_bearish_neutral_and_missing():

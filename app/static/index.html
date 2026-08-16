@@ -144,9 +144,14 @@
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Candidates</div><div class="text-lg font-bold text-cyan-300" id="scalp-candidates">-</div></div>
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Approved</div><div class="text-lg font-bold text-green-300" id="scalp-approved">-</div></div>
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Rejected</div><div class="text-lg font-bold text-yellow-300" id="scalp-rejected">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Open Trades</div><div class="text-lg font-bold text-blue-300" id="scalp-open">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Closed Trades</div><div class="text-lg font-bold text-purple-300" id="scalp-closed">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Wins</div><div class="text-lg font-bold text-green-300" id="scalp-wins">-</div></div>
+                    <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Losses</div><div class="text-lg font-bold text-red-300" id="scalp-losses">-</div></div>
                 </div>
                 <div class="mt-3 text-xs text-gray-400" id="scalp-profile">Profile: scalp_balanced | Timeframes: 5m, 15m, 30m, 1h | Paper only</div>
                 <div class="mt-2 text-xs text-gray-400" id="scalp-last">Last Scalp decision: -</div>
+                <div class="mt-2 text-xs text-gray-400" id="scalp-trades">Scalp trades: -</div>
                 <div class="mt-2 text-xs text-gray-400" id="scalp-rejections">Scalp rejection reasons: -</div>
             </div>
 
@@ -259,11 +264,21 @@
                 document.getElementById('scalp-candidates').textContent = scalp.candidates ?? 0;
                 document.getElementById('scalp-approved').textContent = scalp.approved ?? 0;
                 document.getElementById('scalp-rejected').textContent = scalp.rejected ?? 0;
+                const scalpOpen = scalp.open_trades || [];
+                const scalpClosed = scalp.closed_trades || [];
+                document.getElementById('scalp-open').textContent = scalpOpen.length;
+                document.getElementById('scalp-closed').textContent = scalpClosed.length;
+                document.getElementById('scalp-wins').textContent = scalp.wins ?? 0;
+                document.getElementById('scalp-losses').textContent = scalp.losses ?? 0;
                 document.getElementById('scalp-profile').textContent = `Profile: ${scalp.profile || 'scalp_balanced'} | Timeframes: ${(scalp.timeframes || ['5m', '15m', '30m', '1h']).join(', ')} | ${scalp.paper_only ? 'Paper only' : 'Live'}`;
                 const lastScalp = scalp.last_decision;
                 document.getElementById('scalp-last').textContent = lastScalp
                     ? `Last Scalp decision: ${lastScalp.symbol || '-'} | status=${lastScalp.status || '-'} | score=${Number(lastScalp.score || 0).toFixed(3)} | confidence=${Number(lastScalp.confidence || 0).toFixed(3)} | volume=${lastScalp.volume_state || '-'} | reason=${lastScalp.reason || '-'}`
                     : 'Last Scalp decision: no cycle yet';
+                const scalpTradeText = scalpOpen.length
+                    ? `Open: ${scalpOpen.map(trade => `${trade.symbol || '-'} ${(Number(trade.net_pnl_pct || 0) * 100).toFixed(3)}%`).join(' | ')}`
+                    : `No open trades | Closed net: ${(Number(scalp.net_pnl_pct || 0) * 100).toFixed(3)}%`;
+                document.getElementById('scalp-trades').textContent = `Scalp trades: ${scalpTradeText}`;
                 const scalpReasons = scalp.rejection_reasons || {};
                 document.getElementById('scalp-rejections').textContent = `Scalp rejection reasons: ${Object.entries(scalpReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'}`;
 

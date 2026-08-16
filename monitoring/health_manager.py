@@ -93,6 +93,12 @@ class HealthManager:
                 "score_sum": 0.0,
                 "confidence_sum": 0.0,
                 "exit_counts": {},
+                "entries": 0,
+                "wins": 0,
+                "losses": 0,
+                "net_pnl_pct": 0.0,
+                "open_trades": [],
+                "closed_trades": [],
                 "last_exit": None,
                 "last_decision": None,
                 "last_cycle_at": None,
@@ -170,6 +176,50 @@ class HealthManager:
                 if float(decision.get("score", 0.0) or 0.0) >= 0.50 or float(decision.get("confidence", 0.0) or 0.0) >= 0.45:
                     scalp["near_misses"] += 1
             scalp["last_decision"] = deepcopy(decision)
+            scalp["last_cycle_at"] = datetime.now(timezone.utc)
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_scalp_entry(self, trade: dict[str, Any]) -> None:
+        """Add or replace one independent paper Scalp position."""
+        async with self._lock:
+            scalp = self._stats["scalp"]
+            scalp["entries"] += 1
+            open_trades = scalp["open_trades"]
+            trade_id = str(trade.get("id") or trade.get("symbol") or "unknown")
+            open_trades[:] = [item for item in open_trades if item.get("id") != trade_id]
+            open_trades.append(deepcopy(trade))
+            del open_trades[:-50]
+            scalp["last_cycle_at"] = datetime.now(timezone.utc)
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_scalp_position(self, trade: dict[str, Any]) -> None:
+        """Refresh one open Scalp position snapshot without counting a new entry."""
+        async with self._lock:
+            scalp = self._stats["scalp"]
+            open_trades = scalp["open_trades"]
+            trade_id = str(trade.get("id") or trade.get("symbol") or "unknown")
+            open_trades[:] = [item for item in open_trades if item.get("id") != trade_id]
+            open_trades.append(deepcopy(trade))
+            del open_trades[:-50]
+            scalp["last_cycle_at"] = datetime.now(timezone.utc)
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_scalp_close(self, trade: dict[str, Any]) -> None:
+        """Move one Scalp position to the independent closed-trade history."""
+        async with self._lock:
+            scalp = self._stats["scalp"]
+            trade_id = str(trade.get("id") or trade.get("symbol") or "unknown")
+            scalp["open_trades"][:] = [item for item in scalp["open_trades"] if item.get("id") != trade_id]
+            closed = deepcopy(trade)
+            closed["status"] = "closed"
+            scalp["closed_trades"].append(closed)
+            del scalp["closed_trades"][:-50]
+            net_pnl = float(closed.get("net_pnl_pct", 0.0) or 0.0)
+            scalp["net_pnl_pct"] += net_pnl
+            if net_pnl > 0:
+                scalp["wins"] += 1
+            else:
+                scalp["losses"] += 1
             scalp["last_cycle_at"] = datetime.now(timezone.utc)
             self._stats["last_activity"] = datetime.now(timezone.utc)
 

@@ -1102,13 +1102,61 @@ class CTApplication:
                     )
                     await health_manager.record_scalp_exit(asdict(scalp_exit))
                     if scalp_exit.status != "hold":
+                        await health_manager.record_scalp_close(
+                            {
+                                "id": position["id"],
+                                "symbol": candle.symbol,
+                                "direction": "long",
+                                "entry_price": float(position["entry_price"]),
+                                "exit_price": float(candle.close),
+                                "opened_at": position["opened_at"].isoformat(),
+                                "closed_at": datetime.now(timezone.utc).isoformat(),
+                                "exit_status": scalp_exit.status,
+                                "exit_reason": scalp_exit.reason,
+                                "gross_pnl_pct": scalp_exit.gross_pnl_pct,
+                                "net_pnl_pct": scalp_exit.net_pnl_pct,
+                                "paper_only": True,
+                            }
+                        )
                         self._scalp_positions.pop(candle.symbol, None)
+                    else:
+                        await health_manager.record_scalp_position(
+                            {
+                                "id": position["id"],
+                                "symbol": candle.symbol,
+                                "direction": "long",
+                                "entry_price": float(position["entry_price"]),
+                                "current_price": float(candle.close),
+                                "opened_at": position["opened_at"].isoformat(),
+                                "status": "open",
+                                "gross_pnl_pct": scalp_exit.gross_pnl_pct,
+                                "net_pnl_pct": scalp_exit.net_pnl_pct,
+                                "mode": position.get("mode", "balanced"),
+                                "paper_only": True,
+                            }
+                        )
                 if scalp_decision.approved and candle.symbol not in self._scalp_positions:
-                    self._scalp_positions[candle.symbol] = {
+                    opened_at = datetime.now(timezone.utc)
+                    position = {
+                        "id": f"scalp-{candle.symbol}-{opened_at.strftime('%Y%m%dT%H%M%S')}",
                         "entry_price": float(candle.close),
-                        "opened_at": datetime.now(timezone.utc),
+                        "opened_at": opened_at,
                         "mode": scalp_decision.mode,
                     }
+                    self._scalp_positions[candle.symbol] = position
+                    await health_manager.record_scalp_entry(
+                        {
+                            "id": position["id"],
+                            "symbol": candle.symbol,
+                            "direction": "long",
+                            "entry_price": position["entry_price"],
+                            "current_price": position["entry_price"],
+                            "opened_at": opened_at.isoformat(),
+                            "status": "open",
+                            "mode": position["mode"],
+                            "paper_only": True,
+                        }
+                    )
                 await health_manager.update_component(
                     "ScalpMonitor",
                     HealthStatus.OK,
@@ -1354,6 +1402,8 @@ class CTApplication:
             f"Approved                : {scalp.get('approved', 0)}\n"
             f"Rejected                : {scalp.get('rejected', 0)}\n"
             f"Near-Misses             : {scalp.get('near_misses', 0)}\n"
+            f"Entries/Open/Closed     : {scalp.get('entries', 0)}/{len(scalp.get('open_trades', []))}/{len(scalp.get('closed_trades', []))}\n"
+            f"Wins/Losses/Net         : {scalp.get('wins', 0)}/{scalp.get('losses', 0)}/{float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%\n"
             f"Average Score           : {(float(scalp.get('score_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
             f"Average Confidence      : {(float(scalp.get('confidence_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
             f"Exit Counts             : {scalp.get('exit_counts', {}) or 'none'}\n"
