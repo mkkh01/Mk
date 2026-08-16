@@ -75,6 +75,7 @@ from monitoring.health_manager import health_manager, HealthStatus
 from monitoring.heartbeat import run_heartbeat_loop
 from engine.scalp import ScalpMonitor
 from config.profiles import (
+    DAY_TRADING_TIMEFRAMES,
     SCALP_MAX_OPEN_POSITIONS,
     SCALP_REENTRY_COOLDOWN_MINUTES,
     runtime_fetch_timeframes,
@@ -369,6 +370,13 @@ class CTApplication:
                     active_coins_count=len(coins),
                     message_text=f"تم تحميل الإعدادات: عدد العملات المفعلة {len(coins)}"
                 )
+                # The primary strategy now runs as Day Trading. Normalize only
+                # the base orchestrator's in-memory coin view; ScalpMonitor
+                # keeps its own fixed profile and never consumes this list.
+                coins = [
+                    coin.model_copy(update={"timeframes": list(DAY_TRADING_TIMEFRAMES)})
+                    for coin in coins
+                ]
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "error",

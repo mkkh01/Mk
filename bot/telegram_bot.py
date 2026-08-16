@@ -72,6 +72,7 @@ from telegram.ext import (
 from pydantic import ValidationError
 
 from config.thresholds import VALID_TIMEFRAMES
+from config.profiles import DAY_TRADING_TIMEFRAMES
 from contracts.config import CoinConfig, SystemConfig
 from contracts.portfolio import PerformanceMetrics
 from contracts.simulation import SimulatedTrade
@@ -500,7 +501,7 @@ class CTTelegramBot:
         return SYMBOL
 
     async def _add_coin_symbol(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Validate the symbol the user just sent and ask for timeframes."""
+        """Validate the symbol and assign the fixed Day Trading timeframes."""
         user_id = update.effective_user.id if update.effective_user else 0
         text = (update.message.text or "").strip() if update.message else ""
         try:
@@ -510,14 +511,15 @@ class CTTelegramBot:
             return SYMBOL
 
         context.user_data["add_symbol"] = symbol
+        context.user_data["add_timeframes"] = list(DAY_TRADING_TIMEFRAMES)
         await self._reply_safe(
             update,
             context,
             (
                 f"Symbol: {symbol}\n\n"
-                "Enter timeframes (minimum 3, comma-separated).\n"
-                "Example: 15m,1h,4h\n\n"
-                f"Valid timeframes: {', '.join(sorted(VALID_TIMEFRAMES))}"
+                "Fixed strategy: Day Trading\n"
+                f"Timeframes are automatic: {', '.join(DAY_TRADING_TIMEFRAMES)}\n\n"
+                "Enter allocated capital (USDT). Must be greater than 0."
             ),
         )
         logger.info(
@@ -527,7 +529,7 @@ class CTTelegramBot:
             reply_kind="add_coin_prompt_timeframes",
             symbol=symbol,
         )
-        return TIMEFRAMES
+        return CAPITAL
 
     async def _add_coin_timeframes(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Validate timeframes and ask for capital."""

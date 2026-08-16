@@ -57,6 +57,7 @@ from uuid import UUID
 import numpy as np
 
 from config.thresholds import TAKER_FEE_PCT, VOLATILITY_ATR_PERIOD  # noqa: F401 -- re-exported for tests
+from config.profiles import DAY_TRADING_MAX_HOLD_HOURS
 from config.thresholds import LIVE_PRICE_MAX_AGE_SECONDS, MAX_LIMIT_SLIPPAGE_PCT
 from config.thresholds import (
     TRAILING_ENABLED,
@@ -708,16 +709,31 @@ class PaperTrader:
 
         resolution = _resolve_close_price(trade, current_candle)
         if resolution is None:
-            logger.debug(
-                "simulated_trade_skip_no_hit",
-                trade_id=str(trade.id),
-                symbol=trade.symbol,
-                direction=trade.direction,
-                candle_open_time=current_candle.open_time.isoformat(),
-            )
-            return None
-
-        close_price, close_reason = resolution
+            held_hours = (current_candle.close_time - trade.opened_at).total_seconds() / 3600.0
+            if held_hours >= DAY_TRADING_MAX_HOLD_HOURS:
+                close_price = _safe_float(current_candle.close)
+                close_reason = "time"
+                logger.info(
+                    "day_trading_time_exit",
+                    timestamp=_utcnow(),
+                    trade_id=str(trade.id),
+                    symbol=trade.symbol,
+                    held_hours=round(held_hours, 2),
+                    max_hold_hours=DAY_TRADING_MAX_HOLD_HOURS,
+                    close_price=close_price,
+                    label=_SIMULATED_LABEL,
+                )
+            else:
+                logger.debug(
+                    "simulated_trade_skip_no_hit",
+                    trade_id=str(trade.id),
+                    symbol=trade.symbol,
+                    direction=trade.direction,
+                    candle_open_time=current_candle.open_time.isoformat(),
+                )
+                return None
+        else:
+            close_price, close_reason = resolution
         pnl = _compute_pnl(
             direction=trade.direction,
             entry_price=trade.entry_price,

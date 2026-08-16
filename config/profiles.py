@@ -6,17 +6,23 @@ share one fetched timeframe set, while each profile consumes its own subset.
 
 from __future__ import annotations
 
-SWING_PROFILE = "swing_conservative"
+DAY_TRADING_PROFILE = "day_trading"
 SCALP_PROFILE = "scalp_balanced"
 
-SWING_TIMEFRAMES: tuple[str, ...] = ("15m", "1h", "4h")
+DAY_TRADING_TIMEFRAMES: tuple[str, ...] = ("15m", "30m", "1h", "4h")
+# Compatibility aliases for persisted/imported code; the base strategy is now
+# labelled and operated as Day Trading, not as a separate Swing strategy.
+SWING_PROFILE = DAY_TRADING_PROFILE
+SWING_TIMEFRAMES = DAY_TRADING_TIMEFRAMES
 SCALP_TIMEFRAMES: tuple[str, ...] = ("5m", "15m", "30m", "1h")
+
+DAY_TRADING_MAX_HOLD_HOURS = 12
 ALL_MONITORED_TIMEFRAMES: tuple[str, ...] = (
     "5m", "15m", "30m", "1h", "4h"
 )
 
 # Scalp is initially an observability/paper profile. It cannot open a live
-# trade until it has been validated independently from the swing profile.
+# trade until it has been validated independently from the Day Trading profile.
 SCALP_PAPER_ONLY = True
 SCALP_MIN_SCORE = 0.65
 SCALP_MIN_CONFIDENCE = 0.60
@@ -37,7 +43,7 @@ SCALP_ROUND_TRIP_COST_PCT = 0.0010  # fee + slippage reserve, Scalp only
 SCALP_REVERSAL_MIN_STRENGTH = 0.55
 
 PROFILE_LABELS = {
-    SWING_PROFILE: "Swing Conservative",
+    DAY_TRADING_PROFILE: "Day Trading",
     SCALP_PROFILE: "Scalp Balanced",
 }
 
@@ -48,18 +54,18 @@ def fixed_timeframes() -> list[str]:
 
 
 def runtime_fetch_timeframes(existing: list[str] | tuple[str, ...]) -> tuple[str, ...]:
-    """Return existing Swing timeframes plus Scalp-only feed channels.
+    """Return existing Day Trading timeframes plus Scalp-only feed channels.
 
     This is additive at the data-feed boundary; it does not mutate CoinConfig
-    or change the Swing engine's timeframe decisions.
+    or change the Day Trading engine's timeframe decisions.
     """
     ordered = list(dict.fromkeys([*existing, *SCALP_TIMEFRAMES]))
     return tuple(ordered)
 
 
 def profile_timeframes(profile: str) -> tuple[str, ...]:
-    if profile == SWING_PROFILE:
-        return SWING_TIMEFRAMES
+    if profile in {DAY_TRADING_PROFILE, "swing_conservative"}:
+        return DAY_TRADING_TIMEFRAMES
     if profile == SCALP_PROFILE:
         return SCALP_TIMEFRAMES
     raise ValueError(f"unknown strategy profile: {profile}")

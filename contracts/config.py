@@ -19,6 +19,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator, validator
 
 from config.thresholds import VALID_TIMEFRAMES
+from config.profiles import DAY_TRADING_TIMEFRAMES
 
 
 class CoinConfig(BaseModel):
@@ -67,7 +68,7 @@ class SystemConfig(BaseModel):
     supabase_url: str
     supabase_key: str
     redis_url: str
-    default_timeframes: list[str] = Field(default_factory=lambda: ["15m", "1h", "4h"])
+    default_timeframes: list[str] = Field(default_factory=lambda: list(DAY_TRADING_TIMEFRAMES))
     max_active_coins: int = 10
     simulation_mode: bool = True
     telegram_chat_id: Optional[str] = None

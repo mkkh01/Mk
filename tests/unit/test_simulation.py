@@ -13,14 +13,13 @@ File: tests/unit/test_simulation.py
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import uuid4
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from config import thresholds
+from config.profiles import DAY_TRADING_MAX_HOLD_HOURS
 from contracts.decision import DecisionResult, EntrySignal, RiskAssessment
-from contracts.market import Candle
 from contracts.simulation import SimulatedTrade
 from simulation.fees import calculate_fee, calculate_exit_fee, total_trade_fees
 from simulation.slippage import estimate_slippage, apply_slippage_to_price
@@ -225,7 +224,30 @@ class TestPaperTraderClosure:
         result = await trader.check_trade_closure(trade, current)
         assert result is None  # Trade remains open.
 
+    @pytest.mark.asyncio
+    async def test_day_trading_time_exit_after_max_hold(self, mock_supabase):
+        trader = PaperTrader(supabase=mock_supabase)
+        decision = make_decision("long", 100.0)
+        trade = await trader.open_trade(decision)
+        current = make_candle(
+            open_time=make_dt(0), open=100.0, high=101.0, low=99.0, close=100.5,
+        ).model_copy(
+            update={
+                "close_time": trade.opened_at
+                + timedelta(hours=DAY_TRADING_MAX_HOLD_HOURS, minutes=1),
+            }
+        )
+
+        result = await trader.check_trade_closure(trade, current)
+
+        assert result is not None
+        assert result.status == "closed"
+        assert result.close_reason == "time"
+        assert result.close_price == pytest.approx(100.5)
+
+
 class TestPreEntryCandleWarning:
+
     """Regression: skip_pre_entry_candle must warn ONCE per trade, not on
     every poll, while the latest closed candle predates the trade open time.
     """
