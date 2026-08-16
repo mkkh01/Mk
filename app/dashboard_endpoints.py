@@ -152,6 +152,7 @@ class SystemHealthResponse(BaseModel):
     health_status: str
     health_components: dict[str, dict[str, Any]]
     diagnostics: dict[str, Any]
+    last_error: Optional[dict[str, Any]] = None
 
 
 class CycleSummaryResponse(BaseModel):
@@ -178,6 +179,7 @@ class CycleSummaryResponse(BaseModel):
     diagnostics: dict[str, Any]
     health_components: dict[str, dict[str, Any]]
     scalp_summary: dict[str, Any]
+    last_error: Optional[dict[str, Any]] = None
 
 
 class OverallPerformanceResponse(BaseModel):
@@ -358,6 +360,7 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
         diagnostics=diagnostics,
         health_components=health_components,
         scalp_summary=scalp_summary,
+        last_error=stats.get("last_error"),
     )
 
 
@@ -379,7 +382,7 @@ async def get_system_health_endpoint(request: Request) -> SystemHealthResponse:
         "opportunities_rejected": stats.get("opportunities_rejected", 0),
         "rejection_reasons": stats.get("rejection_reasons", {}),
         "errors": stats.get("errors_count", 0),
-        "last_data_at": stats.get("last_activity"),
+        "last_data_at": stats.get("last_candle_at") or stats.get("last_activity"),
         "total_score_sum": stats.get("total_score_sum", 0.0),
         "total_confidence_sum": stats.get("total_confidence_sum", 0.0),
         "total_analysis_time_ms": stats.get("total_analysis_time_ms", 0.0),
@@ -389,6 +392,7 @@ async def get_system_health_endpoint(request: Request) -> SystemHealthResponse:
         "health_status": _health_status_label(health_summary["status"]),
         "health_components": health_summary.get("components", {}),
         "diagnostics": _diagnostics_from_stats(stats),
+        "last_error": stats.get("last_error"),
     }
     
     # Fetch active coins for the dashboard

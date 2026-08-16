@@ -14,8 +14,14 @@ from typing import Any
 
 from config.profiles import (
     SCALP_MAX_ATR_PERCENT,
+    SCALP_MAX_ENTRY_EXTENSION_PCT,
+    SCALP_MAX_ENTRY_RSI,
     SCALP_MAX_HOLD_MINUTES,
     SCALP_MIN_CONFIDENCE,
+    SCALP_MIN_MOMENTUM_SCORE,
+    SCALP_MIN_SETUP_STRENGTH,
+    SCALP_MIN_TRIGGER_STRENGTH,
+    SCALP_NEUTRAL_VOLUME_MIN_SCORE,
     SCALP_MIN_NET_EDGE_PCT,
     SCALP_REVERSAL_MIN_STRENGTH,
     SCALP_ROUND_TRIP_COST_PCT,
@@ -46,6 +52,8 @@ class ScalpDecision:
     reason: str = ""
     volume_state: str = "missing"
     atr_percent: float = 0.0
+    rsi: float = 0.0
+    entry_extension_pct: float = 0.0
     evaluated_at: str = ""
     paper_only: bool = SCALP_PAPER_ONLY
     mode: str = "balanced"
@@ -105,6 +113,13 @@ class ScalpMonitor:
         decision.volume_state = self._classify_volume(candles["5m"], volume_payload)
         momentum = calculate_momentum(candles["5m"])
         decision.atr_percent = self._atr_percent(candles["5m"])
+        decision.rsi = float(momentum.get("rsi", 0.0) or 0.0)
+        trigger_ema = float(trigger.get("ema_fast", 0.0) or 0.0)
+        trigger_close = float(candles["5m"][-1].close)
+        decision.entry_extension_pct = (
+            max(0.0, (trigger_close - trigger_ema) / trigger_ema * 100.0)
+            if trigger_ema > 0 else 0.0
+        )
 
         trend_scores = [
             float(context.get("strength", 0.0) or 0.0),
@@ -133,6 +148,12 @@ class ScalpMonitor:
         if trigger.get("direction") != "bullish":
             decision.reason = "trigger_5m_not_bullish"
             return decision
+        if float(trigger.get("strength", 0.0) or 0.0) < SCALP_MIN_TRIGGER_STRENGTH:
+            decision.reason = f"trigger_strength_below_threshold:{float(trigger.get('strength', 0.0) or 0.0):.3f}<{SCALP_MIN_TRIGGER_STRENGTH:.3f}"
+            return decision
+        if float(setup.get("strength", 0.0) or 0.0) < SCALP_MIN_SETUP_STRENGTH:
+            decision.reason = f"setup_strength_below_threshold:{float(setup.get('strength', 0.0) or 0.0):.3f}<{SCALP_MIN_SETUP_STRENGTH:.3f}"
+            return decision
         if lower_reversal and (context.get("direction") == "neutral" or bias.get("direction") == "neutral"):
             decision.mode = "balanced_reversal"
         if decision.volume_state == "bearish":
@@ -140,6 +161,24 @@ class ScalpMonitor:
             return decision
         if decision.volume_state == "missing":
             decision.reason = "volume_missing"
+            return decision
+        if decision.volume_state == "neutral" and (
+            float(momentum.get("momentum_score", 0.5) or 0.5) < SCALP_NEUTRAL_VOLUME_MIN_SCORE
+            or not momentum.get("recovery_confirmation", False)
+        ):
+            decision.reason = "neutral_volume_without_strong_recovery"
+            return decision
+        if decision.rsi > SCALP_MAX_ENTRY_RSI:
+            decision.reason = f"rsi_overbought_for_scalp:{decision.rsi:.2f}>{SCALP_MAX_ENTRY_RSI:.2f}"
+            return decision
+        if float(momentum.get("momentum_score", 0.5) or 0.5) < SCALP_MIN_MOMENTUM_SCORE:
+            decision.reason = f"momentum_below_threshold:{float(momentum.get('momentum_score', 0.5) or 0.5):.3f}<{SCALP_MIN_MOMENTUM_SCORE:.3f}"
+            return decision
+        if decision.entry_extension_pct > SCALP_MAX_ENTRY_EXTENSION_PCT:
+            decision.reason = f"price_extended_for_scalp:{decision.entry_extension_pct:.2f}%>{SCALP_MAX_ENTRY_EXTENSION_PCT:.2f}%"
+            return decision
+        if candles["5m"][-1].close <= candles["5m"][-1].open:
+            decision.reason = "trigger_candle_not_bullish"
             return decision
         if decision.atr_percent > SCALP_MAX_ATR_PERCENT:
             decision.reason = f"atr_too_high:{decision.atr_percent:.2f}%"

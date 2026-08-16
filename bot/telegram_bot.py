@@ -1540,7 +1540,8 @@ class CTTelegramBot:
             f"Near-misses: {scalp.get('near_misses', 0)}",
             f"Entries: {scalp.get('entries', 0)} | Open: {len(open_trades)} | Closed: {len(closed_trades)}",
             f"Entry blocks: {scalp.get('entry_block_reasons', {}) or 'none'}",
-            f"Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)} | Net: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%",
+            f"Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)} | Gross: {float(scalp.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | Net: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%",
+            f"Avg hold: {float(scalp.get('hold_minutes_sum', 0.0) or 0.0) / max(1, len(closed_trades)):.1f}m | Exits: {scalp.get('exit_counts', {}) or 'none'}",
             f"Successful trades: {len(winners)}",
             "",
             "Open Scalp trades:",
@@ -1577,6 +1578,8 @@ class CTTelegramBot:
                 f"Timeframes: {', '.join(scalp.get('timeframes', ['5m', '15m', '30m', '1h']))}",
                 f"Reasons: {reasons or 'none'}",
                 f"Last decision: {last.get('symbol', '-')} status={last.get('status', '-')} "
+                f"score={float(last.get('score', 0.0) or 0.0):.3f} confidence={float(last.get('confidence', 0.0) or 0.0):.3f} "
+                f"RSI={float(last.get('rsi', 0.0) or 0.0):.2f} extension={float(last.get('entry_extension_pct', 0.0) or 0.0):.2f}% "
                 f"volume={last.get('volume_state', '-')} reason={last.get('reason', 'no cycle yet')}",
                 "",
                 SIM_WARNING_ENGINE,
@@ -1596,7 +1599,8 @@ class CTTelegramBot:
             f"State Detail: {scalp.get('state_reason', 'no state recorded')}",
             "",
             f"Entries: {scalp.get('entries', 0)} | Open: {len(open_trades)} | Closed: {len(closed_trades)} | Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)}",
-            f"Net result: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%",
+            f"Gross result: {float(scalp.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | Net after cost: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%",
+            f"Avg hold: {float(scalp.get('hold_minutes_sum', 0.0) or 0.0) / max(1, len(closed_trades)):.1f}m | Exits: {scalp.get('exit_counts', {}) or 'none'}",
             "",
             "OPEN:",
         ]

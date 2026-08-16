@@ -177,6 +177,7 @@
                 <p class="mb-2">Last Data: <span id="last-data-at" class="font-semibold">Loading...</span></p>
                 <p>Errors: <span id="system-errors" class="font-semibold">Loading...</span></p>
                 <p class="mb-2">Health: <span id="health-status" class="font-semibold">Loading...</span></p>
+                <p class="text-xs text-red-300" id="last-error">Last error: none</p>
                 <p class="text-xs text-gray-400" id="health-detail">Health detail: Loading...</p>
             </div>
 
@@ -277,12 +278,15 @@
                 document.getElementById('scalp-profile').textContent = `Profile: ${scalp.profile || 'scalp_balanced'} | Timeframes: ${(scalp.timeframes || ['5m', '15m', '30m', '1h']).join(', ')} | ${scalp.paper_only ? 'Paper only' : 'Live'}`;
                 const lastScalp = scalp.last_decision;
                 document.getElementById('scalp-last').textContent = lastScalp
-                    ? `Last Scalp decision: ${lastScalp.symbol || '-'} | status=${lastScalp.status || '-'} | score=${Number(lastScalp.score || 0).toFixed(3)} | confidence=${Number(lastScalp.confidence || 0).toFixed(3)} | volume=${lastScalp.volume_state || '-'} | reason=${lastScalp.reason || '-'}`
+                    ? `Last Scalp decision: ${lastScalp.symbol || '-'} | status=${lastScalp.status || '-'} | score=${Number(lastScalp.score || 0).toFixed(3)} | confidence=${Number(lastScalp.confidence || 0).toFixed(3)} | RSI=${Number(lastScalp.rsi || 0).toFixed(2)} | extension=${Number(lastScalp.entry_extension_pct || 0).toFixed(2)}% | volume=${lastScalp.volume_state || '-'} | reason=${lastScalp.reason || '-'}`
                     : 'Last Scalp decision: no cycle yet';
                 const scalpTradeText = scalpOpen.length
                     ? `Open: ${scalpOpen.map(trade => `${trade.symbol || '-'} move=${(Number(trade.gross_pnl_pct || 0) * 100).toFixed(3)}% net=${(Number(trade.net_pnl_pct || 0) * 100).toFixed(3)}%`).join(' | ')}`
                     : `No open trades | Closed net: ${(Number(scalp.net_pnl_pct || 0) * 100).toFixed(3)}%`;
-                document.getElementById('scalp-trades').textContent = `Scalp trades: ${scalpTradeText}`;
+                const scalpClosedCount = scalpClosed.length;
+                const scalpAvgHold = Number(scalp.hold_minutes_sum || 0) / Math.max(1, scalpClosedCount);
+                const scalpExitText = Object.entries(scalp.exit_counts || {}).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none';
+                document.getElementById('scalp-trades').textContent = `Scalp trades: ${scalpTradeText} | Gross: ${(Number(scalp.gross_pnl_pct || 0) * 100).toFixed(3)}% | Avg hold: ${scalpAvgHold.toFixed(1)}m | Exits: ${scalpExitText}`;
                 const scalpReasons = scalp.rejection_reasons || {};
                 const scalpEntryBlocks = scalp.entry_block_reasons || {};
                 document.getElementById('scalp-rejections').textContent = `Scalp rejection reasons: ${Object.entries(scalpReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'} | Entry blocks: ${Object.entries(scalpEntryBlocks).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'}`;
@@ -373,6 +377,10 @@
                 document.getElementById('last-data-at').textContent = data.last_data_at ? new Date(data.last_data_at).toLocaleString() : 'N/A';
                 document.getElementById('system-errors').textContent = data.errors;
                 document.getElementById('system-errors').className = data.errors > 0 ? 'font-semibold text-red-500' : 'font-semibold text-green-500';
+                const lastError = data.last_error;
+                document.getElementById('last-error').textContent = lastError
+                    ? `Last error: ${lastError.error_type || 'Error'} | ${lastError.module || '-'} | ${lastError.message || '-'} | ${lastError.at || '-'}`
+                    : 'Last error: none';
                 const healthStatus = data.health_status || 'UNKNOWN';
                 const healthStatusEl = document.getElementById('health-status');
                 healthStatusEl.textContent = healthStatus;
@@ -464,7 +472,8 @@
                 for (const key in data) {
                     const div = document.createElement('div');
                     div.className = 'p-2 bg-gray-700 rounded';
-                    div.innerHTML = `<span class="font-semibold text-blue-300">${key.replace(/_/g, ' ')}:</span> ${data[key]}`;
+                    const value = data[key] !== null && typeof data[key] === 'object' ? JSON.stringify(data[key]) : data[key];
+                    div.innerHTML = `<span class="font-semibold text-blue-300">${key.replace(/_/g, ' ')}:</span> ${value}`;
                     thresholdsContainer.appendChild(div);
                 }
             } catch (error) {

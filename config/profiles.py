@@ -18,9 +18,16 @@ ALL_MONITORED_TIMEFRAMES: tuple[str, ...] = (
 # Scalp is initially an observability/paper profile. It cannot open a live
 # trade until it has been validated independently from the swing profile.
 SCALP_PAPER_ONLY = True
-SCALP_MIN_SCORE = 0.60
-SCALP_MIN_CONFIDENCE = 0.55
-SCALP_MAX_ATR_PERCENT = 3.0
+SCALP_MIN_SCORE = 0.65
+SCALP_MIN_CONFIDENCE = 0.60
+SCALP_MIN_MOMENTUM_SCORE = 0.60
+SCALP_MIN_TRIGGER_STRENGTH = 0.55
+SCALP_MIN_SETUP_STRENGTH = 0.50
+SCALP_NEUTRAL_VOLUME_MIN_SCORE = 0.70
+SCALP_MAX_ATR_PERCENT = 2.0
+SCALP_MAX_ENTRY_EXTENSION_PCT = 0.40
+SCALP_MAX_ENTRY_RSI = 68.0
+SCALP_MAX_OPEN_POSITIONS = 3
 SCALP_TARGET_PCT = 0.005  # gross target; approximately +0.4% after round-trip cost
 SCALP_STOP_PCT = 0.0025
 SCALP_MAX_HOLD_MINUTES = 45

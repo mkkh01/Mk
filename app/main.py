@@ -74,7 +74,11 @@ from storage.supabase import SupabaseClient
 from monitoring.health_manager import health_manager, HealthStatus
 from monitoring.heartbeat import run_heartbeat_loop
 from engine.scalp import ScalpMonitor
-from config.profiles import SCALP_REENTRY_COOLDOWN_MINUTES, runtime_fetch_timeframes
+from config.profiles import (
+    SCALP_MAX_OPEN_POSITIONS,
+    SCALP_REENTRY_COOLDOWN_MINUTES,
+    runtime_fetch_timeframes,
+)
 
 # Type-only imports (avoid hard runtime dependency on layers that may not yet
 # exist when this file is imported in isolation -- e.g. during unit testing).
@@ -877,7 +881,9 @@ class CTApplication:
             payload = json.loads(raw_data)
             candle = Candle(**payload)
         except (TypeError, ValueError, Exception) as exc:
-            await health_manager.increment_stat("errors_count")
+            await health_manager.record_error(
+                "app.main", "InvalidPubsubPayload", f"could not decode pubsub payload: {exc}"
+            )
             logger.warning(
                 "error",
                 timestamp=datetime.now(timezone.utc),
@@ -930,7 +936,9 @@ class CTApplication:
                 return
             # [TRACE] Cache updated (loaded config)
         except Exception as exc:  # noqa: BLE001
-            await health_manager.increment_stat("errors_count")
+            await health_manager.record_error(
+                "app.main", type(exc).__name__, f"could not load coin config for {candle.symbol}: {exc}"
+            )
             logger.warning(
                 "error",
                 timestamp=datetime.now(timezone.utc),
@@ -1035,7 +1043,9 @@ class CTApplication:
                                 decision_id=str(result.id),
                                 symbol=candle.symbol,
                             )
-                            await health_manager.increment_stat("errors_count")
+                            await health_manager.record_error(
+                                "app.main", type(trade_exc).__name__, f"trade open failed: {trade_exc}"
+                            )
                         else:
                             # Telegram is best-effort: a notification failure
                             # must not roll back or obscure a persisted trade.
@@ -1080,7 +1090,9 @@ class CTApplication:
                         rejection_reason=reason,
                     )
         except Exception as exc:  # noqa: BLE001
-            await health_manager.increment_stat("errors_count")
+            await health_manager.record_error(
+                "app.main", type(exc).__name__, f"orchestrator.process_candle_safe crashed: {exc}"
+            )
             logger.error(
                 "error",
                 timestamp=datetime.now(timezone.utc),
@@ -1127,6 +1139,7 @@ class CTApplication:
                                 "signal_evaluated_at": position.get("signal_evaluated_at", ""),
                                 "gross_pnl_pct": scalp_exit.gross_pnl_pct,
                                 "net_pnl_pct": scalp_exit.net_pnl_pct,
+                                "held_minutes": scalp_exit.held_minutes,
                                 "paper_only": True,
                             }
                         )
@@ -1161,6 +1174,8 @@ class CTApplication:
                     await health_manager.record_scalp_entry_block("position_already_open")
                 elif scalp_decision.approved and cooldown_active:
                     await health_manager.record_scalp_entry_block("reentry_cooldown_after_exit")
+                elif scalp_decision.approved and len(self._scalp_positions) >= SCALP_MAX_OPEN_POSITIONS:
+                    await health_manager.record_scalp_entry_block("max_open_positions")
                 elif scalp_decision.approved:
                     opened_at = datetime.now(timezone.utc)
                     position = {
@@ -1217,7 +1232,9 @@ class CTApplication:
                     paper_only=True,
                 )
             except Exception as exc:  # noqa: BLE001
-                await health_manager.increment_stat("errors_count")
+                await health_manager.record_error(
+                    "app.main", type(exc).__name__, f"Scalp evaluation failed: {exc}"
+                )
                 await health_manager.set_scalp_state("ERROR", f"Scalp evaluation failed: {exc}")
                 await health_manager.update_component(
                     "ScalpMonitor",

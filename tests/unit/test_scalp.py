@@ -12,7 +12,7 @@ from config.profiles import (
     runtime_fetch_timeframes,
 )
 from engine.scalp import ScalpMonitor
-from monitoring.health_manager import HealthManager
+from monitoring.health_manager import HealthManager, HealthStatus
 from tests.conftest import make_candle
 
 
@@ -77,6 +77,19 @@ def test_scalp_exit_uses_net_target_and_time_limit():
     assert target.status == "take_profit"
     assert target.net_pnl_pct > 0
     assert timed.status == "time_exit"
+
+
+@pytest.mark.asyncio
+async def test_health_manager_exposes_last_error_and_downgrades_health():
+    manager = HealthManager()
+    await manager.record_error("app.main", "TestError", "synthetic test diagnostic")
+
+    stats = await manager.get_stats()
+    health = await manager.get_overall_health()
+
+    assert stats["errors_count"] == 1
+    assert stats["last_error"]["error_type"] == "TestError"
+    assert health["status"] == HealthStatus.WARNING
 
 
 @pytest.mark.asyncio

@@ -55,6 +55,7 @@ class HealthManager:
             "signals_emitted": 0,
             "trades_simulated": 0,
             "errors_count": 0,
+            "last_error": None,
             "warnings_count": 0,
             "opportunities_found": 0,
             "opportunities_rejected": 0,
@@ -81,6 +82,7 @@ class HealthManager:
             "unique_symbols_seen": set(),
             "rejection_reasons": {},
             "last_activity": datetime.now(timezone.utc),
+            "last_candle_at": None,
             "scalp": {
                 "profile": "scalp_balanced",
                 "timeframes": ["5m", "15m", "30m", "1h"],
@@ -99,7 +101,9 @@ class HealthManager:
                 "entry_block_reasons": {},
                 "wins": 0,
                 "losses": 0,
+                "gross_pnl_pct": 0.0,
                 "net_pnl_pct": 0.0,
+                "hold_minutes_sum": 0.0,
                 "open_trades": [],
                 "closed_trades": [],
                 "last_exit": None,
@@ -148,12 +152,27 @@ class HealthManager:
                     details=details or {}
                 )
 
+    async def record_error(self, module: str, error_type: str, message: str) -> None:
+        """Persist the latest diagnostic error without touching strategy counters."""
+        async with self._lock:
+            self._stats["errors_count"] += 1
+            self._stats["last_error"] = {
+                "module": str(module),
+                "error_type": str(error_type),
+                "message": str(message),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
     async def increment_stat(self, key: str, amount: int = 1):
         """Increment a specific health statistic."""
         async with self._lock:
             if key in self._stats:
                 self._stats[key] += amount
-                self._stats["last_activity"] = datetime.now(timezone.utc)
+                now = datetime.now(timezone.utc)
+                if key == "candles_received":
+                    self._stats["last_candle_at"] = now
+                self._stats["last_activity"] = now
 
     async def record_rejection_reason(self, reason: str):
         """Increment the count for a specific rejection reason."""
@@ -183,7 +202,7 @@ class HealthManager:
                 scalp["approved"] += 1
             else:
                 scalp["rejected"] += 1
-                reason = str(decision.get("reason") or "unknown")
+                reason = self._normalise_scalp_reason(str(decision.get("reason") or "unknown"))
                 reasons = scalp["rejection_reasons"]
                 reasons[reason] = reasons.get(reason, 0) + 1
                 if float(decision.get("score", 0.0) or 0.0) >= 0.50 or float(decision.get("confidence", 0.0) or 0.0) >= 0.45:
@@ -191,6 +210,21 @@ class HealthManager:
             scalp["last_decision"] = deepcopy(decision)
             scalp["last_cycle_at"] = datetime.now(timezone.utc)
             self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    @staticmethod
+    def _normalise_scalp_reason(reason: str) -> str:
+        """Group threshold values so one reason does not become many keys."""
+        for prefix in (
+            "score_below_threshold:",
+            "confidence_below_threshold:",
+            "atr_too_high:",
+            "price_extended_for_scalp:",
+            "momentum_below_threshold:",
+            "rsi_overbought_for_scalp:",
+        ):
+            if reason.startswith(prefix):
+                return prefix.rstrip(":")
+        return reason
 
     async def record_scalp_entry_block(self, reason: str) -> None:
         """Explain an approved signal that did not open a second paper position."""
@@ -243,8 +277,11 @@ class HealthManager:
             closed["status"] = "closed"
             scalp["closed_trades"].append(closed)
             del scalp["closed_trades"][:-50]
+            gross_pnl = float(closed.get("gross_pnl_pct", 0.0) or 0.0)
             net_pnl = float(closed.get("net_pnl_pct", 0.0) or 0.0)
+            scalp["gross_pnl_pct"] += gross_pnl
             scalp["net_pnl_pct"] += net_pnl
+            scalp["hold_minutes_sum"] += float(closed.get("held_minutes", 0.0) or 0.0)
             if net_pnl > 0:
                 scalp["wins"] += 1
             else:
@@ -378,6 +415,8 @@ class HealthManager:
                 if priority[status] > priority[worst_status]:
                     worst_status = status
 
+            if self._stats.get("errors_count", 0) > 0 and worst_status == HealthStatus.OK:
+                worst_status = HealthStatus.WARNING
             summary["status"] = worst_status
             return summary
 
