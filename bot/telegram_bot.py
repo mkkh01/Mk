@@ -532,21 +532,15 @@ class CTTelegramBot:
         return CAPITAL
 
     async def _add_coin_timeframes(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """Validate timeframes and ask for capital."""
+        """Ignore legacy timeframe input and keep the Day Trading profile fixed."""
         user_id = update.effective_user.id if update.effective_user else 0
-        text = (update.message.text or "").strip() if update.message else ""
-        try:
-            timeframes = self._validate_timeframes(text)
-        except ValueError as exc:
-            await self._reply_safe(update, context, f"Invalid timeframes: {exc}\n\nTry again:")
-            return TIMEFRAMES
-
+        timeframes = list(DAY_TRADING_TIMEFRAMES)
         context.user_data["add_timeframes"] = timeframes
         await self._reply_safe(
             update,
             context,
             (
-                f"Timeframes: {', '.join(timeframes)}\n\n"
+                f"Fixed Day Trading timeframes: {', '.join(timeframes)}\n\n"
                 "Enter allocated capital (USDT). Must be greater than 0."
             ),
         )
@@ -862,7 +856,6 @@ class CTTelegramBot:
         keyboard = InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("Edit Timeframes", callback_data=f"{CB_EDIT_TIMEFRAMES}{symbol}"),
                     InlineKeyboardButton("Edit Capital", callback_data=f"{CB_EDIT_CAPITAL}{symbol}"),
                 ],
                 [
@@ -884,28 +877,25 @@ class CTTelegramBot:
     async def _edit_coin_ask_timeframes(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str
     ) -> None:
-        """Prompt the user for new timeframes and remember the in-flight flow."""
-        context.user_data["edit_flow"] = "timeframes"
-        context.user_data["edit_symbol"] = symbol
+        """Handle legacy timeframe callbacks without permitting profile drift."""
+        context.user_data.pop("edit_flow", None)
+        context.user_data.pop("edit_symbol", None)
         await self._reply_safe(
             update,
             context,
             (
-                f"Edit Timeframes for {symbol}\n\n"
-                "Enter new timeframes (minimum 3, comma-separated).\n"
-                f"Valid timeframes: {', '.join(sorted(VALID_TIMEFRAMES))}"
+                f"{symbol} uses the fixed Day Trading profile.\n"
+                f"Timeframes: {', '.join(DAY_TRADING_TIMEFRAMES)}"
             ),
         )
 
     async def _edit_coin_apply_timeframes(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, symbol: str, text: str
     ) -> None:
-        """Validate and apply new timeframes to an existing coin."""
-        try:
-            timeframes = self._validate_timeframes(text)
-        except ValueError as exc:
-            await self._reply_safe(update, context, f"Invalid timeframes: {exc}\n\nTry again:")
-            return
+        """Apply the fixed Day Trading timeframes to an existing coin."""
+        # Ignore text from stale clients or old conversation state. The
+        # primary profile is not operator-selectable anymore.
+        timeframes = list(DAY_TRADING_TIMEFRAMES)
         try:
             coin = await self._supabase.fetch_coin(symbol)
         except Exception as exc:  # noqa: BLE001
@@ -925,7 +915,7 @@ class CTTelegramBot:
         await self._reply_safe(
             update,
             context,
-            f"{symbol} updated. New timeframes: {', '.join(timeframes)}",
+            f"{symbol} uses fixed Day Trading timeframes: {', '.join(timeframes)}",
             reply_markup=self._build_main_menu(),
         )
         await self._trigger_engine_reload(context)

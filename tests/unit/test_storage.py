@@ -19,7 +19,7 @@ from uuid import uuid4
 import pytest
 
 from contracts.config import CoinConfig
-from contracts.decision import DecisionResult, RiskAssessment
+from contracts.decision import DecisionResult
 from contracts.market import Candle
 from contracts.simulation import SimulatedTrade
 from storage.supabase import (
@@ -30,7 +30,6 @@ from storage.supabase import (
     _trade_from_row,
 )
 from storage.redis_cache import RedisCache
-from tests.conftest import make_candle, make_dt
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +58,7 @@ class TestDecisionFromRow:
             "id": uuid4(),
             "symbol": "BTCUSDT",
             "source_candle_open_time": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "trigger_timeframe": "30m",
             "score": 0.85,
             "confidence": 0.80,
             "regime_check_passed": True,
@@ -76,6 +76,7 @@ class TestDecisionFromRow:
         assert decision.score == 0.85
         assert decision.final_verdict is True
         assert decision.risk.allowed is True
+        assert decision.trigger_timeframe == "30m"
 
 
 class TestTradeFromRow:
@@ -165,6 +166,7 @@ class TestIdempotencySQL:
         source = inspect.getsource(SupabaseClient.upsert_decision)
         assert "ON CONFLICT" in source.upper()
         assert "DO UPDATE" in source.upper()
+        assert "(symbol, trigger_timeframe, source_candle_open_time)" in source
 
     def test_insert_simulated_trade_uses_on_conflict(self):
         import inspect

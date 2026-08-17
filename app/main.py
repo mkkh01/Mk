@@ -78,7 +78,6 @@ from config.profiles import (
     DAY_TRADING_TIMEFRAMES,
     SCALP_MAX_OPEN_POSITIONS,
     SCALP_REENTRY_COOLDOWN_MINUTES,
-    runtime_fetch_timeframes,
 )
 
 # Type-only imports (avoid hard runtime dependency on layers that may not yet
@@ -110,6 +109,17 @@ SUBSCRIBER_HEARTBEAT_SECONDS = 30
 
 # Sentinel values for the engine state machine.
 _ENGINE_STATE_LOCK = asyncio.Lock()
+
+
+# The primary engine is always Day Trading. Persisted coin rows may still
+# contain legacy or operator-selected timeframes, so every runtime boundary
+# must normalize them before the orchestrator sees the config.
+def _normalise_day_trading_coin(coin: Any) -> Any:
+    return coin.model_copy(update={"timeframes": list(DAY_TRADING_TIMEFRAMES)})
+
+
+def _normalise_day_trading_coins(coins: list[Any]) -> list[Any]:
+    return [_normalise_day_trading_coin(coin) for coin in coins]
 
 
 # ---------------------------------------------------------------------------
@@ -375,10 +385,7 @@ class CTApplication:
                 # The primary strategy now runs as Day Trading. Normalize only
                 # the base orchestrator's in-memory coin view; ScalpMonitor
                 # keeps its own fixed profile and never consumes this list.
-                coins = [
-                    coin.model_copy(update={"timeframes": list(DAY_TRADING_TIMEFRAMES)})
-                    for coin in coins
-                ]
+                coins = _normalise_day_trading_coins(coins)
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "error",
@@ -788,9 +795,13 @@ class CTApplication:
             )
             return
 
+        # The feed carries both independent systems, but each message is
+        # routed to only its owning evaluator. Day Trading always receives
+        # exactly its fixed profile; Scalp receives only its 5m trigger.
+        coins = _normalise_day_trading_coins(coins)
         channels: list[str] = []
         for coin in coins:
-            for tf in runtime_fetch_timeframes(coin.timeframes):
+            for tf in (*DAY_TRADING_TIMEFRAMES, "5m"):
                 channels.append(f"new_candle:{coin.symbol}:{tf}")
 
         if not channels:
@@ -929,203 +940,228 @@ class CTApplication:
         if not candle.is_closed:
             return
 
-        # The orchestrator requires (candle, coin_config). We must fetch the
-        # config for this symbol from Supabase.
-        try:
-            # [TRACE] Cache check / DB fetch started
-            coin_config = await self._supabase.fetch_coin(candle.symbol)
-            if not coin_config:
+        # Day Trading and Scalp have separate entry points. Scalp only needs
+        # the symbol and its own fixed profile; it must not be blocked by a
+        # missing or malformed Day Trading coin row.
+        coin_config = None
+        if candle.timeframe in DAY_TRADING_TIMEFRAMES:
+            # The orchestrator requires (candle, coin_config). Fetch the row
+            # and normalize it again at this final runtime boundary.
+            try:
+                # [TRACE] Cache check / DB fetch started
+                coin_config = await self._supabase.fetch_coin(candle.symbol)
+                if not coin_config:
+                    logger.warning(
+                        "error",
+                        timestamp=datetime.now(timezone.utc),
+                        module="app.main",
+                        error_type="MissingCoinConfig",
+                        error_message=f"could not load coin config for {candle.symbol}",
+                        symbol=candle.symbol,
+                    )
+                    return
+                coin_config = _normalise_day_trading_coin(coin_config)
+                # [TRACE] Cache updated (loaded and normalized config)
+            except Exception as exc:  # noqa: BLE001
+                await health_manager.record_error(
+                    "app.main", type(exc).__name__, f"could not load coin config for {candle.symbol}: {exc}"
+                )
                 logger.warning(
                     "error",
                     timestamp=datetime.now(timezone.utc),
                     module="app.main",
-                    error_type="MissingCoinConfig",
-                    error_message=f"could not load coin config for {candle.symbol}",
+                    error_type=type(exc).__name__,
+                    error_message=f"could not load coin config for {candle.symbol}: {exc}",
                     symbol=candle.symbol,
                 )
                 return
-            # [TRACE] Cache updated (loaded config)
-        except Exception as exc:  # noqa: BLE001
-            await health_manager.record_error(
-                "app.main", type(exc).__name__, f"could not load coin config for {candle.symbol}: {exc}"
-            )
-            logger.warning(
-                "error",
-                timestamp=datetime.now(timezone.utc),
-                module="app.main",
-                error_type=type(exc).__name__,
-                error_message=f"could not load coin config for {candle.symbol}: {exc}",
-                symbol=candle.symbol,
-            )
-            return
 
-        # Cooldown: skip if the same symbol was analyzed recently.
-        # This prevents low-timeframe pairs (e.g. VTHO 1m) from dominating
-        # the health summary.
-        now_ts = datetime.now(timezone.utc)
-        # Cooldown logic needs to be refactored to use health_manager or a dedicated cooldown tracker.
-        # For now, disabling this part to remove dependency on _health_stats.
-        last_time = None # self._health_stats["last_analysis_time"].get(candle.symbol)
-        interval = 0.0 # self._health_stats["min_analysis_interval"]
-        if last_time is not None:
-            elapsed = (now_ts - last_time).total_seconds()
-            if elapsed < interval:
-                logger.debug(
-                    "trace_cooling_down",
-                    symbol=candle.symbol,
-                    elapsed_seconds=elapsed,
-                    cooldown_seconds=interval,
-                )
-                return
+        if coin_config is not None:
+            # Cooldown: skip if the same symbol was analyzed recently.
+            # This prevents low-timeframe pairs (e.g. VTHO 1m) from dominating
+            # the health summary.
+            now_ts = datetime.now(timezone.utc)
+            # Cooldown logic needs to be refactored to use health_manager or a dedicated cooldown tracker.
+            # For now, disabling this part to remove dependency on _health_stats.
+            last_time = None # self._health_stats["last_analysis_time"].get(candle.symbol)
+            interval = 0.0 # self._health_stats["min_analysis_interval"]
+            if last_time is not None:
+                elapsed = (now_ts - last_time).total_seconds()
+                if elapsed < interval:
+                    logger.debug(
+                        "trace_cooling_down",
+                        symbol=candle.symbol,
+                        elapsed_seconds=elapsed,
+                        cooldown_seconds=interval,
+                    )
+                    return
 
-        # Process the candle.
-        try:
-            # Generate correlation IDs for this analysis cycle
-            import uuid
-            from monitoring.logger import bind_context, clear_context
+            # Process the candle.
+            try:
+                # Generate correlation IDs for this analysis cycle
+                import uuid
+                from monitoring.logger import bind_context, clear_context
             
-            trace_id = str(uuid.uuid4())[:8]
-            cycle_id = f"{candle.symbol}-{candle.timeframe}-{candle.open_time.strftime('%H%M%S')}"
+                trace_id = str(uuid.uuid4())[:8]
+                cycle_id = f"{candle.symbol}-{candle.timeframe}-{candle.open_time.strftime('%H%M%S')}"
             
-            bind_context(trace_id=trace_id, cycle_id=cycle_id)
+                bind_context(trace_id=trace_id, cycle_id=cycle_id)
             
-            # [TRACE] Analysis started
-            logger.info("trace_analysis_started", symbol=candle.symbol, timeframe=candle.timeframe)
+                # [TRACE] Analysis started
+                logger.info("trace_analysis_started", symbol=candle.symbol, timeframe=candle.timeframe)
             
-            start_analysis = datetime.now(timezone.utc)
-            result = await self._orchestrator.process_candle_safe(candle, coin_config)
+                start_analysis = datetime.now(timezone.utc)
+                result = await self._orchestrator.process_candle_safe(candle, coin_config)
             
-            # [TRACE] Analysis finished
-            analysis_duration = (datetime.now(timezone.utc) - start_analysis).total_seconds() * 1000
-            logger.info("trace_analysis_finished", symbol=candle.symbol, duration_ms=analysis_duration)
+                # [TRACE] Analysis finished
+                analysis_duration = (datetime.now(timezone.utc) - start_analysis).total_seconds() * 1000
+                logger.info("trace_analysis_finished", symbol=candle.symbol, duration_ms=analysis_duration)
             
-            # Clear context after analysis
-            clear_context()
+                # Clear context after analysis
+                clear_context()
             
-            if result:
-                # Update health stats via health_manager
-                await health_manager.increment_stat("analyses_executed")
-                await health_manager.accumulate_analysis(
-                    result.score, result.confidence, analysis_duration
-                )
-                # Record direction from component signals (not just approved entries).
-                # This ensures bullish/bearish counts reflect actual market analysis,
-                # not just approved trades.
-                primary_direction = "neutral"
-                score_pct = result.score * 100.0
-                if score_pct >= 60.0:
-                    primary_direction = "long"
-                elif score_pct <= 40.0:
-                    primary_direction = "short"
-                else:
+                if result:
+                    # Update health stats via health_manager
+                    await health_manager.increment_stat("analyses_executed")
+                    await health_manager.accumulate_analysis(
+                        result.score, result.confidence, analysis_duration
+                    )
+                    # Record direction from component signals (not just approved entries).
+                    # This ensures bullish/bearish counts reflect actual market analysis,
+                    # not just approved trades.
                     primary_direction = "neutral"
-                await health_manager.record_symbol_direction(
-                    result.symbol,
-                    primary_direction,
-                )
-                # db_writes is incremented by the orchestrator only after a
-                # successful durable upsert_decision call.
-                
-                # Count total component signals emitted (not just approved verdicts)
-                signal_count = len(result.component_signals) if result.component_signals else 0
-                await health_manager.increment_stat("signals_emitted", amount=max(signal_count, 0))
-                
-                if result.final_verdict:
-                    await health_manager.increment_stat("opportunities_found")
-
-                    # self._health_stats["last_success_at"] = datetime.now(timezone.utc) # Specific metric, remove or move to analytics
-                    
-                    # Persist the simulated trade independently from Telegram.
-                    # Notification is an optional side effect and must never be a
-                    # prerequisite for recording an approved decision.
-                    if result.entry:
-                        try:
-                            from simulation.paper_trade import LimitNotFilledError, PaperTrader
-                            trader = PaperTrader(self._supabase, redis=self._redis)
-                            trade = await trader.open_trade(result)
-                        except LimitNotFilledError as trade_exc:
-                            await health_manager.record_limit_not_filled(
-                                candle.symbol, str(trade_exc)
-                            )
-                            logger.warning(
-                                "limit_not_filled_operational",
-                                timestamp=datetime.now(timezone.utc),
-                                module="app.main",
-                                error_type=type(trade_exc).__name__,
-                                error_message=str(trade_exc),
-                                decision_id=str(result.id),
-                                symbol=candle.symbol,
-                                note="approved paper limit was not filled; no simulated position created",
-                            )
-                        except Exception as trade_exc:
-                            logger.error(
-                                "trade_open_failed",
-                                timestamp=datetime.now(timezone.utc),
-                                module="app.main",
-                                error_type=type(trade_exc).__name__,
-                                error_message=str(trade_exc),
-                                decision_id=str(result.id),
-                                symbol=candle.symbol,
-                            )
-                            await health_manager.record_error(
-                                "app.main", type(trade_exc).__name__, f"trade open failed: {trade_exc}"
-                            )
-                        else:
-                            # Telegram is best-effort: a notification failure
-                            # must not roll back or obscure a persisted trade.
-                            if self._telegram_app and self._settings.telegram_chat_id:
-                                try:
-                                    opened_text = self._bot.format_trade_opened(
-                                        trade, confidence=result.confidence
-                                    )
-                                    await self._telegram_app.bot.send_message(
-                                        chat_id=self._settings.telegram_chat_id,
-                                        text=opened_text,
-                                        parse_mode="HTML",
-                                    )
-                                    await health_manager.increment_stat("telegram_sent")
-                                except Exception as notify_exc:
-                                    logger.error(
-                                        "telegram_notification_failed",
-                                        timestamp=datetime.now(timezone.utc),
-                                        module="app.main",
-                                        error_type=type(notify_exc).__name__,
-                                        error_message=str(notify_exc),
-                                        decision_id=str(result.id),
-                                        trade_id=str(trade.id),
-                                        symbol=candle.symbol,
-                                    )
+                    score_pct = result.score * 100.0
+                    if score_pct >= 60.0:
+                        primary_direction = "long"
+                    elif score_pct <= 40.0:
+                        primary_direction = "short"
                     else:
-                        logger.error(
-                            "approved_decision_missing_entry",
-                            timestamp=datetime.now(timezone.utc),
-                            module="app.main",
-                            decision_id=str(result.id),
-                            symbol=candle.symbol,
+                        primary_direction = "neutral"
+                    await health_manager.record_symbol_direction(
+                        result.symbol,
+                        primary_direction,
+                    )
+                    # db_writes is incremented by the orchestrator only after a
+                    # successful durable upsert_decision call.
+                
+                    # Count total component signals emitted (not just approved verdicts)
+                    signal_count = len(result.component_signals) if result.component_signals else 0
+                    await health_manager.increment_stat("signals_emitted", amount=max(signal_count, 0))
+                
+                    if result.final_verdict:
+                        await health_manager.increment_stat("opportunities_found")
+
+                        # self._health_stats["last_success_at"] = datetime.now(timezone.utc) # Specific metric, remove or move to analytics
+                    
+                        # Persist the simulated trade independently from Telegram.
+                        # Notification is an optional side effect and must never be a
+                        # prerequisite for recording an approved decision.
+                        if result.entry:
+                            await health_manager.increment_stat("trade_open_attempts")
+                            try:
+                                from simulation.paper_trade import LimitNotFilledError, PaperTrader
+                                trader = PaperTrader(self._supabase, redis=self._redis)
+                                trade = await trader.open_trade(result)
+                            except LimitNotFilledError as trade_exc:
+                                await health_manager.record_limit_not_filled(
+                                    candle.symbol, str(trade_exc)
+                                )
+                                logger.warning(
+                                    "limit_not_filled_operational",
+                                    timestamp=datetime.now(timezone.utc),
+                                    module="app.main",
+                                    error_type=type(trade_exc).__name__,
+                                    error_message=str(trade_exc),
+                                    decision_id=str(result.id),
+                                    symbol=candle.symbol,
+                                    note="approved paper limit was not filled; no simulated position created",
+                                )
+                            except Exception as trade_exc:
+                                logger.error(
+                                    "trade_open_failed",
+                                    timestamp=datetime.now(timezone.utc),
+                                    module="app.main",
+                                    error_type=type(trade_exc).__name__,
+                                    error_message=str(trade_exc),
+                                    decision_id=str(result.id),
+                                    symbol=candle.symbol,
+                                )
+                                await health_manager.record_trade_open_failure(
+                                    f"{type(trade_exc).__name__}: {trade_exc}"
+                                )
+                                await health_manager.record_error(
+                                    "app.main", type(trade_exc).__name__, f"trade open failed: {trade_exc}"
+                                )
+                            else:
+                                # Telegram is best-effort: a notification failure
+                                # must not roll back or obscure a persisted trade.
+                                if self._telegram_app and self._settings.telegram_chat_id:
+                                    try:
+                                        opened_text = self._bot.format_trade_opened(
+                                            trade, confidence=result.confidence
+                                        )
+                                        await self._telegram_app.bot.send_message(
+                                            chat_id=self._settings.telegram_chat_id,
+                                            text=opened_text,
+                                            parse_mode="HTML",
+                                        )
+                                        await health_manager.increment_stat("telegram_sent")
+                                    except Exception as notify_exc:
+                                        logger.error(
+                                            "telegram_notification_failed",
+                                            timestamp=datetime.now(timezone.utc),
+                                            module="app.main",
+                                            error_type=type(notify_exc).__name__,
+                                            error_message=str(notify_exc),
+                                            decision_id=str(result.id),
+                                            trade_id=str(trade.id),
+                                            symbol=candle.symbol,
+                                        )
+                        else:
+                            await health_manager.record_trade_open_failure("approved_without_entry")
+                            logger.error(
+                                "approved_decision_missing_entry",
+                                timestamp=datetime.now(timezone.utc),
+                                module="app.main",
+                                decision_id=str(result.id),
+                                symbol=candle.symbol,
+                            )
+                    else:
+                        await health_manager.increment_stat("opportunities_rejected")
+                        reason = result.rejection_reason or "unknown"
+                        await health_manager.record_rejection_reason(reason)
+                        logger.info(
+                            "decision_rejected_reason",
+                            symbol=result.symbol,
+                            timeframe=result.trigger_timeframe,
+                            rejection_reason=reason,
                         )
                 else:
-                    await health_manager.increment_stat("opportunities_rejected")
-                    reason = result.rejection_reason or "unknown"
-                    await health_manager.record_rejection_reason(reason)
-                    logger.info(
-                        "decision_rejected_reason",
-                        symbol=result.symbol,
-                        timeframe=result.trigger_timeframe,
-                        rejection_reason=reason,
+                    await health_manager.record_analysis_failure(
+                        f"process_candle_safe returned None for {candle.symbol} {candle.timeframe}"
                     )
-        except Exception as exc:  # noqa: BLE001
-            await health_manager.record_error(
-                "app.main", type(exc).__name__, f"orchestrator.process_candle_safe crashed: {exc}"
-            )
-            logger.error(
-                "error",
-                timestamp=datetime.now(timezone.utc),
-                module="app.main",
-                error_type=type(exc).__name__,
-                error_message=f"orchestrator.process_candle_safe crashed: {exc}",
-                symbol=candle.symbol,
-                timeframe=candle.timeframe,
-            )
+                    logger.error(
+                        "analysis_returned_none",
+                        timestamp=datetime.now(timezone.utc),
+                        module="app.main",
+                        error_type="AnalysisReturnedNone",
+                        error_message="process_candle_safe returned None after a closed candle",
+                        symbol=candle.symbol,
+                        timeframe=candle.timeframe,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                await health_manager.record_error(
+                    "app.main", type(exc).__name__, f"orchestrator.process_candle_safe crashed: {exc}"
+                )
+                logger.error(
+                    "error",
+                    timestamp=datetime.now(timezone.utc),
+                    module="app.main",
+                    error_type=type(exc).__name__,
+                    error_message=f"orchestrator.process_candle_safe crashed: {exc}",
+                    symbol=candle.symbol,
+                    timeframe=candle.timeframe,
+                )
 
         # Scalp evaluates only on a closed 5m trigger. It is independent from
         # Swing and is paper-only until its own performance is validated.

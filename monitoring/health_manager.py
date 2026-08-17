@@ -74,6 +74,10 @@ class HealthManager:
             "telegram_sent": 0,
             "db_writes": 0,
             "db_write_failures": 0,
+            "analysis_failures": 0,
+            "trade_open_attempts": 0,
+            "trade_open_failures": 0,
+            "approved_without_trade": 0,
             # Cycle-summary aggregation fields
             "bullish_count": 0,
             "bearish_count": 0,
@@ -181,9 +185,32 @@ class HealthManager:
         """Record a paper limit that did not fill as an operational outcome."""
         async with self._lock:
             self._stats["limit_not_filled_count"] += 1
+            self._stats["approved_without_trade"] += 1
             reasons = self._stats["operational_rejection_reasons"]
             reasons["limit_not_filled"] = reasons.get("limit_not_filled", 0) + 1
             self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_trade_open_failure(self, reason: str) -> None:
+        """Record an approved decision whose paper trade could not be persisted."""
+        async with self._lock:
+            self._stats["trade_open_failures"] += 1
+            self._stats["approved_without_trade"] += 1
+            reasons = self._stats["operational_rejection_reasons"]
+            key = str(reason or "trade_open_failed")
+            reasons[key] = reasons.get(key, 0) + 1
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+
+    async def record_analysis_failure(self, reason: str) -> None:
+        """Expose swallowed per-candle analysis failures without aborting the loop."""
+        async with self._lock:
+            self._stats["analysis_failures"] += 1
+            self._stats["last_activity"] = datetime.now(timezone.utc)
+            self._stats["last_error"] = {
+                "module": "engine.orchestrator",
+                "error_type": "AnalysisFailure",
+                "message": str(reason),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
 
     async def increment_stat(self, key: str, amount: int = 1):
         """Increment a specific health statistic."""

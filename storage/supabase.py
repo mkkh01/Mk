@@ -123,6 +123,7 @@ def _decision_from_row(row: asyncpg.Record) -> DecisionResult:
         entry=entry,
         final_verdict=bool(row["final_verdict"]),
         rejection_reason=row["rejection_reason"],
+        trigger_timeframe=row.get("trigger_timeframe", "15m"),
         timestamp=row["created_at"],
     )
 
@@ -371,14 +372,14 @@ class SupabaseClient:
                 row = await conn.fetchrow(
                     """
                     INSERT INTO decisions (
-                        id, symbol, source_candle_open_time, score, confidence,
-                        regime_check_passed, structure_alignment_passed,
-                        htf_bias_aligned, rsi_overbought_blocked,
-                        risk_allowed, risk_reason,
-                        entry_payload, risk_payload,
-                        final_verdict, rejection_reason
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-                    ON CONFLICT (symbol, source_candle_open_time)
+                        id, symbol, source_candle_open_time, trigger_timeframe,
+                        score, confidence, regime_check_passed,
+                        structure_alignment_passed, htf_bias_aligned,
+                        rsi_overbought_blocked, risk_allowed, risk_reason,
+                        entry_payload, risk_payload, final_verdict,
+                        rejection_reason
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                    ON CONFLICT (symbol, trigger_timeframe, source_candle_open_time)
                     DO UPDATE SET
                         score = EXCLUDED.score,
                         confidence = EXCLUDED.confidence,
@@ -395,11 +396,11 @@ class SupabaseClient:
                     RETURNING id
                     """,
                     decision.id, decision.symbol, decision.source_candle_open_time,
-                    decision.score, decision.confidence,
-                    decision.regime_check_passed, decision.structure_alignment_passed,
-                    decision.htf_bias_aligned, decision.rsi_overbought_blocked,
-                    decision.risk.allowed, decision.risk.reason,
-                    entry_json, risk_json,
+                    decision.trigger_timeframe or "15m", decision.score,
+                    decision.confidence, decision.regime_check_passed,
+                    decision.structure_alignment_passed, decision.htf_bias_aligned,
+                    decision.rsi_overbought_blocked, decision.risk.allowed,
+                    decision.risk.reason, entry_json, risk_json,
                     decision.final_verdict, decision.rejection_reason,
                 )
                 if row:
@@ -421,6 +422,7 @@ class SupabaseClient:
                     timestamp=datetime.now(timezone.utc),
                     symbol=decision.symbol,
                     source_candle_open_time=decision.source_candle_open_time.isoformat(),
+                    trigger_timeframe=decision.trigger_timeframe,
                 )
                 return False
 

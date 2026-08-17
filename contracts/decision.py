@@ -73,8 +73,9 @@ class EntrySignal(BaseModel):
 class DecisionResult(BaseModel):
     """Final output of engine/orchestrator.py.
 
-    ``unique (symbol, source_candle_open_time)`` enforces idempotency at the DB
-    level (Section 4 + Section 5).
+    ``unique (symbol, trigger_timeframe, source_candle_open_time)`` enforces
+    idempotency at the DB level while keeping independent timeframe decisions
+    separate.
     """
 
     id: UUID = Field(default_factory=uuid4)
