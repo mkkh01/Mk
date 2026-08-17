@@ -155,6 +155,7 @@ class SystemHealthResponse(BaseModel):
     last_error: Optional[dict[str, Any]] = None
     limit_not_filled: int = 0
     operational_rejection_reasons: dict[str, int] = {}
+    scalp_health: dict[str, Any] = {}
 
 
 class CycleSummaryResponse(BaseModel):
@@ -184,6 +185,7 @@ class CycleSummaryResponse(BaseModel):
     last_error: Optional[dict[str, Any]] = None
     limit_not_filled: int = 0
     operational_rejection_reasons: dict[str, int] = {}
+    scalp_health: dict[str, Any] = {}
 
 
 class OverallPerformanceResponse(BaseModel):
@@ -319,6 +321,7 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
     health_components = health_summary.get("components", {})
     diagnostics = _diagnostics_from_stats(stats)
     scalp_summary = _scalp_summary_from_stats(stats)
+    scalp_health = await health_manager.get_scalp_health()
 
     # Build formatted text (same formatter used in logs)
     from monitoring.report_formatter import format_cycle_summary
@@ -369,6 +372,7 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
         last_error=stats.get("last_error"),
         limit_not_filled=stats.get("limit_not_filled_count", 0),
         operational_rejection_reasons=stats.get("operational_rejection_reasons", {}),
+        scalp_health=scalp_health,
     )
 
 
@@ -403,6 +407,7 @@ async def get_system_health_endpoint(request: Request) -> SystemHealthResponse:
         "last_error": stats.get("last_error"),
         "limit_not_filled": stats.get("limit_not_filled_count", 0),
         "operational_rejection_reasons": stats.get("operational_rejection_reasons", {}),
+        "scalp_health": await health_manager.get_scalp_health(),
     }
     
     # Fetch active coins for the dashboard

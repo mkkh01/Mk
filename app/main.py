@@ -165,6 +165,8 @@ class CTApplication:
         self._paper_trader_task: Optional[asyncio.Task[None]] = None
         self._telegram_polling_task: Optional[asyncio.Task[None]] = None
         self._health_log_task: Optional[asyncio.Task[None]] = None
+        self._runtime_heartbeat_task: Optional[asyncio.Task[None]] = None
+        self._scalp_health_task: Optional[asyncio.Task[None]] = None
 
         # Engine run-state flag (mirrors Redis ``engine_running`` so we don't
         # race the cache when the user double-clicks Start/Stop).
@@ -231,7 +233,7 @@ class CTApplication:
         self._telegram_app.bot_data["reload_engine_callback"] = self._reload_engine
         
         # 7.5 Start the new observability heartbeat loop
-        self._health_log_task = asyncio.create_task(run_heartbeat_loop(interval_seconds=60.0), name="runtime_heartbeat")
+        self._runtime_heartbeat_task = asyncio.create_task(run_heartbeat_loop(interval_seconds=60.0), name="runtime_heartbeat")
 
         # 8. Register signal handlers (SIGTERM for Render, SIGINT for local).
         # This is now handled by FastAPI's lifespan events.
@@ -407,13 +409,8 @@ class CTApplication:
                 "STARTING",
                 "Scalp monitor initialized; waiting for the next closed 5m candle",
             )
-            await health_manager.update_component(
-                "ScalpMonitor",
-                HealthStatus.OK,
-                "Scalp Balanced monitor is active in paper-only mode",
-                {"timeframes": ["5m", "15m", "30m", "1h"], "paper_only": True},
-                timeout=120.0,
-            )
+            # Scalp health is a separate domain. A stale Scalp cycle must not
+            # downgrade or stop the Day Trading system.
 
             # 3. Build the BinanceWSClient (lazy import).
             self._ws_client = self._build_ws_client(coins)
@@ -442,6 +439,9 @@ class CTApplication:
             # 7.5 Start health logging task AFTER setting _engine_running=True
             self._health_log_task = asyncio.create_task(
                 self._run_health_logger_loop(), name="health_logger"
+            )
+            self._scalp_health_task = asyncio.create_task(
+                self._run_scalp_health_loop(), name="scalp_health_logger"
             )
 
             logger.info(
@@ -533,7 +533,7 @@ class CTApplication:
                     )
 
             # 2 + 3. Cancel background tasks.
-            for task_attr in ("_ingest_task", "_orchestrator_subscriber_task", "_paper_trader_task", "_health_log_task"):
+            for task_attr in ("_ingest_task", "_orchestrator_subscriber_task", "_paper_trader_task", "_health_log_task", "_runtime_heartbeat_task", "_scalp_health_task"):
                 task: Optional[asyncio.Task[None]] = getattr(self, task_attr)
                 if task is not None and not task.done():
                     task.cancel()
@@ -550,6 +550,8 @@ class CTApplication:
                             error_message=f"{task_attr} cleanup raised: {exc}",
                         )
                 setattr(self, task_attr, None)
+
+            await health_manager.set_scalp_state("STOPPED", "engine is stopped")
 
             # Close open trades only if requested (default True for manual stop).
             # When close_trades=False (e.g. reload or Render SIGTERM), trades stay
@@ -1130,7 +1132,9 @@ class CTApplication:
         if candle.is_closed and candle.timeframe == "5m" and self._scalp_monitor:
             try:
                 scalp_decision = await self._scalp_monitor.evaluate(candle.symbol)
-                await health_manager.record_scalp_decision(scalp_decision.to_dict())
+                scalp_decision_payload = scalp_decision.to_dict()
+                scalp_decision_payload["trigger_candle_at"] = candle.close_time.isoformat()
+                await health_manager.record_scalp_decision(scalp_decision_payload)
 
                 scalp_exit = None
                 position = self._scalp_positions.get(candle.symbol)
@@ -1231,13 +1235,8 @@ class CTApplication:
                     "RUNNING",
                     f"last closed 5m cycle: {scalp_decision.status}",
                 )
-                await health_manager.update_component(
-                    "ScalpMonitor",
-                    HealthStatus.OK,
-                    scalp_decision.reason,
-                    scalp_decision.to_dict(),
-                    timeout=120.0,
-                )
+                # Scalp Health is updated by record_scalp_decision and its
+                # independent logger task; it is not a global component.
                 logger.info(
                     "scalp_cycle_summary",
                     symbol=candle.symbol,
@@ -1254,16 +1253,10 @@ class CTApplication:
                     paper_only=True,
                 )
             except Exception as exc:  # noqa: BLE001
-                await health_manager.record_error(
-                    "app.main", type(exc).__name__, f"Scalp evaluation failed: {exc}"
+                await health_manager.record_scalp_health_error(
+                    f"Scalp evaluation failed: {type(exc).__name__}: {exc}"
                 )
                 await health_manager.set_scalp_state("ERROR", f"Scalp evaluation failed: {exc}")
-                await health_manager.update_component(
-                    "ScalpMonitor",
-                    HealthStatus.ERROR,
-                    f"Scalp evaluation failed: {exc}",
-                    timeout=120.0,
-                )
                 logger.error(
                     "scalp_cycle_failed",
                     timestamp=datetime.now(timezone.utc),
@@ -1484,6 +1477,7 @@ class CTApplication:
             f"Wins/Losses/Net         : {scalp.get('wins', 0)}/{scalp.get('losses', 0)}/{float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:.3f}%\n"
             f"Average Score           : {(float(scalp.get('score_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
             f"Average Confidence      : {(float(scalp.get('confidence_sum', 0.0)) / max(1, int(scalp.get('candidates', 0)))):.3f}\n"
+            f"Hold Evaluations        : {scalp.get('hold_evaluations', 0)}\n"
             f"Exit Counts             : {scalp.get('exit_counts', {}) or 'none'}\n"
             f"Last Exit               : {scalp.get('last_exit') or 'none'}\n"
             f"Rejection Reasons       : {scalp_reasons or 'none'}\n"
@@ -1493,6 +1487,47 @@ class CTApplication:
             "════════════════════════════════════\n"
         )
         return base_summary + scalp_summary
+
+    async def _run_scalp_health_loop(self) -> None:
+        """Monitor and persist Scalp health without affecting Day Trading health."""
+        while self._engine_running:
+            try:
+                scalp_health = await health_manager.get_scalp_health()
+                stats = await health_manager.get_stats()
+                scalp = stats.get("scalp", {})
+                logger.info(
+                    "scalp_health_heartbeat",
+                    timestamp=datetime.now(timezone.utc),
+                    status=scalp_health.get("status", "UNKNOWN"),
+                    state=scalp_health.get("state", "UNKNOWN"),
+                    reason=scalp_health.get("reason", ""),
+                    last_trigger_at=scalp_health.get("last_trigger_at"),
+                    age_seconds=scalp_health.get("age_seconds"),
+                    cycles=scalp_health.get("cycles", 0),
+                    errors=scalp_health.get("errors", 0),
+                    paper_only=True,
+                )
+                try:
+                    await self._supabase.save_scalp_health_snapshot(scalp_health, scalp)
+                except Exception as snapshot_exc:  # noqa: BLE001
+                    # Snapshot persistence must not stop Scalp evaluation.
+                    logger.warning(
+                        "scalp_health_snapshot_failed",
+                        module="app.main",
+                        error_type=type(snapshot_exc).__name__,
+                        error_message=str(snapshot_exc),
+                    )
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "scalp_health_loop_error",
+                    module="app.main",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                await asyncio.sleep(60)
 
     async def _run_health_logger_loop(self) -> None:
         """Periodically log health stats and diagnostic reports (Requested Log #9 & #11)."""
@@ -1540,14 +1575,21 @@ class CTApplication:
                     message_text=summary_text,
                 )
                 scalp_stats = stats.get("scalp", {})
+                scalp_health = await health_manager.get_scalp_health()
                 logger.info(
                     "scalp_health_summary",
                     message_text=(
-                        f"SCALP profile={scalp_stats.get('profile', 'scalp_balanced')} "
+                        f"SCALP HEALTH status={scalp_health.get('status', 'UNKNOWN')} "
+                        f"state={scalp_health.get('state', 'UNKNOWN')} "
+                        f"last_5m={scalp_health.get('last_trigger_at', 'none')} "
+                        f"age={scalp_health.get('age_seconds', '-')} "
+                        f"profile={scalp_stats.get('profile', 'scalp_balanced')} "
                         f"paper_only={scalp_stats.get('paper_only', True)} "
                         f"candidates={scalp_stats.get('candidates', 0)} "
                         f"approved={scalp_stats.get('approved', 0)} "
                         f"rejected={scalp_stats.get('rejected', 0)} "
+                        f"hold_evaluations={scalp_stats.get('hold_evaluations', 0)} "
+                        f"exits={scalp_stats.get('exit_counts', {})} "
                         f"reasons={scalp_stats.get('rejection_reasons', {})}"
                     ),
                 )

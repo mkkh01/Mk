@@ -80,6 +80,32 @@ def test_scalp_exit_uses_net_target_and_time_limit():
 
 
 @pytest.mark.asyncio
+async def test_scalp_health_is_separate_and_hold_is_not_exit():
+    manager = HealthManager()
+    await manager.record_scalp_decision(
+        {
+            "symbol": "BTCUSDT",
+            "approved": False,
+            "status": "rejected",
+            "score": 0.4,
+            "confidence": 0.3,
+            "trigger_candle_at": datetime.now(timezone.utc).isoformat(),
+            "reason": "trigger_strength_below_threshold:0.400<0.550",
+        }
+    )
+    await manager.record_scalp_exit({"status": "hold", "reason": "within_limits"})
+    health = await manager.get_scalp_health()
+    stats = (await manager.get_stats())["scalp"]
+    overall = await manager.get_overall_health()
+
+    assert health["status"] == "HEALTHY"
+    assert health["last_trigger_at"] is not None
+    assert stats["hold_evaluations"] == 1
+    assert stats["exit_counts"] == {}
+    assert "ScalpMonitor" not in overall["components"]
+
+
+@pytest.mark.asyncio
 async def test_limit_not_filled_is_operational_not_system_error():
     manager = HealthManager()
     await manager.record_limit_not_filled("ATOMUSDT", "limit moved away")
@@ -89,6 +115,22 @@ async def test_limit_not_filled_is_operational_not_system_error():
     assert stats["limit_not_filled_count"] == 1
     assert stats["operational_rejection_reasons"] == {"limit_not_filled": 1}
     assert stats["errors_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scalp_rejection_threshold_reasons_are_grouped():
+    manager = HealthManager()
+    for reason in (
+        "trigger_strength_below_threshold:0.400<0.550",
+        "trigger_strength_below_threshold:0.300<0.550",
+        "setup_strength_below_threshold:0.400<0.500",
+    ):
+        await manager.record_scalp_decision({"approved": False, "reason": reason})
+
+    reasons = (await manager.get_stats())["scalp"]["rejection_reasons"]
+
+    assert reasons["trigger_strength_below_threshold"] == 2
+    assert reasons["setup_strength_below_threshold"] == 1
 
 
 @pytest.mark.asyncio

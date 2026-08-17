@@ -85,6 +85,16 @@ class HealthManager:
             "rejection_reasons": {},
             "last_activity": datetime.now(timezone.utc),
             "last_candle_at": None,
+            "scalp_health": {
+                "status": "STARTING",
+                "state": "STARTING",
+                "reason": "Scalp health has not received a 5m trigger yet",
+                "last_trigger_at": None,
+                "last_update_at": datetime.now(timezone.utc),
+                "cycles": 0,
+                "errors": 0,
+                "stale_after_seconds": 900.0,
+            },
             "scalp": {
                 "profile": "scalp_balanced",
                 "timeframes": ["5m", "15m", "30m", "1h"],
@@ -99,6 +109,7 @@ class HealthManager:
                 "score_sum": 0.0,
                 "confidence_sum": 0.0,
                 "exit_counts": {},
+                "hold_evaluations": 0,
                 "entries": 0,
                 "entry_block_reasons": {},
                 "wins": 0,
@@ -192,19 +203,82 @@ class HealthManager:
             self._stats["last_activity"] = datetime.now(timezone.utc)
 
     async def set_scalp_state(self, state: str, reason: str) -> None:
-        """Set Scalp monitor lifecycle state independently from Swing."""
+        """Set Scalp strategy state without changing global component health."""
         async with self._lock:
+            now = datetime.now(timezone.utc)
             scalp = self._stats["scalp"]
-            scalp["state"] = str(state).upper()
+            scalp_health = self._stats["scalp_health"]
+            normalized = str(state).upper()
+            scalp["state"] = normalized
             scalp["state_reason"] = str(reason)
-            self._stats["last_activity"] = datetime.now(timezone.utc)
+            scalp_health["state"] = normalized
+            scalp_health["reason"] = str(reason)
+            scalp_health["last_update_at"] = now
+            if normalized in {"ERROR", "CRITICAL"}:
+                scalp_health["status"] = normalized
+            elif normalized == "STOPPED":
+                scalp_health["status"] = "STOPPED"
+            elif normalized == "STARTING":
+                scalp_health["status"] = "STARTING"
+            self._stats["last_activity"] = now
+
+    async def record_scalp_health_error(self, reason: str) -> None:
+        """Record a Scalp-only evaluation error without raising global Errors."""
+        async with self._lock:
+            now = datetime.now(timezone.utc)
+            scalp_health = self._stats["scalp_health"]
+            scalp_health["status"] = "ERROR"
+            scalp_health["state"] = "ERROR"
+            scalp_health["reason"] = str(reason)
+            scalp_health["errors"] += 1
+            scalp_health["last_update_at"] = now
+            self._stats["scalp"]["errors"] += 1
+            self._stats["last_activity"] = now
+
+    async def get_scalp_health(self) -> dict[str, Any]:
+        """Return Scalp health only; never fold it into Day Trading health."""
+        async with self._lock:
+            health = deepcopy(self._stats["scalp_health"])
+            now = datetime.now(timezone.utc)
+            last = health.get("last_trigger_at")
+            if last:
+                last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+                age = max(0.0, (now - last_dt).total_seconds())
+                health["age_seconds"] = round(age, 1)
+                if age > float(health.get("stale_after_seconds", 900.0)) and health.get("state") not in {"STOPPED", "ERROR"}:
+                    health["status"] = "STALE"
+                    health["reason"] = f"No closed 5m trigger for {age:.0f}s"
+                elif health.get("state") not in {"ERROR", "STOPPED"}:
+                    health["status"] = "HEALTHY"
+            else:
+                started_at = health.get("last_update_at")
+                age = None
+                if started_at:
+                    started_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                    age = max(0.0, (now - started_dt).total_seconds())
+                health["age_seconds"] = None if age is None else round(age, 1)
+                if health.get("state") == "STARTING":
+                    if age is not None and age > float(health.get("stale_after_seconds", 900.0)):
+                        health["status"] = "STALE"
+                        health["reason"] = f"No first closed 5m trigger for {age:.0f}s"
+                    else:
+                        health["status"] = "STARTING"
+            return health
 
     async def record_scalp_decision(self, decision: dict[str, Any]) -> None:
         """Record one independent Scalp decision for dashboard and logs."""
         async with self._lock:
+            now = datetime.now(timezone.utc)
             scalp = self._stats["scalp"]
+            scalp_health = self._stats["scalp_health"]
             scalp["state"] = "RUNNING"
             scalp["state_reason"] = "5m cycle evaluated"
+            scalp_health["status"] = "HEALTHY"
+            scalp_health["state"] = "RUNNING"
+            scalp_health["reason"] = "5m cycle evaluated"
+            scalp_health["last_trigger_at"] = decision.get("trigger_candle_at") or now.isoformat()
+            scalp_health["last_update_at"] = now
+            scalp_health["cycles"] += 1
             scalp["candidates"] += 1
             scalp["score_sum"] += float(decision.get("score", 0.0) or 0.0)
             scalp["confidence_sum"] += float(decision.get("confidence", 0.0) or 0.0)
@@ -218,8 +292,8 @@ class HealthManager:
                 if float(decision.get("score", 0.0) or 0.0) >= 0.50 or float(decision.get("confidence", 0.0) or 0.0) >= 0.45:
                     scalp["near_misses"] += 1
             scalp["last_decision"] = deepcopy(decision)
-            scalp["last_cycle_at"] = datetime.now(timezone.utc)
-            self._stats["last_activity"] = datetime.now(timezone.utc)
+            scalp["last_cycle_at"] = now
+            self._stats["last_activity"] = now
 
     @staticmethod
     def _normalise_scalp_reason(reason: str) -> str:
@@ -231,6 +305,8 @@ class HealthManager:
             "price_extended_for_scalp:",
             "momentum_below_threshold:",
             "rsi_overbought_for_scalp:",
+            "trigger_strength_below_threshold:",
+            "setup_strength_below_threshold:",
         ):
             if reason.startswith(prefix):
                 return prefix.rstrip(":")
@@ -305,7 +381,10 @@ class HealthManager:
             scalp = self._stats["scalp"]
             status = str(exit_decision.get("status") or "hold")
             counts = scalp["exit_counts"]
-            counts[status] = counts.get(status, 0) + 1
+            if status == "hold":
+                scalp["hold_evaluations"] += 1
+            else:
+                counts[status] = counts.get(status, 0) + 1
             scalp["last_exit"] = deepcopy(exit_decision)
             scalp["last_cycle_at"] = datetime.now(timezone.utc)
             self._stats["last_activity"] = datetime.now(timezone.utc)

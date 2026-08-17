@@ -773,6 +773,52 @@ class SupabaseClient:
                 metrics.sharpe_ratio, metrics.profit_factor,
             )
 
+    # ---------------- independent Scalp health ----------------
+    async def save_scalp_health_snapshot(self, health: dict[str, Any], scalp: dict[str, Any]) -> None:
+        """Persist an observability-only Scalp health snapshot."""
+        pool = self._require_pool()
+        last_trigger = health.get("last_trigger_at")
+        if isinstance(last_trigger, str):
+            last_trigger = datetime.fromisoformat(last_trigger.replace("Z", "+00:00"))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO scalp_health_snapshots (
+                    status, state, reason, last_trigger_at, age_seconds,
+                    cycles, errors, candidates, approved, rejected, entries,
+                    open_trades, closed_trades, wins, losses, gross_pnl_pct,
+                    net_pnl_pct, hold_evaluations, exit_counts, rejection_reasons,
+                    entry_block_reasons, last_decision, details
+                ) VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+                    $17,$18,$19::jsonb,$20::jsonb,$21::jsonb,$22::jsonb,$23::jsonb
+                )
+                """,
+                str(health.get("status", "UNKNOWN")),
+                str(health.get("state", "UNKNOWN")),
+                str(health.get("reason", "")),
+                last_trigger,
+                health.get("age_seconds"),
+                int(health.get("cycles", 0) or 0),
+                int(health.get("errors", 0) or 0),
+                int(scalp.get("candidates", 0) or 0),
+                int(scalp.get("approved", 0) or 0),
+                int(scalp.get("rejected", 0) or 0),
+                int(scalp.get("entries", 0) or 0),
+                len(scalp.get("open_trades", []) or []),
+                len(scalp.get("closed_trades", []) or []),
+                int(scalp.get("wins", 0) or 0),
+                int(scalp.get("losses", 0) or 0),
+                float(scalp.get("gross_pnl_pct", 0.0) or 0.0),
+                float(scalp.get("net_pnl_pct", 0.0) or 0.0),
+                int(scalp.get("hold_evaluations", 0) or 0),
+                json.dumps(scalp.get("exit_counts", {}) or {}),
+                json.dumps(scalp.get("rejection_reasons", {}) or {}),
+                json.dumps(scalp.get("entry_block_reasons", {}) or {}),
+                json.dumps(scalp.get("last_decision")) if scalp.get("last_decision") else None,
+                json.dumps({"paper_only": bool(scalp.get("paper_only", True)), "timeframes": scalp.get("timeframes", [])}),
+            )
+
     # ---------------- migrations runner ----------------
     async def apply_migrations(self, migration_sqls: list[str]) -> None:
         """Apply each migration SQL in order. Each migration must be idempotent

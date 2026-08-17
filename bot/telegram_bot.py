@@ -1526,6 +1526,7 @@ class CTTelegramBot:
         """Show Scalp counters plus open/closed paper-trade outcomes."""
         stats = await health_manager.get_stats()
         scalp = stats.get("scalp", {})
+        scalp_health = stats.get("scalp_health", {})
         last = scalp.get("last_decision") or {}
         reasons = scalp.get("rejection_reasons", {})
         open_trades = scalp.get("open_trades", [])
@@ -1535,6 +1536,7 @@ class CTTelegramBot:
             "Scalp Status (Paper Only)",
             f"Monitor State: {str(scalp.get('state', 'UNKNOWN')).upper()}",
             f"State Detail: {scalp.get('state_reason', 'no state recorded')}",
+            f"Scalp Health: {str(scalp_health.get('status', 'UNKNOWN')).upper()} | {scalp_health.get('reason', 'no health record')} | last_5m={scalp_health.get('last_trigger_at', 'none')} | age={scalp_health.get('age_seconds', '-')}",
             "",
             f"Candidates: {scalp.get('candidates', 0)}",
             f"Approved Signals: {scalp.get('approved', 0)}",
@@ -1543,7 +1545,7 @@ class CTTelegramBot:
             f"Entries: {scalp.get('entries', 0)} | Open: {len(open_trades)} | Closed: {len(closed_trades)}",
             f"Entry blocks: {scalp.get('entry_block_reasons', {}) or 'none'}",
             f"Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)} | Gross: {float(scalp.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | Net: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%",
-            f"Avg hold: {float(scalp.get('hold_minutes_sum', 0.0) or 0.0) / max(1, len(closed_trades)):.1f}m | Exits: {scalp.get('exit_counts', {}) or 'none'}",
+            f"Avg hold: {float(scalp.get('hold_minutes_sum', 0.0) or 0.0) / max(1, len(closed_trades)):.1f}m | Hold evaluations: {scalp.get('hold_evaluations', 0)} | Exits: {scalp.get('exit_counts', {}) or 'none'}",
             f"Successful trades: {len(winners)}",
             "",
             "Open Scalp trades:",
@@ -1593,16 +1595,18 @@ class CTTelegramBot:
         """Show the dedicated Scalp paper-trade ledger, never Swing history."""
         stats = await health_manager.get_stats()
         scalp = stats.get("scalp", {})
+        scalp_health = stats.get("scalp_health", {})
         open_trades = scalp.get("open_trades", [])
         closed_trades = scalp.get("closed_trades", [])
         lines = [
             "Scalp Trades Ledger (Paper Only)",
             f"Monitor State: {str(scalp.get('state', 'UNKNOWN')).upper()}",
             f"State Detail: {scalp.get('state_reason', 'no state recorded')}",
+            f"Scalp Health: {str(scalp_health.get('status', 'UNKNOWN')).upper()} | {scalp_health.get('reason', 'no health record')} | last_5m={scalp_health.get('last_trigger_at', 'none')} | age={scalp_health.get('age_seconds', '-')}",
             "",
             f"Entries: {scalp.get('entries', 0)} | Open: {len(open_trades)} | Closed: {len(closed_trades)} | Wins: {scalp.get('wins', 0)} | Losses: {scalp.get('losses', 0)}",
             f"Gross result: {float(scalp.get('gross_pnl_pct', 0.0) or 0.0) * 100:+.3f}% | Net after cost: {float(scalp.get('net_pnl_pct', 0.0) or 0.0) * 100:+.3f}%",
-            f"Avg hold: {float(scalp.get('hold_minutes_sum', 0.0) or 0.0) / max(1, len(closed_trades)):.1f}m | Exits: {scalp.get('exit_counts', {}) or 'none'}",
+            f"Avg hold: {float(scalp.get('hold_minutes_sum', 0.0) or 0.0) / max(1, len(closed_trades)):.1f}m | Hold evaluations: {scalp.get('hold_evaluations', 0)} | Exits: {scalp.get('exit_counts', {}) or 'none'}",
             "",
             "OPEN:",
         ]

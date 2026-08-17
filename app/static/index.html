@@ -151,6 +151,7 @@
                     <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Losses</div><div class="text-lg font-bold text-red-300" id="scalp-losses">-</div></div>
                 </div>
                 <div class="mt-3 text-xs text-gray-400" id="scalp-state">Scalp state: STOPPED | -</div>
+                <div class="mt-2 text-xs text-cyan-200" id="scalp-health">Scalp Health: STARTING | no 5m trigger yet</div>
                 <div class="mt-2 text-xs text-gray-400" id="scalp-profile">Profile: scalp_balanced | Timeframes: 5m, 15m, 30m, 1h | Paper only</div>
                 <div class="mt-2 text-xs text-gray-400" id="scalp-last">Last Scalp decision: -</div>
                 <div class="mt-2 text-xs text-gray-400" id="scalp-trades">Scalp trades: -</div>
@@ -265,6 +266,7 @@
 
                 // Scalp Balanced diagnostics
                 const scalp = data.scalp_summary || (data.diagnostics || {}).scalp || {};
+                const scalpHealth = data.scalp_health || {};
                 document.getElementById('scalp-candidates').textContent = scalp.candidates ?? 0;
                 document.getElementById('scalp-approved').textContent = scalp.approved ?? 0;
                 document.getElementById('scalp-rejected').textContent = scalp.rejected ?? 0;
@@ -276,6 +278,7 @@
                 document.getElementById('scalp-wins').textContent = scalp.wins ?? 0;
                 document.getElementById('scalp-losses').textContent = scalp.losses ?? 0;
                 document.getElementById('scalp-state').textContent = `Scalp state: ${String(scalp.state || 'UNKNOWN').toUpperCase()} | ${scalp.state_reason || 'no state recorded'}`;
+                document.getElementById('scalp-health').textContent = `Scalp Health: ${String(scalpHealth.status || 'UNKNOWN').toUpperCase()} | ${scalpHealth.reason || 'no health record'} | last 5m=${scalpHealth.last_trigger_at || 'none'} | age=${scalpHealth.age_seconds == null ? '-' : `${Number(scalpHealth.age_seconds).toFixed(0)}s`}`;
                 document.getElementById('scalp-profile').textContent = `Profile: ${scalp.profile || 'scalp_balanced'} | Timeframes: ${(scalp.timeframes || ['5m', '15m', '30m', '1h']).join(', ')} | ${scalp.paper_only ? 'Paper only' : 'Live'}`;
                 const lastScalp = scalp.last_decision;
                 document.getElementById('scalp-last').textContent = lastScalp
@@ -287,7 +290,7 @@
                 const scalpClosedCount = scalpClosed.length;
                 const scalpAvgHold = Number(scalp.hold_minutes_sum || 0) / Math.max(1, scalpClosedCount);
                 const scalpExitText = Object.entries(scalp.exit_counts || {}).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none';
-                document.getElementById('scalp-trades').textContent = `Scalp trades: ${scalpTradeText} | Gross: ${(Number(scalp.gross_pnl_pct || 0) * 100).toFixed(3)}% | Avg hold: ${scalpAvgHold.toFixed(1)}m | Exits: ${scalpExitText}`;
+                document.getElementById('scalp-trades').textContent = `Scalp trades: ${scalpTradeText} | Gross: ${(Number(scalp.gross_pnl_pct || 0) * 100).toFixed(3)}% | Avg hold: ${scalpAvgHold.toFixed(1)}m | Hold evaluations: ${scalp.hold_evaluations || 0} | Exits: ${scalpExitText}`;
                 const scalpReasons = scalp.rejection_reasons || {};
                 const scalpEntryBlocks = scalp.entry_block_reasons || {};
                 document.getElementById('scalp-rejections').textContent = `Scalp rejection reasons: ${Object.entries(scalpReasons).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'} | Entry blocks: ${Object.entries(scalpEntryBlocks).map(([reason, count]) => `${reason}: ${count}`).join(' | ') || 'none'}`;
