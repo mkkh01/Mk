@@ -43,20 +43,65 @@ LOG EVENT CATALOG (Section 9):
   - bot_command              {timestamp, user_id, command}
   - bot_reply                {timestamp, user_id, reply_kind}
   - error                    {timestamp, module, error_type, error_message}
+  - runtime_task_stopped     {timestamp, task_name, exception, action}
+  - runtime_task_restarted   {timestamp, task_name, replacement_task}
+  - ws_stale_reconnect       {timestamp, stale_pairs, sample_pairs}
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
+from collections import Counter, deque
 from datetime import datetime, timezone
-from typing import Any
-import uuid
+from threading import Lock
+from typing import Any, Optional
 
 import structlog
 
 
 _CONFIGURED = False
+_RUNTIME_EVENTS: deque[dict[str, Any]] = deque(maxlen=2000)
+_RUNTIME_EVENTS_LOCK = Lock()
+
+
+def _capture_runtime_event(event_dict: dict[str, Any]) -> None:
+    """Keep a bounded, JSON-safe copy of every emitted structured event."""
+    try:
+        payload = json.loads(json.dumps(event_dict, default=str))
+        payload["captured_at"] = datetime.now(timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        payload = {
+            "event": str(event_dict.get("event", "unknown")),
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "message_text": str(event_dict.get("message_text", "")),
+        }
+    with _RUNTIME_EVENTS_LOCK:
+        _RUNTIME_EVENTS.append(payload)
+
+
+def get_runtime_events(limit: int = 200, event: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return newest-first runtime movement events from the bounded buffer."""
+    safe_limit = max(1, min(int(limit), 500))
+    with _RUNTIME_EVENTS_LOCK:
+        events = list(_RUNTIME_EVENTS)
+    if event:
+        events = [item for item in events if item.get("event") == event]
+    return list(reversed(events[-safe_limit:]))
+
+
+def get_runtime_event_counts() -> dict[str, int]:
+    """Return counts by event name for the currently retained runtime window."""
+    with _RUNTIME_EVENTS_LOCK:
+        events = list(_RUNTIME_EVENTS)
+    return dict(Counter(str(item.get("event", "unknown")) for item in events))
+
+
+def clear_runtime_events() -> None:
+    """Clear the in-memory movement window, primarily for tests and restarts."""
+    with _RUNTIME_EVENTS_LOCK:
+        _RUNTIME_EVENTS.clear()
 
 
 def configure_logging(level: int = logging.INFO) -> None:
@@ -92,6 +137,7 @@ def configure_logging(level: int = logging.INFO) -> None:
         # Format with trace/cycle IDs for better correlation
         formatted_msg = f"[{timestamp}] [{level}] [{module}] [{symbol}] [{timeframe}] [T:{trace_id}] [C:{cycle_id}] {message}"
         event_dict["formatted_message"] = formatted_msg
+        _capture_runtime_event(event_dict)
         return event_dict
 
     def plain_text_renderer(logger, method_name, event_dict):

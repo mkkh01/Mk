@@ -1137,6 +1137,7 @@ class BinanceWSClient:
             while self._running:
                 await asyncio.sleep(HEALTH_CHECK_INTERVAL_SECONDS)
                 now = datetime.now(timezone.utc)
+                stale_pairs: list[tuple[str, str, Optional[float]]] = []
                 for symbol, timeframe in self._active_pairs:
                     try:
                         last = await self._redis.get_last_message(symbol, timeframe)
@@ -1156,6 +1157,7 @@ class BinanceWSClient:
                                     seconds_since_last=None,
                                     note="no messages received since connect",
                                 )
+                                stale_pairs.append((symbol, timeframe, None))
                         continue
 
                     seconds_since = (now - last).total_seconds()
@@ -1167,6 +1169,26 @@ class BinanceWSClient:
                             HealthStatus.WARNING, 
                             f"WebSocket data stale for {symbol} {timeframe}: {seconds_since:.1f}s",
                             {"symbol": symbol, "timeframe": timeframe, "delta": seconds_since}
+                        )
+                        stale_pairs.append((symbol, timeframe, seconds_since))
+
+                if stale_pairs and self._connected and self._ws is not None:
+                    logger.warning(
+                        "ws_stale_reconnect",
+                        timestamp=now,
+                        stale_pairs=len(stale_pairs),
+                        sample_pairs=stale_pairs[:5],
+                        note="closing stale WebSocket so the outer loop reconnects",
+                    )
+                    try:
+                        await self._ws.close(code=4001, reason="stale_stream")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "error",
+                            timestamp=now,
+                            module="ingest.binance_ws",
+                            error_type=type(exc).__name__,
+                            error_message=f"stale reconnect close failed: {exc}",
                         )
         except asyncio.CancelledError:
             return

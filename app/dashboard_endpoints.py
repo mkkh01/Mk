@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from pydantic import BaseModel, ConfigDict
 
-from monitoring.logger import get_logger
+from monitoring.logger import get_logger, get_runtime_event_counts, get_runtime_events
 from portfolio.performance import PerformanceCalculator
 from storage.redis_cache import RedisCache
 from storage.supabase import SupabaseClient
@@ -186,6 +186,13 @@ class CycleSummaryResponse(BaseModel):
     limit_not_filled: int = 0
     operational_rejection_reasons: dict[str, int] = {}
     scalp_health: dict[str, Any] = {}
+
+
+class RuntimeActivityResponse(BaseModel):
+    captured_events: int
+    event_counts: dict[str, int]
+    events: list[dict[str, Any]]
+    cycle_summary: CycleSummaryResponse
 
 
 class OverallPerformanceResponse(BaseModel):
@@ -377,6 +384,27 @@ async def get_cycle_summary_endpoint(request: Request) -> CycleSummaryResponse:
         limit_not_filled=stats.get("limit_not_filled_count", 0),
         operational_rejection_reasons=stats.get("operational_rejection_reasons", {}),
         scalp_health=scalp_health,
+    )
+
+
+@router.get("/runtime_activity", response_model=RuntimeActivityResponse)
+async def get_runtime_activity_endpoint(
+    request: Request,
+    limit: int = Query(default=200, ge=1, le=500),
+    event: Optional[str] = Query(default=None, max_length=80),
+) -> RuntimeActivityResponse:
+    """Return the bounded movement log plus the current cycle summary."""
+    ct_app_instance = request.app.state.ct_app_instance
+    if not ct_app_instance:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Application not initialized")
+
+    cycle_summary = await get_cycle_summary_endpoint(request)
+    events = get_runtime_events(limit=limit, event=event)
+    return RuntimeActivityResponse(
+        captured_events=len(events),
+        event_counts=get_runtime_event_counts(),
+        events=events,
+        cycle_summary=cycle_summary,
     )
 
 

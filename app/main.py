@@ -106,6 +106,7 @@ PAPER_TRADER_POLL_SECONDS = 15
 # log stream shows the process is alive even on quiet markets).
 # Must be shorter than ComponentHealth's 60-second stale timeout.
 SUBSCRIBER_HEARTBEAT_SECONDS = 30
+RUNTIME_SUPERVISOR_INTERVAL_SECONDS = 5.0
 
 # Sentinel values for the engine state machine.
 _ENGINE_STATE_LOCK = asyncio.Lock()
@@ -177,6 +178,7 @@ class CTApplication:
         self._health_log_task: Optional[asyncio.Task[None]] = None
         self._runtime_heartbeat_task: Optional[asyncio.Task[None]] = None
         self._scalp_health_task: Optional[asyncio.Task[None]] = None
+        self._runtime_supervisor_task: Optional[asyncio.Task[None]] = None
 
         # Engine run-state flag (mirrors Redis ``engine_running`` so we don't
         # race the cache when the user double-clicks Start/Stop).
@@ -450,6 +452,9 @@ class CTApplication:
             self._scalp_health_task = asyncio.create_task(
                 self._run_scalp_health_loop(), name="scalp_health_logger"
             )
+            self._runtime_supervisor_task = asyncio.create_task(
+                self._run_runtime_supervisor(), name="runtime_supervisor"
+            )
 
             logger.info(
                 "engine_started",
@@ -540,7 +545,7 @@ class CTApplication:
                     )
 
             # 2 + 3. Cancel background tasks.
-            for task_attr in ("_ingest_task", "_orchestrator_subscriber_task", "_paper_trader_task", "_health_log_task", "_runtime_heartbeat_task", "_scalp_health_task"):
+            for task_attr in ("_runtime_supervisor_task", "_ingest_task", "_orchestrator_subscriber_task", "_paper_trader_task", "_health_log_task", "_runtime_heartbeat_task", "_scalp_health_task"):
                 task: Optional[asyncio.Task[None]] = getattr(self, task_attr)
                 if task is not None and not task.done():
                     task.cancel()
@@ -736,6 +741,106 @@ class CTApplication:
     # =====================================================================
     # Background task bodies (guarded -- never let one crash kill the process)
     # =====================================================================
+    async def _run_runtime_supervisor(self) -> None:
+        """Keep the long-lived runtime workers alive and observable.
+
+        A worker can exit after its own guard logs an exception. Previously the
+        engine flag stayed true while no ingest/subscriber worker remained,
+        which looked like a healthy but frozen system. This supervisor treats a
+        finished worker as a recoverable runtime event, restarts it, and marks
+        the owning component unhealthy until the replacement is alive.
+        """
+        workers = (
+            ("ingest", "_ingest_task", self._run_ingest_guarded, "Ingest"),
+            (
+                "orchestrator_subscriber",
+                "_orchestrator_subscriber_task",
+                self._run_orchestrator_subscriber_guarded,
+                "Orchestrator",
+            ),
+            ("paper_trader", "_paper_trader_task", self._run_paper_trader_guarded, "PaperTrader"),
+        )
+        try:
+            while self._engine_running:
+                for worker_name, task_attr, factory, component in workers:
+                    task = getattr(self, task_attr)
+                    if task is not None and not task.done():
+                        await health_manager.update_component(
+                            component,
+                            HealthStatus.OK,
+                            f"{worker_name} task is running",
+                            {"task_name": task.get_name(), "alive": True},
+                            timeout=15.0,
+                        )
+                        continue
+
+                    exception_text = "task_missing"
+                    if task is not None:
+                        try:
+                            task_exception = task.exception()
+                            exception_text = str(task_exception) if task_exception else "task_exited"
+                        except asyncio.CancelledError:
+                            exception_text = "task_cancelled"
+                        except Exception as exc:  # noqa: BLE001
+                            exception_text = f"{type(exc).__name__}: {exc}"
+
+                    await health_manager.update_component(
+                        component,
+                        HealthStatus.ERROR,
+                        f"{worker_name} task stopped; restarting",
+                        {"task_name": task.get_name() if task else worker_name, "exception": exception_text},
+                        timeout=15.0,
+                    )
+                    await health_manager.record_error(
+                        "app.main",
+                        "RuntimeTaskStopped",
+                        f"{worker_name} task stopped ({exception_text}); automatic restart scheduled",
+                    )
+                    logger.error(
+                        "runtime_task_stopped",
+                        timestamp=datetime.now(timezone.utc),
+                        module="app.main",
+                        task_name=worker_name,
+                        exception=exception_text,
+                        action="restart",
+                    )
+                    replacement = asyncio.create_task(factory(), name=f"{worker_name}_restart")
+                    setattr(self, task_attr, replacement)
+                    logger.info(
+                        "runtime_task_restarted",
+                        timestamp=datetime.now(timezone.utc),
+                        module="app.main",
+                        task_name=worker_name,
+                        replacement_task=replacement.get_name(),
+                    )
+
+                await health_manager.update_component(
+                    "RuntimeSupervisor",
+                    HealthStatus.OK,
+                    "Runtime supervisor is monitoring worker tasks",
+                    {"workers": [name for name, _, _, _ in workers]},
+                    timeout=15.0,
+                )
+                await asyncio.sleep(RUNTIME_SUPERVISOR_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await health_manager.update_component(
+                "RuntimeSupervisor",
+                HealthStatus.ERROR,
+                f"Runtime supervisor failed: {exc}",
+                {"error_type": type(exc).__name__},
+                timeout=15.0,
+            )
+            await health_manager.record_error("app.main", type(exc).__name__, f"runtime supervisor crashed: {exc}")
+            logger.error(
+                "runtime_supervisor_failed",
+                timestamp=datetime.now(timezone.utc),
+                module="app.main",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+
     async def _run_ingest_guarded(self) -> None:
         """Run the Binance WebSocket ingest loop, isolated from process death.
 
@@ -1490,6 +1595,10 @@ class CTApplication:
                 "signal_quality_failure_reasons": dict(stats.get("signal_quality_failure_reasons", {})),
                 "quality_observations": list(stats.get("signal_quality_observations", [])),
                 "db_write_failures": int(stats.get("db_write_failures", 0)),
+                "analysis_failures": int(stats.get("analysis_failures", 0)),
+                "trade_open_attempts": int(stats.get("trade_open_attempts", 0)),
+                "trade_open_failures": int(stats.get("trade_open_failures", 0)),
+                "approved_without_trade": int(stats.get("approved_without_trade", 0)),
                 "entry_timing_checked": int(stats.get("entry_timing_checked", 0)),
                 "entry_timing_passed": int(stats.get("entry_timing_passed", 0)),
                 "timing_rejection_reasons": dict(stats.get("timing_rejection_reasons", {})),
@@ -1578,15 +1687,11 @@ class CTApplication:
                 avg_conf = (stats.get("total_confidence_sum", 0.0) / analyses) * 100.0
                 avg_time = stats.get("total_analysis_time_ms", 0.0) / analyses
 
-                # [FIX] Refresh component statuses to prevent staleness
-                try:
-                    await health_manager.update_component("Redis", HealthStatus.OK, "Redis connection active")
-                    await health_manager.update_component("Supabase", HealthStatus.OK, "Supabase connection active")
-                    # Explicitly update Ingest and PaperTrader to prevent staleness if they are otherwise idle
-                    await health_manager.update_component("Ingest", HealthStatus.OK, "Ingest component is active", timeout=60.0)
-                    await health_manager.update_component("PaperTrader", HealthStatus.OK, "PaperTrader component is active", timeout=60.0)
-                except Exception:
-                    pass
+                # Refresh storage statuses here. Worker statuses are owned
+                # by RuntimeSupervisor so a dead task cannot be masked by
+                # this periodic health logger.
+                await health_manager.update_component("Redis", HealthStatus.OK, "Redis connection active")
+                await health_manager.update_component("Supabase", HealthStatus.OK, "Supabase connection active")
 
                 # Derive system health from global health_manager
                 health_summary = await health_manager.get_overall_health()

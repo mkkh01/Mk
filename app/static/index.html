@@ -35,6 +35,36 @@
             </div>
         </div>
 
+        <div class="flex flex-wrap items-center gap-3 mb-6">
+            <button id="toggle-runtime-activity" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded transition-colors">
+                Show System Movement Log
+            </button>
+            <span id="runtime-activity-status" class="text-xs text-gray-400">Movement log is hidden</span>
+        </div>
+
+        <div id="runtime-activity-panel" class="card mb-6 fade-in" style="display:none;">
+            <div class="card-title">
+                <svg class="w-5 h-5 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                System Movement Log &amp; Cycle Summary
+            </div>
+            <div class="grid-auto mb-4">
+                <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Captured Events</div><div class="text-lg font-bold text-indigo-300" id="runtime-event-count">-</div></div>
+                <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Last Event</div><div class="text-sm font-semibold text-cyan-300" id="runtime-last-event">-</div></div>
+                <div class="p-3 bg-gray-800 rounded-lg"><div class="text-xs text-gray-400">Worker Restarts</div><div class="text-lg font-bold text-yellow-300" id="runtime-worker-restarts">-</div></div>
+            </div>
+            <div class="mb-4">
+                <div class="text-sm font-semibold text-gray-300 mb-2">Current Cycle Summary</div>
+                <pre class="cycle-summary-text" id="runtime-cycle-summary">Loading...</pre>
+            </div>
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-sm font-semibold text-gray-300">Recent System Movement</div>
+                    <button id="refresh-runtime-activity" class="text-xs text-indigo-300 hover:text-indigo-200">Refresh</button>
+                </div>
+                <div id="runtime-events" class="space-y-2 max-h-[520px] overflow-y-auto">Loading...</div>
+            </div>
+        </div>
+
         <!-- Cycle Summary Card (Main Feature) -->
         <div class="card mb-6 fade-in">
             <div class="card-title">
@@ -237,6 +267,58 @@
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             return await response.json();
+        }
+
+        let runtimeActivityOpen = false;
+
+        function renderRuntimeEvent(event) {
+            const row = document.createElement('div');
+            row.className = 'runtime-event p-3 bg-gray-800 rounded border border-gray-700';
+            const timestamp = event.timestamp || event.captured_at || '-';
+            const eventName = event.event || 'unknown';
+            const symbol = event.symbol || '-';
+            const timeframe = event.timeframe || '-';
+            const message = event.message_text || event.error_message || event.note || event.status || '';
+            const headline = document.createElement('div');
+            headline.className = 'flex flex-wrap justify-between gap-2 text-xs';
+            headline.innerHTML = `<span class="font-semibold text-indigo-200">${eventName}</span><span class="text-gray-500">${timestamp}</span>`;
+            const context = document.createElement('div');
+            context.className = 'text-xs text-cyan-200 mt-1';
+            context.textContent = `${symbol} | ${timeframe}${message ? ` | ${message}` : ''}`;
+            const details = document.createElement('div');
+            details.className = 'text-[11px] text-gray-500 mt-1 whitespace-pre-wrap break-words';
+            details.textContent = JSON.stringify(event);
+            row.appendChild(headline);
+            row.appendChild(context);
+            row.appendChild(details);
+            return row;
+        }
+
+        async function updateRuntimeActivity() {
+            if (!runtimeActivityOpen) return;
+            try {
+                const data = await fetchData('runtime_activity?limit=200');
+                document.getElementById('runtime-event-count').textContent = data.captured_events ?? 0;
+                const events = data.events || [];
+                const last = events[0] || {};
+                document.getElementById('runtime-last-event').textContent = last.event || 'none';
+                const restartCount = Object.entries(data.event_counts || {})
+                    .filter(([name]) => name === 'runtime_task_restarted')
+                    .reduce((sum, [, count]) => sum + Number(count || 0), 0);
+                document.getElementById('runtime-worker-restarts').textContent = restartCount;
+                document.getElementById('runtime-cycle-summary').textContent = data.cycle_summary?.formatted_text || 'No cycle summary yet';
+                const container = document.getElementById('runtime-events');
+                container.innerHTML = '';
+                if (!events.length) {
+                    container.textContent = 'No runtime events captured yet.';
+                } else {
+                    events.forEach(event => container.appendChild(renderRuntimeEvent(event)));
+                }
+                document.getElementById('runtime-activity-status').textContent = `Showing ${events.length} recent events; auto-refresh every 10s`;
+            } catch (error) {
+                console.error('Error fetching runtime activity:', error);
+                document.getElementById('runtime-activity-status').textContent = 'Could not load movement log';
+            }
         }
 
         // ===== CYCLE SUMMARY =====
@@ -520,6 +602,15 @@
 
         // ===== EVENT LISTENERS =====
         document.getElementById('fetch-performance').addEventListener('click', fetchStrategyPerformance);
+        document.getElementById('toggle-runtime-activity').addEventListener('click', async () => {
+            runtimeActivityOpen = !runtimeActivityOpen;
+            const panel = document.getElementById('runtime-activity-panel');
+            const button = document.getElementById('toggle-runtime-activity');
+            panel.style.display = runtimeActivityOpen ? 'block' : 'none';
+            button.textContent = runtimeActivityOpen ? 'Hide System Movement Log' : 'Show System Movement Log';
+            if (runtimeActivityOpen) await updateRuntimeActivity();
+        });
+        document.getElementById('refresh-runtime-activity').addEventListener('click', updateRuntimeActivity);
 
         // Global variable to store active coins from system health
         let currentActiveCoins = [];
@@ -537,6 +628,7 @@
 
         // ===== AUTO-REFRESH =====
         setInterval(updateCycleSummary, 10000);   // Cycle summary every 10s
+        setInterval(updateRuntimeActivity, 10000); // Movement log and summary every 10s when open
         setInterval(async () => {
             await updateSystemHealth();
             // Store active coins locally to avoid DOM scraping race conditions
