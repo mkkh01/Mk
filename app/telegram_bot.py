@@ -30,6 +30,13 @@ def back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="menu")]])
 
 
+def open_trades_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 تحديث الأسعار", callback_data="open")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="menu")],
+    ])
+
+
 def closed_nav(page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
     row = []
     if has_prev:
@@ -90,9 +97,34 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           reply_markup=main_keyboard())
         elif data == "open":
             opens = await ctx.db.get_open_trades()
+            try:
+                live: dict = {}
+                feed = getattr(ctx, "ws", None)
+                if feed and getattr(feed, "prices", None):
+                    live.update(feed.prices)
+                cached = await ctx.cache.get("prices:live") or {}
+                for sym, q in (cached.get("prices") or {}).items():
+                    live.setdefault(sym, q)
+                for t in opens:
+                    px = (live.get(t["symbol"]) or {}).get("price")
+                    if px:
+                        t["current_price"] = px
+                        t["unrealized_pnl"] = round(
+                            pe.unrealized(t, float(px), ctx.cfg.FEE_PCT), 4)
+            except Exception:
+                pass
             perf = await _perf_snapshot(ctx)
+            try:
+                live_pnl = round(sum(float(t.get("unrealized_pnl") or 0) for t in opens), 2)
+                perf["open_pnl"] = live_pnl
+                perf["equity"] = round(float(perf.get("balance", 0)) + live_pnl, 2)
+                sb = ctx.cfg.START_BALANCE
+                perf["return_pct"] = round((perf["equity"] - sb) / sb * 100, 2)
+            except Exception:
+                pass
             await query.edit_message_text(fmt.format_open_trades(opens, perf)[:4000],
-                                          parse_mode=ParseMode.HTML, reply_markup=back_keyboard())
+                                          parse_mode=ParseMode.HTML,
+                                          reply_markup=open_trades_keyboard())
         elif data.startswith("closed:"):
             try:
                 page = int(data.split(":")[1])

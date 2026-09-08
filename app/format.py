@@ -131,7 +131,7 @@ def format_trade_closed(trade: dict, equity: float) -> str:
 def format_open_trades(trades: list, perf: dict) -> str:
     if not trades:
         return "📂 <b>الصفقات المفتوحة</b>\n\nلا توجد صفقات مفتوحة حالياً.\nالنظام يفحص السوق كل دقيقة وسينبهك فور توفر فرصة. 🔍"
-    lines = [f"📂 <b>الصفقات المفتوحة ({len(trades)})</b>\n"]
+    lines = [f"📂 <b>الصفقات المفتوحة ({len(trades)})</b> ⚡ لحظي\n"]
     for t in trades:
         pnl = t.get("unrealized_pnl", 0) or 0
         icon = "🟢" if pnl >= 0 else "🔴"
