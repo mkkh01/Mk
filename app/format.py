@@ -101,7 +101,7 @@ def format_trade_opened(trade: dict, equity: float) -> str:
         f"━━━━━━━━━━━━\n"
         f"💰 الدخول: <b>{fmt_price(trade['entry_price'])}</b>\n"
         f"🛑 الوقف: {fmt_price(trade['sl'])} | 🎯 الهدف: {fmt_price(trade['tp'])}\n"
-        f"📦 الكمية: {trade['qty']:.4f} | رافعة: {trade.get('leverage', 0)}x\n"
+        f"📦 الكمية: {trade['qty']:.4f} | القيمة: {fmt_usd(trade.get('notional', 0))}\n"
         f"⚠️ المخاطرة: {float(trade.get('risk_amount', 0)):,.2f}$ | العائد/المخاطرة: 1:{snap.get('rr', 0)}\n"
         f"📊 قوة الإشارة: {snap.get('strength', '')} (التقاء {snap.get('confluence', '')}/5)\n"
         f"\n<b>أسباب الدخول:</b>\n{reasons}\n"

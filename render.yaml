@@ -48,13 +48,13 @@ services:
       - key: RISK_PCT
         value: 1.0
       - key: LEVERAGE
-        value: 5
+        value: 1
       - key: MAX_OPEN_TRADES
         value: 6
       - key: RR_MIN
         value: 2.0
       - key: FEE_PCT
-        value: 0.05
+        value: 0.1
       - key: MAX_HOLD_HOURS
         value: 48
       - key: DATA_SOURCES

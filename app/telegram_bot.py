@@ -71,7 +71,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         "🤖 <b>مرحباً بك في نظام التداول الورقي</b>\n"
-        f"📊 {len(ctx.cfg.SYMBOLS)} زوج فيوتشرز | فريم {ctx.cfg.TREND_TF}/{ctx.cfg.ENTRY_TF} | دورة كل دقيقة\n"
+        f"📊 {len(ctx.cfg.SYMBOLS)} زوجاً | فريم {ctx.cfg.TREND_TF}/{ctx.cfg.ENTRY_TF} | دورة كل دقيقة\n"
         "اختر من الأزرار:",
         parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 

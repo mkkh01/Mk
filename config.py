@@ -32,7 +32,7 @@ def _list(key: str, default: str) -> list:
 
 
 # =====================================================
-#  أزواج الفيوتشرز الثلاثون (بصيغة موحدة - تُترجم حسب المنصة)
+#  أزواج التداول الثلاثون (بصيغة موحدة - تُترجم حسب المنصة)
 #  تم اختيارها: سيولة عالية + متوفرة على OKX و Gate و KuCoin
 # =====================================================
 DEFAULT_SYMBOLS = [
@@ -82,11 +82,11 @@ class Settings:
     # --- المحفظة الورقية وإدارة المخاطر ---
     START_BALANCE: float = _float("START_BALANCE", 10000.0)
     RISK_PCT: float = _float("RISK_PCT", 1.0)   # مخاطرة % من المحفظة لكل صفقة
-    LEVERAGE: int = _int("LEVERAGE", 5)
+    LEVERAGE: int = _int("LEVERAGE", 1)  # 1 = بدون رافعة
     MAX_OPEN_TRADES: int = _int("MAX_OPEN_TRADES", 6)
     MAX_PER_SYMBOL: int = _int("MAX_PER_SYMBOL", 1)
     RR_MIN: float = _float("RR_MIN", 2.0)       # أقل نسبة عائد/مخاطرة
-    FEE_PCT: float = _float("FEE_PCT", 0.05)    # رسوم الفيوتشرز لكل جهة %
+    FEE_PCT: float = _float("FEE_PCT", 0.1)     # رسوم التداول لكل جهة % (سبوت 0.1)
     MAX_HOLD_HOURS: float = _float("MAX_HOLD_HOURS", 48)
 
     # --- مصادر البيانات بالترتيب (تبديل تلقائي عند الفشل) ---

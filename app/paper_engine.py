@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""محرك المحفظة الورقية (فيوتشرز): تحجيم الصفقات + متابعة الخروج + الإحصائيات."""
+"""محرك المحفظة الورقية (بدون رافعة): تحجيم الصفقات + متابعة الخروج + الإحصائيات."""
 import uuid
 from datetime import datetime, timezone
 
@@ -9,8 +9,8 @@ def _now_iso() -> str:
 
 
 def position_size(equity: float, risk_pct: float, entry: float, sl: float,
-                  leverage: int, min_notional: float = 5.0) -> dict | None:
-    """حجم الصفقة من المخاطرة. يرجع None إذا تعذر (رصيد/حجم غير صالح)."""
+                  leverage: int = 1, min_notional: float = 5.0) -> dict | None:
+    """حجم الصفقة من المخاطرة (بدون رافعة: الهامش = كامل القيمة). يرجع None إذا تعذر."""
     if equity <= 0 or entry <= 0:
         return None
     risk_amount = equity * risk_pct / 100
@@ -20,7 +20,7 @@ def position_size(equity: float, risk_pct: float, entry: float, sl: float,
     qty = risk_amount / dist
     notional = qty * entry
     margin = notional / max(leverage, 1)
-    max_margin = equity * 0.30  # سقف هامش 30% من المحفظة للصفقة الواحدة
+    max_margin = equity * 0.30  # سقف حجم الصفقة 30% من المحفظة
     if margin > max_margin and margin > 0:
         scale = max_margin / margin
         qty *= scale
@@ -32,7 +32,7 @@ def position_size(equity: float, risk_pct: float, entry: float, sl: float,
     return {"qty": qty, "notional": notional, "margin": margin, "risk_amount": risk_amount}
 
 
-def build_open_trade(signal, sizing: dict, leverage: int) -> dict:
+def build_open_trade(signal, sizing: dict, leverage: int = 1) -> dict:
     return {
         "id": uuid.uuid4().hex[:12],
         "symbol": signal.symbol,
