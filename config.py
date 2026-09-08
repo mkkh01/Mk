@@ -5,11 +5,19 @@
 مع قيم افتراضية مدروسة، فلا شيء حساس مكتوب داخل الكود.
 """
 import os
+import re
 
 
 def _str(key: str, default: str = "") -> str:
     v = os.getenv(key)
-    return default if v is None or v == "" else v
+    if v is None or v == "":
+        return default
+    return v.strip()
+
+
+def _token(key: str) -> str:
+    """للقيم الحساسة: يزيل كل المسافات والأسطر الجديدة (أخطاء النسخ/اللصق)."""
+    return re.sub(r"\s+", "", os.getenv(key, "") or "")
 
 
 def _int(key: str, default: int) -> int:
@@ -51,7 +59,7 @@ class Settings:
     SUPABASE_KEY: str = _str("SUPABASE_KEY")
     REDIS_URL: str = _str("REDIS_URL")
 
-    TELEGRAM_BOT_TOKEN: str = _str("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_BOT_TOKEN: str = _token("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_IDS: list = _list("TELEGRAM_CHAT_ID", "")
     WEBHOOK_BASE_URL: str = _str("WEBHOOK_BASE_URL").rstrip("/")
     WEBHOOK_SECRET: str = _str("WEBHOOK_SECRET")

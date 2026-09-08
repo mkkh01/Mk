@@ -71,7 +71,11 @@ async def lifespan(app: FastAPI):
         ctx.ws = WSPriceFeed(settings.SYMBOLS, ctx.cache)
         await ctx.ws.start()
         ctx._monitor_task = asyncio.create_task(monitor_loop(ctx), name="monitor")
-    ctx.tg_app, ctx.webhook_mode = await create_bot(ctx)
+    try:
+        ctx.tg_app, ctx.webhook_mode = await create_bot(ctx)
+    except Exception as e:
+        log.error("فشل تشغيل بوت التلجرام - النظام يستمر بدونه: %s", str(e)[:200])
+        ctx.tg_app, ctx.webhook_mode = None, False
     ctx.notifier = TelegramNotifier(ctx.tg_app, settings.TELEGRAM_CHAT_IDS)
     ctx.scheduler = AsyncIOScheduler()
     ctx.scheduler.add_job(_cycle_job, "interval", seconds=settings.CYCLE_SECONDS,
