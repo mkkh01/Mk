@@ -35,6 +35,7 @@ class WSPriceFeed:
         self.connected = False
         self.last_msg = 0.0
         self.reconnects = 0
+        self.feed_name = ""
         self._task: asyncio.Task | None = None
         self._stop = False
 
@@ -59,7 +60,13 @@ class WSPriceFeed:
         backoff = 2
         while not self._stop:
             try:
-                await self._stream()
+                try:
+                    await self._stream_binance()
+                except Exception as e:
+                    log.warning("بث Binance انقطع (%s) - التحويل لـ OKX", str(e)[:100])
+                    self.connected = False
+                    if not self._stop:
+                        await self._stream_okx()
                 backoff = 2
             except asyncio.CancelledError:
                 break
@@ -70,7 +77,7 @@ class WSPriceFeed:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
-    async def _stream(self):
+    async def _stream_okx(self):
         import websockets
         url = "wss://ws.okx.com:8443/ws/v5/public"
         async with websockets.connect(url, ping_interval=20, ping_timeout=20,
@@ -78,7 +85,8 @@ class WSPriceFeed:
             args = [{"channel": "tickers", "instId": _okx_inst(s)} for s in self.symbols]
             await ws.send(json.dumps({"op": "subscribe", "args": args}))
             self.connected = True
-            log.info("متصل ببث الأسعار اللحظي (%s رمز)", len(args))
+            self.feed_name = "okx-ws"
+            log.info("متصل ببث OKX اللحظي (%s رمز)", len(args))
             last_flush, last_ping = 0.0, time.time()
             async for raw in ws:
                 if self._stop:
@@ -113,14 +121,51 @@ class WSPriceFeed:
                         pass
                 if now - last_flush > self.flush_seconds and self.prices:
                     last_flush = now
-                    try:
-                        await self.cache.set("prices:live", {
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                            "source": "okx-ws",
-                            "prices": dict(self.prices),
-                        }, ttl=120)
-                    except Exception:
-                        pass
+                    await self._flush()
+
+
+    async def _flush(self):
+        try:
+            await self.cache.set("prices:live", {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "source": self.feed_name or "ws",
+                "prices": dict(self.prices),
+            }, ttl=120)
+        except Exception:
+            pass
+
+    async def _stream_binance(self):
+        import websockets
+        streams = "/".join(f"{s.lower()}@miniTicker" for s in self.symbols)
+        url = f"wss://data-stream.binance.vision/stream?streams={streams}"
+        async with websockets.connect(url, ping_interval=30, ping_timeout=30,
+                                      close_timeout=5, max_size=2 * 1024 * 1024) as ws:
+            self.connected = True
+            self.feed_name = "binance-ws"
+            log.info("متصل ببث Binance اللحظي (%s رمز)", len(self.symbols))
+            last_flush = 0.0
+            async for raw in ws:
+                if self._stop:
+                    return
+                try:
+                    msg = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                d = msg.get("data") or {}
+                if not d.get("s"):
+                    continue
+                try:
+                    last = float(d["c"])
+                    op = float(d.get("o") or 0)
+                    ch = ((last - op) / op * 100) if op else 0.0
+                    self.prices[d["s"].upper()] = {"price": last, "change_pct": round(ch, 2)}
+                    self.last_msg = time.time()
+                except (TypeError, ValueError, KeyError):
+                    continue
+                now = time.time()
+                if now - last_flush > self.flush_seconds and self.prices:
+                    last_flush = now
+                    await self._flush()
 
 
 # =====================================================

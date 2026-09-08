@@ -51,11 +51,11 @@ ARB, OP, SUI, APT, INJ, LTC, BCH, FIL, ETC, HBAR, ICP, RENDER, PEPE, WIF, FET, A
 
 ## 4. مصادر البيانات (تبديل تلقائي)
 
-`OKX ← Gate.io ← KuCoin ← Binance`
+`Binance (Vision) ← OKX ← Gate.io ← KuCoin`
 
 النظام يجرب المصادر بالترتيب لكل رمز، ويسجل في الملخص أي مصدر استُخدم.
-(سبب الترتيب: Binance محظور في عدة مناطق منها خوادم أمريكا التي قد تعمل عليها Render،
-لذا OKX أساسي.)
+المصدر الأساسي Binance عبر بوابة Vision للبيانات العامة (غير محظورة إقليمياً) +
+بث WebSocket من Binance أيضاً — أي أن أسعار البوت مطابقة لتطبيق Binance.
 
 ## 5. أزرار البوت (عربي)
 

@@ -58,7 +58,7 @@ services:
       - key: MAX_HOLD_HOURS
         value: 48
       - key: DATA_SOURCES
-        value: okx,gate,kucoin,binance
+        value: binance,okx,gate,kucoin
 
 # --- بديل: Redis مدفوع من Render نفسها (اختياري) ---
 # إذا أردت Redis من Render بدل Upstash المجاني، أضف:

@@ -157,7 +157,7 @@ async def live_prices():
     cached = await ctx.cache.get("prices:live")
     if cached:
         return cached
-    prices, src, err = await ctx.market.fetch_all_prices()
+    prices, src, err = await ctx.market.fetch_all_prices(ctx.cfg.SYMBOLS)
     return {"source": src, "error": err, "prices": prices}
 
 

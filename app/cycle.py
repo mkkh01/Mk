@@ -73,7 +73,7 @@ async def _run(ctx, started, t0) -> dict:
     n = len(cfg.SYMBOLS)
 
     # ---------- 1) الأسعار الحية (REST + تغطية من البث اللحظي) ----------
-    prices, price_src, price_err = await market.fetch_all_prices()
+    prices, price_src, price_err = await market.fetch_all_prices(cfg.SYMBOLS)
     if price_err:
         errors.append(f"الأسعار: {price_err[:150]}")
     ws_n = 0

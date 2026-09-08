@@ -98,7 +98,7 @@ class Settings:
     MAX_HOLD_HOURS: float = _float("MAX_HOLD_HOURS", 48)
 
     # --- مصادر البيانات بالترتيب (تبديل تلقائي عند الفشل) ---
-    DATA_SOURCES: list = _list("DATA_SOURCES", "okx,gate,kucoin,binance")
+    DATA_SOURCES: list = _list("DATA_SOURCES", "binance,okx,gate,kucoin")
 
 
 settings = Settings()

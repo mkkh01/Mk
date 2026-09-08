@@ -2,10 +2,10 @@
 """عميل بيانات السوق متعدد المصادر مع تبديل تلقائي.
 
 المصادر (كلها مجانية وبدون مفاتيح):
-  1) OKX (أساسي - الأسعار مطابقة للسبوت)
-  2) Gate.io (احتياطي)
-  3) KuCoin سبوت (احتياطي ثانٍ)
-  4) Binance سبوت (يُجرَّب أخيراً - محظور في بعض الدول)
+  1) Binance سبوت عبر Vision (أساسي - نفس أسعار التطبيق، غير محظور)
+  2) OKX (احتياطي)
+  3) Gate.io (احتياطي ثانٍ)
+  4) KuCoin (احتياطي ثالث)
 
 الرمز الداخلي الموحد بصيغة BTCUSDT ويُترجم حسب المنصة.
 """
@@ -110,7 +110,7 @@ class MarketDataClient:
     async def _binance_klines(self, symbol: str, tf: str, limit: int) -> list:
         c = await self._http()
         last_err: Exception | None = None
-        for base in ("https://api.binance.com", "https://data-api.binance.vision"):
+        for base in ("https://data-api.binance.vision", "https://api.binance.com"):
             try:
                 r = await c.get(f"{base}/api/v3/klines", params={
                     "symbol": symbol.upper(), "interval": tf, "limit": min(limit, 1000)})
@@ -156,11 +156,13 @@ class MarketDataClient:
 
     # ---------------- الأسعار الحية (طلب واحد لكل السوق) ----------------
 
-    async def fetch_all_prices(self) -> tuple[dict, str, str]:
+    async def fetch_all_prices(self, symbols: list | None = None) -> tuple[dict, str, str]:
         """يرجع ({BTCUSDT: {price, change_pct}}, المصدر, خطأ)."""
         errors = []
         for src in self.sources:
             try:
+                if src == "binance":
+                    return await self._binance_tickers(symbols or []), "binance", ""
                 if src == "okx":
                     return await self._okx_tickers(), src, ""
                 if src == "gate":
@@ -170,6 +172,34 @@ class MarketDataClient:
             except Exception as e:
                 errors.append(f"{src}: {str(e)[:120]}")
         return {}, "", " | ".join(errors) if errors else "لا يوجد مصدر"
+
+    async def _binance_tickers(self, symbols: list) -> dict:
+        import json as _json
+        c = await self._http()
+        last_err: Exception | None = None
+        params = {"symbols": _json.dumps([s.upper() for s in symbols], separators=(",", ":"))} if symbols else {}
+        for base in ("https://data-api.binance.vision", "https://api.binance.com"):
+            try:
+                r = await c.get(f"{base}/api/v3/ticker/24hr", params=params or None)
+                r.raise_for_status()
+                d = r.json()
+                if isinstance(d, dict):
+                    raise RuntimeError(str(d.get("msg", d))[:100])
+                out = {}
+                for t in d:
+                    try:
+                        out[t["symbol"]] = {
+                            "price": float(t["lastPrice"]),
+                            "change_pct": round(float(t.get("priceChangePercent") or 0), 2),
+                        }
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                if not out:
+                    raise RuntimeError("empty tickers")
+                return out
+            except Exception as e:
+                last_err = e
+        raise last_err or RuntimeError("Binance tickers failed")
 
     async def _okx_tickers(self) -> dict:
         c = await self._http()

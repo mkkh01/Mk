@@ -142,7 +142,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cached = await ctx.cache.get("prices:live") or {}
             prices = cached.get("prices") or {}
             if not prices:
-                prices, src, _ = await ctx.market.fetch_all_prices()
+                prices, src, _ = await ctx.market.fetch_all_prices(ctx.cfg.SYMBOLS)
                 cached = {"ts": "", "source": src, "prices": prices}
             text = fmt.format_prices(prices, ctx.cfg.SYMBOLS,
                                      cached.get("source", "?"), cached.get("ts", ""))
