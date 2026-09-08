@@ -73,10 +73,15 @@ ARB, OP, SUI, APT, INJ, LTC, BCH, FIL, ETC, HBAR, ICP, RENDER, PEPE, WIF, FET, A
 
 ## 6. النشر على Render (خطوة بخطوة)
 
-### أ) Supabase (قاعدة البيانات)
-1. أنشئ مشروعاً مجانياً على supabase.com
-2. من SQL Editor نفّذ محتوى ملف `supabase_schema.sql`
-3. من Project Settings ← API انسخ: `Project URL` و `service_role key` (وليس anon)
+### أ) قاعدة البيانات (طريقتان)
+**الطريقة 1 - رابط Postgres المباشر (الأسهل، موصى به):**
+1. من Supabase ← Project Settings ← Database ← انسخ **Connection string** (وضع Pooler)
+2. ضعه في `SUPABASE_URL` — النظام **ينشئ الجداول الخمسة تلقائياً** عند أول تشغيل ✅
+3. `SUPABASE_KEY` غير لازم في هذه الطريقة
+
+**الطريقة 2 - Supabase API:**
+1. من SQL Editor نفّذ محتوى ملف `supabase_schema.sql` (ينشئ الجداول يدوياً)
+2. من Project Settings ← API انسخ `Project URL` و `service_role key`
 
 ### ب) Redis (الكاش)
 - الأسهل والمجاني: Upstash (upstash.com) ← Create Redis ← انسخ `REDIS_URL` (يبدأ بـ `rediss://`)

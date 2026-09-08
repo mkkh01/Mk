@@ -13,6 +13,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def create_database(url: str = "", key: str = "", local_dir: str = "data"):
+    """مصنع قواعد البيانات:
+    - رابط postgresql:// → اتصال Postgres مباشر (ينشئ الجداول تلقائياً)
+    - رابط https:// + مفتاح → Supabase API
+    - بدون بيانات → تخزين محلي
+    """
+    if (url or "").startswith("postgres"):
+        from .postgres_db import PostgresDatabase
+        return PostgresDatabase(url, local_dir)
+    return Database(url, key, local_dir)
+
+
 class Database:
     def __init__(self, url: str = "", key: str = "", local_dir: str = "data"):
         self._url = url

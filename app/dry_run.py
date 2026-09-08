@@ -18,7 +18,7 @@ import config as app_config  # noqa: E402
 from . import format as fmt  # noqa: E402
 from .cache import Cache  # noqa: E402
 from .cycle import run_cycle  # noqa: E402
-from .database import Database  # noqa: E402
+from .database import create_database  # noqa: E402
 from .history import warmup_history  # noqa: E402
 from .market_data import MarketDataClient  # noqa: E402
 
@@ -41,7 +41,7 @@ class Ctx:
     def __init__(self):
         self.cfg = app_config.settings
         self.cache = Cache(self.cfg.REDIS_URL)
-        self.db = Database(self.cfg.SUPABASE_URL, self.cfg.SUPABASE_KEY)
+        self.db = create_database(self.cfg.SUPABASE_URL, self.cfg.SUPABASE_KEY)
         self.market = MarketDataClient(self.cfg.DATA_SOURCES)
         self.notifier = PrintNotifier()
 

@@ -12,7 +12,7 @@ import config as app_config
 from . import paper_engine as pe
 from .cache import Cache
 from .cycle import run_cycle
-from .database import Database
+from .database import create_database
 from .history import warmup_history
 from .market_data import MarketDataClient
 from .realtime import WSPriceFeed, monitor_loop
@@ -29,7 +29,7 @@ class AppCtx:
     def __init__(self):
         self.cfg = settings
         self.cache = Cache(settings.REDIS_URL)
-        self.db = Database(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        self.db = create_database(settings.SUPABASE_URL, settings.SUPABASE_KEY)
         self.market = MarketDataClient(settings.DATA_SOURCES)
         self.notifier = TelegramNotifier(None, settings.TELEGRAM_CHAT_IDS)
         self.tg_app = None
