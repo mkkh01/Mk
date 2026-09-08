@@ -1,0 +1,68 @@
+# =====================================================
+#  Render Blueprint - النشر بضغطة واحدة
+#  Dashboard ← New ← Blueprint ← اختر المستودع
+#
+#  ملاحظة مهمة: الخطة المجانية (free) تُنام بعد 15 دقيقة
+#  خمول وتوقف الدورات! للدورة كل دقيقة 24/7 استخدم starter.
+# =====================================================
+services:
+  - type: web
+    name: paper-trading-bot
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # --- أسرار (املأها من لوحة Render بعد النشر) ---
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: WEBHOOK_BASE_URL
+        sync: false
+      # --- ضبط (يمكن تعديله لاحقاً) ---
+      - key: CYCLE_SECONDS
+        value: 60
+      - key: MONITOR_SECONDS
+        value: 5
+      - key: WS_ENABLE
+        value: 1
+      - key: TREND_TF
+        value: 1h
+      - key: ENTRY_TF
+        value: 15m
+      - key: START_BALANCE
+        value: 10000
+      - key: RISK_PCT
+        value: 1.0
+      - key: LEVERAGE
+        value: 5
+      - key: MAX_OPEN_TRADES
+        value: 6
+      - key: RR_MIN
+        value: 2.0
+      - key: FEE_PCT
+        value: 0.05
+      - key: MAX_HOLD_HOURS
+        value: 48
+      - key: DATA_SOURCES
+        value: okx,gate,kucoin,binance
+
+# --- بديل: Redis مدفوع من Render نفسها (اختياري) ---
+# إذا أردت Redis من Render بدل Upstash المجاني، أضف:
+# databases:
+#   - name: trading-redis
+#     plan: starter
+# ثم اربطه: REDIS_URL به fromDatabase (راجع README).
