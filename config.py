@@ -93,7 +93,7 @@ class Settings:
     LEVERAGE: int = _int("LEVERAGE", 1)  # 1 = بدون رافعة
     MAX_OPEN_TRADES: int = _int("MAX_OPEN_TRADES", 6)
     MAX_PER_SYMBOL: int = _int("MAX_PER_SYMBOL", 1)
-    RR_MIN: float = _float("RR_MIN", 2.0)       # أقل نسبة عائد/مخاطرة
+    RR_MIN: float = _float("RR_MIN", 3.0)       # أقل نسبة عائد/مخاطرة (1:3 فأعلى)
     FEE_PCT: float = _float("FEE_PCT", 0.1)     # رسوم التداول لكل جهة % (سبوت 0.1)
     MAX_HOLD_HOURS: float = _float("MAX_HOLD_HOURS", 48)
 
