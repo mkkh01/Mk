@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("main")
 
 settings = app_config.settings
+APP_VERSION = "27f69f4"
 
 
 class AppCtx:
@@ -153,7 +154,7 @@ a{{color:#38bdf8}}</style></head><body>
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "db": ctx.db.mode, "cache": ctx.cache.mode,
+    return {"status": "ok", "version": APP_VERSION, "db": ctx.db.mode, "cache": ctx.cache.mode,
             "telegram": bool(ctx.tg_app), "symbols": len(settings.SYMBOLS)}
 
 
