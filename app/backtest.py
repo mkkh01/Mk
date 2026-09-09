@@ -153,10 +153,14 @@ async def backtest_symbol(client: MarketDataClient, symbol: str, s,
         stats["approved"] += 1
         sizing = pe.position_size(s.START_BALANCE, s.RISK_PCT, sig.entry,
                                   sig.stop_loss, s.LEVERAGE, s.MIN_NOTIONAL,
-                                  s.MAX_NOTIONAL_PCT)
+                                  s.MAX_NOTIONAL_PCT, s.FIXED_NOTIONAL_USDT)
         if not sizing:
             continue
         tr = pe.build_open_trade(sig, sizing, s.LEVERAGE, s.SLIPPAGE_BPS)
+        if s.FIXED_TP_NET_USDT > 0:
+            tr["tp"] = pe.fixed_tp_price(tr["side"], tr["entry_price"], tr["qty"],
+                                         s.FIXED_TP_NET_USDT, s.FEE_PCT, s.SLIPPAGE_BPS)
+            tr["snapshot"]["fixed_tp_net"] = s.FIXED_TP_NET_USDT
         tr["entry_time"] = datetime.fromtimestamp(t_close / 1000, timezone.utc).isoformat()
         open_pos = {"trade": tr, "bar_idx": i}
 

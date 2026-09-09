@@ -122,7 +122,7 @@ def main() -> int:
     # ---- 4) رفض: دخول عند 50% يفشل RR ----
     mtf50 = mtf.copy()
     mtf50.loc[mtf50.index[-1], "close"] = 137.5
-    dec50 = evaluate("TESTUSDT", htf, mtf50, ltf, 137.5, cfg)
+    dec50 = evaluate("TESTUSDT", htf, mtf50, ltf, 137.5, _cfg(FIXED_TP_NET_USDT=0))
     check("دخول 50% يُرفض (RR<1.3)", not dec50.approved, f"{dec50.rejects}")
 
     # ---- 5) رفض: ستوكاستيك غير مشبع ----
@@ -220,6 +220,31 @@ def main() -> int:
           and c_sl["exit_code"] == "SL", str(c_sl["r_multiple"]))
     check("تكلفة الانزلاق مسجلة (دخول+خروج)",
           float(c_tp["snapshot"].get("slippage_cost", 0)) > 0.05)
+
+    # ---- 15) الوضع الثابت: 30$ + هدف صافي ~0.22$ ----
+    from app.paper_engine import fixed_tp_price as _ftp
+    fx = position_size(10000, 1.0, 135.0, 124.5, fixed_notional=30.0)
+    check("القيمة الثابتة = 30$ دائماً",
+          fx is not None and abs(fx["notional"] - 30.0) < 0.01, str(fx))
+    check("القيمة الثابتة تتجاوز سقف 30% (حساب صغير)",
+          position_size(50, 1.0, 135.0, 124.5, fixed_notional=30.0) is not None)
+    check("القيمة الثابتة تُرفض إذا تجاوزت الرصيد",
+          position_size(20, 1.0, 135.0, 124.5, fixed_notional=30.0) is None)
+    # محاكاة: دخول 135.0 بهدف ثابت ثم إغلاق عند الهدف
+    tr_fx = {"id": "f", "symbol": "T", "side": "LONG", "entry_price": 135.0,
+             "qty": fx["qty"], "margin": fx["margin"], "notional": fx["notional"],
+             "sl": 124.5, "tp": 150.0, "risk_amount": fx["risk_amount"],
+             "entry_time": "2026-01-01T00:00:00+00:00",
+             "entry_reasons": [], "snapshot": {"entry_slip": 0.015}}
+    tp_fx = _ftp("LONG", 135.0, fx["qty"], 0.22, 0.1, 5)
+    c_fx = close_trade(tr_fx, tp_fx, "تحقيق الهدف 🎯", 0.1, 5)
+    check("صافي الهدف الثابت بين 0.19 و0.26$",
+          0.19 <= c_fx["pnl"] <= 0.26, f"pnl={c_fx['pnl']}")
+    # الوضع الثابت يتجاوز فلتر RR الهيكلي
+    dec_fx = evaluate("TESTUSDT", htf, mtf50, ltf, 137.5, cfg)
+    check("الوضع الثابت لا يرفض بسبب RR الهيكلي",
+          dec_fx.approved or all("العائد" not in r for r in dec_fx.rejects),
+          f"{dec_fx.rejects}")
 
     print(f"\n{'=' * 40}\nالنتيجة: {len(PASS)} ناجح | {len(FAIL)} فاشل")
     if FAIL:

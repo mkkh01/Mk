@@ -132,6 +132,8 @@ class Settings:
     COOLDOWN_MINUTES: int = _int("COOLDOWN_MINUTES", 30)  # §32
     MIN_NOTIONAL: float = _float("MIN_NOTIONAL", 5.0)
     MAX_NOTIONAL_PCT: float = _float("MAX_NOTIONAL_PCT", 30.0)  # سقف قيمة الصفقة %
+    FIXED_NOTIONAL_USDT: float = _float("FIXED_NOTIONAL_USDT", 30.0)  # قيمة ثابتة/صفقة (0=وضع 1%)
+    FIXED_TP_NET_USDT: float = _float("FIXED_TP_NET_USDT", 0.22)  # هدف صافي ثابت $ (0=هيكلي)
 
     # --- مصادر البيانات ---
     DATA_SOURCES: list = _list("DATA_SOURCES", "binance,okx,gate,kucoin")

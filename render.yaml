@@ -59,6 +59,10 @@ services:
         value: 60
       - key: RR_MIN
         value: 1.3
+      - key: FIXED_NOTIONAL_USDT
+        value: 30
+      - key: FIXED_TP_NET_USDT
+        value: 0.22
       - key: ATR_SL_MULT
         value: 0.2
       - key: SLIPPAGE_BPS

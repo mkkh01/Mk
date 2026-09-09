@@ -112,13 +112,17 @@ def side_ar(side: str) -> str:
 def format_trade_opened(trade: dict, equity: float) -> str:
     reasons = "\n".join(f"• {r}" for r in trade.get("entry_reasons", [])[:6])
     snap = trade.get("snapshot", {}) or {}
+    fixed = snap.get("fixed_tp_net")
+    risk_line = (f"🎯 هدف ثابت: صافي ~{fixed}$ بقيمة {fmt_usd(trade.get('notional', 0))}\n"
+                 if fixed else
+                 f"⚠️ المخاطرة: {float(trade.get('risk_amount', 0)):,.2f}$ | R:R طبيعي: 1:{snap.get('rr', 0)}\n")
     return (
         f"🚀 <b>صفقة جديدة: {trade['symbol']} - {side_ar(trade['side'])}</b>\n"
         f"━━━━━━━━━━━━\n"
         f"💰 الدخول: <b>{fmt_price(trade['entry_price'])}</b> (بعد الانزلاق)\n"
         f"🛑 الوقف: {fmt_price(trade['sl'])} | 🎯 الهدف: {fmt_price(trade['tp'])}\n"
         f"📦 الكمية: {trade['qty']:.4f} | القيمة: {fmt_usd(trade.get('notional', 0))}\n"
-        f"⚠️ المخاطرة: {float(trade.get('risk_amount', 0)):,.2f}$ | R:R طبيعي: 1:{snap.get('rr', 0)}\n"
+        f"{risk_line}"
         f"📊 الدرجة: <b>{snap.get('score', 0)}/100</b> ({_grade(snap.get('score', 0))}) | فيبو: {snap.get('fib_zone', '') or '—'} | النظام: {snap.get('tfs', '1h/15m/5m')}\n"
         f"\n<b>أسباب الدخول:</b>\n{reasons}\n"
         f"\n💼 المحفظة: {fmt_usd(equity)} | 🕒 {libya_str(trade['entry_time'])}"

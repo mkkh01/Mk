@@ -281,11 +281,16 @@ async def _run(ctx, started, t0) -> dict:
             blocked["تجاوز حد مخاطر المحفظة 3%"] += 1
             continue
         sizing = pe.position_size(equity, cfg.RISK_PCT, sig.entry, sig.stop_loss,
-                                  cfg.LEVERAGE, cfg.MIN_NOTIONAL, cfg.MAX_NOTIONAL_PCT)
+                                  cfg.LEVERAGE, cfg.MIN_NOTIONAL, cfg.MAX_NOTIONAL_PCT,
+                                  cfg.FIXED_NOTIONAL_USDT)
         if not sizing:
             blocked["حجم صفقة غير صالح"] += 1
             continue
         trade = pe.build_open_trade(sig, sizing, cfg.LEVERAGE, cfg.SLIPPAGE_BPS)
+        if cfg.FIXED_TP_NET_USDT > 0:
+            trade["tp"] = pe.fixed_tp_price(trade["side"], trade["entry_price"], trade["qty"],
+                                            cfg.FIXED_TP_NET_USDT, cfg.FEE_PCT, cfg.SLIPPAGE_BPS)
+            trade["snapshot"]["fixed_tp_net"] = cfg.FIXED_TP_NET_USDT
         trade["current_price"] = trade["entry_price"]
         trade["unrealized_pnl"] = round(
             -(trade["snapshot"].get("entry_slip", 0)

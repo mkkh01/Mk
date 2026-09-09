@@ -38,16 +38,37 @@ def fill_price(side: str, price: float, bps: float, is_entry: bool) -> float:
     return price * (1 - slip) if is_entry else price * (1 + slip)
 
 
+def fixed_tp_price(side: str, entry: float, qty: float, target_net: float,
+                   fee_pct: float, slippage_bps: float) -> float:
+    """سعر الهدف الذي يحقق صافي ربح target_net بعد الرسوم والانزلاق."""
+    notional = qty * entry
+    cost = 2 * notional * fee_pct / 100 + 2 * notional * (slippage_bps or 0) / 10000
+    d = (target_net + cost) / qty if qty else 0
+    return entry + d if side == "LONG" else entry - d
+
+
 def position_size(equity: float, risk_pct: float, entry: float, sl: float,
                   leverage: int = 1, min_notional: float = 5.0,
-                  max_notional_pct: float = 30.0) -> dict | None:
-    """§24: الحجم من المخاطرة + حدود القيمة + تقريب الكمية (step)."""
+                  max_notional_pct: float = 30.0,
+                  fixed_notional: float = 0) -> dict | None:
+    """§24: الحجم من المخاطرة + حدود القيمة + تقريب الكمية (step).
+    fixed_notional > 0: قيمة ثابتة لكل صفقة (يتجاوز حد القيمة القصوى)."""
     if equity <= 0 or entry <= 0:
         return None
-    risk_amount = equity * risk_pct / 100
     dist = abs(entry - sl)
     if dist <= 0:
         return None
+    if fixed_notional and fixed_notional > 0:
+        qty = fixed_notional / entry
+        margin = fixed_notional / max(leverage, 1)
+        if margin > equity or fixed_notional < min_notional:
+            return None
+        qty = float(f"{qty:.6f}")
+        if qty <= 0:
+            return None
+        return {"qty": qty, "notional": qty * entry,
+                "margin": qty * entry / max(leverage, 1), "risk_amount": qty * dist}
+    risk_amount = equity * risk_pct / 100
     qty = risk_amount / dist
     notional = qty * entry
     margin = notional / max(leverage, 1)

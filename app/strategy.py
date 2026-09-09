@@ -210,7 +210,8 @@ def evaluate(symbol: str, htf_df: pd.DataFrame, mtf_df: pd.DataFrame,
         dec.rejects.append(f"وقف خارج الحدود ({risk_pct:.2f}%)")
         return dec
     rr = abs(tp - live_price) / risk
-    if rr < s.RR_MIN:
+    fixed_mode = getattr(s, "FIXED_TP_NET_USDT", 0) > 0
+    if not fixed_mode and rr < s.RR_MIN:
         dec.rejects.append(f"العائد 1:{rr:.2f} أقل من الحد 1:{s.RR_MIN:g}")
         return dec
 
@@ -303,11 +304,15 @@ def _reasons_ar(side, s, dbg, sw, pos, zconf, conf_lbl, cross_age, k_now, d_now,
         out.append("المنطقة تتداخل مع EMA200")
     if zconf["prev_reactions"] >= 1:
         out.append(f"تفاعلات سابقة من المنطقة ({zconf['prev_reactions']})")
+    if getattr(s, "FIXED_TP_NET_USDT", 0) > 0:
+        out.append(f"وضع ثابت: قيمة {getattr(s, 'FIXED_NOTIONAL_USDT', 0):g}$ بهدف صافي ~{s.FIXED_TP_NET_USDT}$")
     out += [
         f"تشبع {sat_t}: K={k_now:.0f} وD={d_now:.0f} ({'تحت' if up else 'فوق'} {lim:g})",
         f"تقاطع {cross_t} حديث على {s.LTF}",
         f"تأكيد سعري: {conf_lbl}",
-        f"العائد الطبيعي 1:{rr:.2f} ≥ 1:{s.RR_MIN:g}",
+        (f"العائد الطبيعي 1:{rr:.2f} ≥ 1:{s.RR_MIN:g}"
+         if getattr(s, "FIXED_TP_NET_USDT", 0) <= 0 else
+         f"الهدف الثابت يغني عن فلتر العائد (هيكلي 1:{rr:.2f})"),
         f"النقاط: {score}/100 ({grade(score)})",
     ]
     return out
