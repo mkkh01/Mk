@@ -87,3 +87,53 @@ create table if not exists bot_state (
 insert into bot_state (key, value)
 values ('realized_pnl', '{"total": 0}')
 on conflict (key) do nothing;
+
+-- 7) سجل الإشارات (§43)
+create table if not exists signals (
+  signal_id text primary key,
+  created_at timestamptz not null default now(),
+  symbol text not null,
+  direction text not null,             -- LONG أو SHORT
+  status text not null default 'APPROVED',  -- APPROVED أو WATCH
+  score integer not null default 0,
+  entry double precision not null default 0,
+  stop_loss double precision not null default 0,
+  take_profit double precision not null default 0,
+  rr double precision not null default 0,
+  setup_id text not null default '',
+  htf text not null default '', mtf text not null default '', ltf text not null default '',
+  ema_state text not null default '',
+  swing_low double precision not null default 0,
+  swing_high double precision not null default 0,
+  swing_id text not null default '',
+  fib_zone text not null default '',
+  stoch_k double precision, stoch_d double precision,
+  stoch_cross text not null default '',
+  price_confirmation text not null default '',
+  reasons jsonb not null default '[]',
+  score_parts jsonb not null default '{}',
+  snapshot jsonb not null default '{}'
+);
+create index if not exists idx_signals_created on signals(created_at desc);
+create index if not exists idx_signals_symbol on signals(symbol);
+
+-- 8) نقاط الـ Swings
+create table if not exists swing_points (
+  id bigserial primary key,
+  ts timestamptz not null default now(),
+  symbol text not null,
+  timeframe text not null default '',
+  type text not null default '',       -- up أو down
+  low double precision not null default 0,
+  high double precision not null default 0,
+  quality double precision not null default 0
+);
+create index if not exists idx_swings_sym on swing_points(symbol, timeframe);
+
+-- 9) أحداث النظام (أعطال، بدء تشغيل، تحذيرات)
+create table if not exists system_events (
+  id bigserial primary key,
+  ts timestamptz not null default now(),
+  event_type text not null default '',
+  payload jsonb not null default '{}'
+);

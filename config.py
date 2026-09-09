@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""الإعدادات المركزية للنظام.
+"""الإعدادات المركزية - V1 حسب مواصفة CT (الفريمات الصغيرة).
 
-كل القيم تُقرأ من متغيرات البيئة (لوحة Render ← Environment)
-مع قيم افتراضية مدروسة، فلا شيء حساس مكتوب داخل الكود.
+الأدوار:
+  HTF = السياق (الاتجاه)      → 1h
+  MTF = الإعداد (Swing/Fib)   → 15m
+  LTF = الإشعال (توقيت+تأكيد) → 5m
 """
 import os
 import re
@@ -34,15 +36,21 @@ def _float(key: str, default: float) -> float:
         return default
 
 
+def _bool(key: str, default: bool) -> bool:
+    v = (os.getenv(key) or "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 def _list(key: str, default: str) -> list:
     raw = os.getenv(key, default) or ""
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
-# =====================================================
-#  أزواج التداول الثلاثون (بصيغة موحدة - تُترجم حسب المنصة)
-#  تم اختيارها: سيولة عالية + متوفرة على OKX و Gate و KuCoin
-# =====================================================
+# أزواج التداول الثلاثون (سبوت USDT)
 DEFAULT_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TRXUSDT",
@@ -64,40 +72,68 @@ class Settings:
     WEBHOOK_BASE_URL: str = _str("WEBHOOK_BASE_URL").rstrip("/")
     WEBHOOK_SECRET: str = _str("WEBHOOK_SECRET")
 
-    # --- الدورة ---
+    # --- الدورة واللحظي ---
     CYCLE_SECONDS: int = _int("CYCLE_SECONDS", 60)
-    MONITOR_SECONDS: int = _int("MONITOR_SECONDS", 5)  # المراقبة اللحظية للوقف/الهدف
-    WS_ENABLE: int = _int("WS_ENABLE", 1)              # بث الأسعار اللحظي 1=يعمل
+    MONITOR_SECONDS: int = _int("MONITOR_SECONDS", 5)
+    WS_ENABLE: int = _int("WS_ENABLE", 1)
     PORT: int = _int("PORT", 10000)
 
-    # --- الأزواج والفريمات ---
+    # --- السوق والرموز ---
     SYMBOLS: list = _list("SYMBOLS", ",".join(DEFAULT_SYMBOLS))
-    TREND_TF: str = _str("TREND_TF", "1h")     # فريم الترند (EMA200 الكبير)
-    ENTRY_TF: str = _str("ENTRY_TF", "15m")    # فريم الدخول (EMA200 + ستوكاستيك + فيبو)
+    ALLOW_SHORTS: bool = _bool("ALLOW_SHORTS", True)  # المواصفة V1 سبوت شراء فقط؛ يُفتح البيع بهذا المفتاح
+
+    # --- الفريمات الثلاثة (§7 بديل الفريمات الصغيرة) ---
+    HTF: str = _str("HTF", "1h")    # السياق: اتجاه EMA200
+    MTF: str = _str("MTF", "15m")   # الإعداد: Swing + Fibonacci
+    LTF: str = _str("LTF", "5m")    # الإشعال: Stochastic + تأكيد سعري
     KLINES_LIMIT: int = _int("KLINES_LIMIT", 260)
 
-    # --- المؤشرات (من ملف الاستراتيجية) ---
+    # --- EMA (§8) ---
     EMA_LEN: int = _int("EMA_LEN", 200)
+    SLOPE_LOOKBACK: int = _int("SLOPE_LOOKBACK", 10)
+    SLOPE_STRONG: float = _float("SLOPE_STRONG", 0.002)
+    SLOPE_WEAK: float = _float("SLOPE_WEAK", 0.0005)
+
+    # --- Stochastic على LTF (§13) ---
     STOCH_K: int = _int("STOCH_K", 14)
     STOCH_SMOOTH: int = _int("STOCH_SMOOTH", 3)
     STOCH_D: int = _int("STOCH_D", 3)
-    STOCH_OS: float = _float("STOCH_OS", 20)   # تشبع بيعي
-    STOCH_OB: float = _float("STOCH_OB", 80)   # تشبع شرائي
-    FIB_LOOKBACK: int = _int("FIB_LOOKBACK", 120)   # نافذة البحث عن القاع/القمة (شمعة)
-    FIB_TOL_PCT: float = _float("FIB_TOL_PCT", 0.6) # سماحية منطقة الدخول %
-    MIN_SWING_PCT: float = _float("MIN_SWING_PCT", 1.0)  # أقل حجم موجة مقبول %
+    STOCH_OS: float = _float("STOCH_OS", 20)
+    STOCH_OB: float = _float("STOCH_OB", 80)
+    CROSS_LOOKBACK: int = _int("CROSS_LOOKBACK", 2)  # أقصى قدم للتقاطع (شموع LTF)
 
-    # --- المحفظة الورقية وإدارة المخاطر ---
+    # --- Pivot/Swing/Fibonacci (§9-12) ---
+    PIVOT_K: int = _int("PIVOT_K", 3)          # شموع التأكيد يمين/يسار
+    FIB_LOOKBACK: int = _int("FIB_LOOKBACK", 120)
+    FIB_TOL_PCT: float = _float("FIB_TOL_PCT", 0.4)
+    MIN_SWING_PCT: float = _float("MIN_SWING_PCT", 1.0)
+    LEVEL_TOL_PCT: float = _float("LEVEL_TOL_PCT", 0.3)  # سماحية المستوى الأفقي
+
+    # --- القرار (§17-19) ---
+    MIN_SCORE: int = _int("MIN_SCORE", 70)
+    WATCH_SCORE: int = _int("WATCH_SCORE", 60)
+
+    # --- التقلب (§35) ---
+    VOL_MIN: float = _float("VOL_MIN", 0.0005)  # ATR/Close الأدنى
+    VOL_MAX: float = _float("VOL_MAX", 0.05)    # ATR/Close الأقصى
+
+    # --- المخاطر (§21-25) ---
     START_BALANCE: float = _float("START_BALANCE", 10000.0)
-    RISK_PCT: float = _float("RISK_PCT", 1.0)   # مخاطرة % من المحفظة لكل صفقة
+    RISK_PCT: float = _float("RISK_PCT", 1.0)
     LEVERAGE: int = _int("LEVERAGE", 1)  # 1 = بدون رافعة
-    MAX_OPEN_TRADES: int = _int("MAX_OPEN_TRADES", 6)
+    MAX_OPEN_TRADES: int = _int("MAX_OPEN_TRADES", 3)       # §25
+    MAX_PORTFOLIO_RISK: float = _float("MAX_PORTFOLIO_RISK", 3.0)  # % §25
     MAX_PER_SYMBOL: int = _int("MAX_PER_SYMBOL", 1)
-    RR_MIN: float = _float("RR_MIN", 1.3)       # أقل نسبة عائد/مخاطرة (من 1:1.3 فأعلى)
-    FEE_PCT: float = _float("FEE_PCT", 0.1)     # رسوم التداول لكل جهة % (سبوت 0.1)
+    RR_MIN: float = _float("RR_MIN", 1.3)       # من 1:1.3 فأعلى (ضمن قيم البحث §23)
+    ATR_SL_MULT: float = _float("ATR_SL_MULT", 0.2)  # §21
+    FEE_PCT: float = _float("FEE_PCT", 0.1)
+    SLIPPAGE_BPS: float = _float("SLIPPAGE_BPS", 5)  # §29
     MAX_HOLD_HOURS: float = _float("MAX_HOLD_HOURS", 48)
+    COOLDOWN_MINUTES: int = _int("COOLDOWN_MINUTES", 30)  # §32
+    MIN_NOTIONAL: float = _float("MIN_NOTIONAL", 5.0)
+    MAX_NOTIONAL_PCT: float = _float("MAX_NOTIONAL_PCT", 30.0)  # سقف قيمة الصفقة %
 
-    # --- مصادر البيانات بالترتيب (تبديل تلقائي عند الفشل) ---
+    # --- مصادر البيانات ---
     DATA_SOURCES: list = _list("DATA_SOURCES", "binance,okx,gate,kucoin")
 
 

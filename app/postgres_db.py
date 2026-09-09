@@ -82,12 +82,56 @@ create table if not exists bot_state (
   value jsonb not null default '{}',
   updated_at timestamptz not null default now()
 );
+create table if not exists signals (
+  signal_id text primary key,
+  created_at timestamptz not null default now(),
+  symbol text not null,
+  direction text not null,
+  status text not null default 'APPROVED',
+  score integer not null default 0,
+  entry double precision not null default 0,
+  stop_loss double precision not null default 0,
+  take_profit double precision not null default 0,
+  rr double precision not null default 0,
+  setup_id text not null default '',
+  htf text not null default '', mtf text not null default '', ltf text not null default '',
+  ema_state text not null default '',
+  swing_low double precision not null default 0,
+  swing_high double precision not null default 0,
+  swing_id text not null default '',
+  fib_zone text not null default '',
+  stoch_k double precision, stoch_d double precision,
+  stoch_cross text not null default '',
+  price_confirmation text not null default '',
+  reasons jsonb not null default '[]',
+  score_parts jsonb not null default '{}',
+  snapshot jsonb not null default '{}'
+);
+create index if not exists idx_signals_created on signals(created_at desc);
+create index if not exists idx_signals_symbol on signals(symbol);
+create table if not exists swing_points (
+  id bigserial primary key,
+  ts timestamptz not null default now(),
+  symbol text not null,
+  timeframe text not null default '',
+  type text not null default '',
+  low double precision not null default 0,
+  high double precision not null default 0,
+  quality double precision not null default 0
+);
+create index if not exists idx_swings_sym on swing_points(symbol, timeframe);
+create table if not exists system_events (
+  id bigserial primary key,
+  ts timestamptz not null default now(),
+  event_type text not null default '',
+  payload jsonb not null default '{}'
+);
 insert into bot_state (key, value)
 values ('realized_pnl', '{"total": 0}')
 on conflict (key) do nothing;
 """
 
-_JSON_COLS = {"entry_reasons", "snapshot", "summary", "value"}
+_JSON_COLS = {"entry_reasons", "snapshot", "summary", "value", "reasons", "score_parts", "payload"}
 
 
 def _row(r) -> dict:
@@ -130,6 +174,11 @@ class PostgresDatabase:
     @property
     def _ok(self) -> bool:
         return self._pool is not None
+
+    @property
+    def degraded(self) -> bool:
+        """True إذا كان Postgres مضبوطاً لكن الاتصال ساقط (وضع SAFE)."""
+        return bool(self._dsn) and self._pool is None
 
     async def connect(self):
         try:
@@ -332,3 +381,84 @@ class PostgresDatabase:
         except Exception as e:
             log.error("set_state فشل: %s", str(e)[:150])
             await self._local.set_state(key, value)
+
+    # ---------- الإشارات (§43) ----------
+
+    async def insert_signal(self, sig: dict):
+        if not self._ok:
+            return await self._local.insert_signal(sig)
+        try:
+            async with self._pool.acquire() as c:
+                await c.execute(
+                    """insert into signals
+                       (signal_id,symbol,direction,status,score,entry,stop_loss,take_profit,rr,
+                        setup_id,htf,mtf,ltf,ema_state,swing_low,swing_high,swing_id,fib_zone,
+                        stoch_k,stoch_d,stoch_cross,price_confirmation,reasons,score_parts,snapshot)
+                       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+                               $19,$20,$21,$22,$23::jsonb,$24::jsonb,$25::jsonb)
+                       on conflict (signal_id) do nothing""",
+                    sig.get("signal_id"), sig.get("symbol"), sig.get("direction"),
+                    sig.get("status", "APPROVED"), int(sig.get("score", 0)),
+                    float(sig.get("entry", 0)), float(sig.get("stop_loss", 0)),
+                    float(sig.get("take_profit", 0)), float(sig.get("rr", 0)),
+                    sig.get("setup_id", ""), sig.get("htf", ""), sig.get("mtf", ""),
+                    sig.get("ltf", ""), sig.get("ema_state", ""),
+                    float(sig.get("swing_low", 0)), float(sig.get("swing_high", 0)),
+                    sig.get("swing_id", ""), sig.get("fib_zone", ""),
+                    sig.get("stoch_k"), sig.get("stoch_d"),
+                    sig.get("stoch_cross", ""), sig.get("price_confirmation", ""),
+                    _j(sig.get("reasons", [])), _j(sig.get("score_parts", {})),
+                    _j(sig.get("snapshot", {})))
+        except Exception as e:
+            log.error("insert_signal فشل: %s", str(e)[:150])
+            await self._local.insert_signal(sig)
+
+    async def get_signal(self, signal_id: str):
+        if not self._ok:
+            return await self._local.get_signal(signal_id)
+        try:
+            async with self._pool.acquire() as c:
+                r = await c.fetchrow("select * from signals where signal_id = $1", signal_id)
+                return _row(r) if r else None
+        except Exception as e:
+            log.error("get_signal فشل: %s", str(e)[:150])
+            return await self._local.get_signal(signal_id)
+
+    async def list_signals(self, limit: int = 20) -> list:
+        if not self._ok:
+            return await self._local.list_signals(limit)
+        try:
+            async with self._pool.acquire() as c:
+                rows = await c.fetch(
+                    "select * from signals order by created_at desc limit $1", int(limit))
+                return [_row(r) for r in rows]
+        except Exception as e:
+            log.error("list_signals فشل: %s", str(e)[:150])
+            return await self._local.list_signals(limit)
+
+    async def insert_swing(self, row: dict):
+        if not self._ok:
+            return await self._local.insert_swing(row)
+        try:
+            async with self._pool.acquire() as c:
+                await c.execute(
+                    """insert into swing_points (ts,symbol,timeframe,type,low,high,quality)
+                       values (coalesce($1::timestamptz, now()),$2,$3,$4,$5,$6,$7)""",
+                    _ts(row.get("ts")), row.get("symbol"), row.get("timeframe", ""),
+                    row.get("type", ""), float(row.get("low", 0)),
+                    float(row.get("high", 0)), float(row.get("quality", 0)))
+        except Exception as e:
+            log.error("insert_swing فشل: %s", str(e)[:150])
+            await self._local.insert_swing(row)
+
+    async def insert_event(self, event_type: str, payload: dict):
+        if not self._ok:
+            return await self._local.insert_event(event_type, payload)
+        try:
+            async with self._pool.acquire() as c:
+                await c.execute(
+                    "insert into system_events (event_type,payload) values ($1,$2::jsonb)",
+                    event_type, _j(payload or {}))
+        except Exception as e:
+            log.error("insert_event فشل: %s", str(e)[:150])
+            await self._local.insert_event(event_type, payload)

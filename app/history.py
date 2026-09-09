@@ -83,7 +83,8 @@ async def warmup_history(ctx) -> dict:
                 failed.append(f"{sym} {tf}")
                 log.warning("warmup %s %s: %s", sym, tf, e)
 
-    await asyncio.gather(*[one(s, tf) for s in cfg.SYMBOLS for tf in (cfg.ENTRY_TF, cfg.TREND_TF)])
+    tfs = (cfg.HTF, cfg.MTF, cfg.LTF)
+    await asyncio.gather(*[one(s, tf) for s in cfg.SYMBOLS for tf in tfs])
     stat = {"ok": ok, "fail": fail, "failed": failed[:10], "seconds": round(time.time() - t0, 1)}
     log.info("اكتمل الجلب التاريخي: %s ناجح / %s فاشل في %s ث", ok, fail, stat["seconds"])
     await ctx.cache.set("history:warmup", stat, ttl=CACHE_TTL)

@@ -77,6 +77,13 @@ async def lifespan(app: FastAPI):
         log.error("فشل تشغيل بوت التلجرام - النظام يستمر بدونه: %s", str(e)[:200])
         ctx.tg_app, ctx.webhook_mode = None, False
     ctx.notifier = TelegramNotifier(ctx.tg_app, settings.TELEGRAM_CHAT_IDS)
+    try:
+        await ctx.db.insert_event("system_startup", {
+            "db": ctx.db.mode, "cache": ctx.cache.mode,
+            "timeframes": f"{settings.HTF}/{settings.MTF}/{settings.LTF}",
+            "symbols": len(settings.SYMBOLS)})
+    except Exception:
+        pass
     ctx.scheduler = AsyncIOScheduler()
     ctx.scheduler.add_job(_cycle_job, "interval", seconds=settings.CYCLE_SECONDS,
                           coalesce=True, max_instances=1, misfire_grace_time=30,
@@ -140,7 +147,7 @@ a{{color:#38bdf8}}</style></head><body>
 <div class="card">🔗
 <a href="/health">health</a> | <a href="/prices/live">الأسعار</a> |
 <a href="/trades/open">المفتوحة</a> | <a href="/trades/closed">المغلقة</a> |
-<a href="/performance">الأداء</a> | <a href="/cycle/last">آخر دورة</a></div>
+<a href="/performance">الأداء</a> | <a href="/signals">الإشارات</a> | <a href="/cycle/last">آخر دورة</a></div>
 </body></html>"""
 
 
@@ -169,6 +176,11 @@ async def open_trades():
 @app.get("/trades/closed")
 async def closed_trades(limit: int = 50):
     return {"trades": await ctx.db.list_closed_trades(limit=min(limit, 200))}
+
+
+@app.get("/signals")
+async def signals(limit: int = 20):
+    return {"signals": await ctx.db.list_signals(limit=min(limit, 100))}
 
 
 @app.get("/performance")

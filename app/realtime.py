@@ -283,7 +283,7 @@ async def monitor_once(ctx) -> dict:
         still = [x for x in await ctx.db.get_open_trades() if x["id"] == t["id"]]
         if not still:
             continue
-        closed = pe.close_trade(still[0], exit_px, reason, cfg.FEE_PCT)
+        closed = pe.close_trade(still[0], exit_px, reason, cfg.FEE_PCT, cfg.SLIPPAGE_BPS)
         await ctx.db.delete_open_trade(t["id"])
         await ctx.db.insert_closed_trade(closed)
         await add_realized(ctx, closed.get("pnl", 0))

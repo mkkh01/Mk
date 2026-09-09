@@ -39,7 +39,16 @@ class Database:
             "cycles": os.path.join(self._dir, "cycles.json"),
             "equity_snapshots": os.path.join(self._dir, "equity.json"),
             "bot_state": os.path.join(self._dir, "bot_state.json"),
+            "signals": os.path.join(self._dir, "signals.json"),
+            "swing_points": os.path.join(self._dir, "swings.json"),
+            "system_events": os.path.join(self._dir, "events.json"),
         }
+
+    @property
+    def degraded(self) -> bool:
+        """True إذا كان التخزين البعيد مضبوطاً لكنه سقط للمحلي (وضع SAFE)."""
+        configured = bool(self._url and self._key)
+        return configured and self._sb is None
 
     async def connect(self):
         if not (self._url and self._key):
@@ -236,3 +245,73 @@ class Database:
         st = self._load("bot_state")
         st[key] = value
         self._save("bot_state", st)
+
+    # ---------- الإشارات (§43) ----------
+
+    async def insert_signal(self, sig: dict):
+        sig = dict(sig)
+        sig.setdefault("created_at", _now_iso())
+        if self._sb:
+            try:
+                await asyncio.to_thread(lambda: self._sb.table("signals").insert(sig).execute())
+                return
+            except Exception as e:
+                log.error("insert_signal فشل: %s", e)
+        rows = self._load("signals")
+        rows.append(sig)
+        self._save("signals", rows[-2000:])
+
+    async def get_signal(self, signal_id: str):
+        if self._sb:
+            try:
+                r = await asyncio.to_thread(
+                    lambda: self._sb.table("signals").select("*").eq("signal_id", signal_id).execute()
+                )
+                return (r.data or [None])[0]
+            except Exception as e:
+                log.error("get_signal فشل: %s", e)
+        for r in self._load("signals"):
+            if r.get("signal_id") == signal_id:
+                return r
+        return None
+
+    async def list_signals(self, limit: int = 20) -> list:
+        if self._sb:
+            try:
+                r = await asyncio.to_thread(
+                    lambda: self._sb.table("signals").select("*")
+                    .order("created_at", desc=True).limit(limit).execute()
+                )
+                return r.data or []
+            except Exception as e:
+                log.error("list_signals فشل: %s", e)
+        rows = self._load("signals")
+        rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        return rows[:limit]
+
+    # ---------- Swings والأحداث ----------
+
+    async def insert_swing(self, row: dict):
+        row = dict(row)
+        row.setdefault("ts", _now_iso())
+        if self._sb:
+            try:
+                await asyncio.to_thread(lambda: self._sb.table("swing_points").insert(row).execute())
+                return
+            except Exception as e:
+                log.error("insert_swing فشل: %s", e)
+        rows = self._load("swing_points")
+        rows.append(row)
+        self._save("swing_points", rows[-2000:])
+
+    async def insert_event(self, event_type: str, payload: dict):
+        row = {"event_type": event_type, "payload": payload or {}, "ts": _now_iso()}
+        if self._sb:
+            try:
+                await asyncio.to_thread(lambda: self._sb.table("system_events").insert(row).execute())
+                return
+            except Exception as e:
+                log.error("insert_event فشل: %s", e)
+        rows = self._load("system_events")
+        rows.append(row)
+        self._save("system_events", rows[-2000:])

@@ -40,9 +40,9 @@ def _to_kucoin(symbol: str) -> str:
     return f"{_base(symbol)}-USDT"
 
 
-_OKX_BAR = {"15m": "15m", "1h": "1H"}
-_GATE_INV = {"15m": "15m", "1h": "1h"}
-_KUCOIN_TYPE = {"15m": "15min", "1h": "1hour"}
+_OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H"}
+_GATE_INV = {"5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h"}
+_KUCOIN_TYPE = {"5m": "5min", "15m": "15min", "1h": "1hour", "4h": "4hour"}
 
 
 def _frame(rows: list) -> pd.DataFrame:

@@ -68,6 +68,14 @@ class Cache:
         exp = time.time() + ttl if ttl else 0
         self._mem[key] = (value, exp)
 
+    async def delete(self, key: str):
+        if self._redis:
+            try:
+                await self._redis.delete(key)
+            except Exception as e:
+                log.warning("Redis delete فشل: %s", e)
+        self._mem.pop(key, None)
+
     async def incr(self, key: str) -> int:
         if self._redis:
             try:

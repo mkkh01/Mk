@@ -39,10 +39,12 @@ services:
         value: 5
       - key: WS_ENABLE
         value: 1
-      - key: TREND_TF
+      - key: HTF
         value: 1h
-      - key: ENTRY_TF
+      - key: MTF
         value: 15m
+      - key: LTF
+        value: 5m
       - key: START_BALANCE
         value: 10000
       - key: RISK_PCT
@@ -50,9 +52,21 @@ services:
       - key: LEVERAGE
         value: 1
       - key: MAX_OPEN_TRADES
-        value: 6
+        value: 3
+      - key: MIN_SCORE
+        value: 70
+      - key: WATCH_SCORE
+        value: 60
       - key: RR_MIN
         value: 1.3
+      - key: ATR_SL_MULT
+        value: 0.2
+      - key: SLIPPAGE_BPS
+        value: 5
+      - key: COOLDOWN_MINUTES
+        value: 30
+      - key: ALLOW_SHORTS
+        value: true
       - key: FEE_PCT
         value: 0.1
       - key: MAX_HOLD_HOURS

@@ -50,7 +50,7 @@ async def main():
     ctx = Ctx()
     await ctx.cache.connect()
     await ctx.db.connect()
-    print(f"الأزواج: {len(ctx.cfg.SYMBOLS)} | الفريمات: {ctx.cfg.TREND_TF}/{ctx.cfg.ENTRY_TF}")
+    print(f"الأزواج: {len(ctx.cfg.SYMBOLS)} | الفريمات: {ctx.cfg.HTF}/{ctx.cfg.MTF}/{ctx.cfg.LTF}")
     print("جلب الشموع السابقة (warm-up)...")
     stat = await warmup_history(ctx)
     print(f"المخزون: {stat['ok']} ناجح / {stat['fail']} فاشل في {stat['seconds']} ث")

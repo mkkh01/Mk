@@ -85,6 +85,22 @@ def held_str(entry_iso: str, now=None) -> str:
 _SIDE_AR = {"LONG": "شراء 🟢", "SHORT": "بيع 🔴"}
 
 
+def _grade(score) -> str:
+    try:
+        score = int(score)
+    except (TypeError, ValueError):
+        return ""
+    if score >= 90:
+        return "PREMIUM 🏆"
+    if score >= 80:
+        return "HIGH QUALITY 💪"
+    if score >= 70:
+        return "VALID SETUP ✅"
+    if score >= 60:
+        return "WATCH 👀"
+    return "REJECT ❌"
+
+
 def side_ar(side: str) -> str:
     return _SIDE_AR.get(side, side)
 
@@ -99,11 +115,11 @@ def format_trade_opened(trade: dict, equity: float) -> str:
     return (
         f"🚀 <b>صفقة جديدة: {trade['symbol']} - {side_ar(trade['side'])}</b>\n"
         f"━━━━━━━━━━━━\n"
-        f"💰 الدخول: <b>{fmt_price(trade['entry_price'])}</b>\n"
+        f"💰 الدخول: <b>{fmt_price(trade['entry_price'])}</b> (بعد الانزلاق)\n"
         f"🛑 الوقف: {fmt_price(trade['sl'])} | 🎯 الهدف: {fmt_price(trade['tp'])}\n"
         f"📦 الكمية: {trade['qty']:.4f} | القيمة: {fmt_usd(trade.get('notional', 0))}\n"
-        f"⚠️ المخاطرة: {float(trade.get('risk_amount', 0)):,.2f}$ | العائد/المخاطرة: 1:{snap.get('rr', 0)}\n"
-        f"📊 قوة الإشارة: {snap.get('strength', '')} (التقاء {snap.get('confluence', '')}/5)\n"
+        f"⚠️ المخاطرة: {float(trade.get('risk_amount', 0)):,.2f}$ | R:R طبيعي: 1:{snap.get('rr', 0)}\n"
+        f"📊 الدرجة: <b>{snap.get('score', 0)}/100</b> ({_grade(snap.get('score', 0))}) | فيبو: {snap.get('fib_zone', '') or '—'} | النظام: {snap.get('tfs', '1h/15m/5m')}\n"
         f"\n<b>أسباب الدخول:</b>\n{reasons}\n"
         f"\n💼 المحفظة: {fmt_usd(equity)} | 🕒 {libya_str(trade['entry_time'])}"
     )
@@ -175,6 +191,13 @@ def format_performance(p: dict, start_balance: float) -> str:
         f"• نسبة الفوز: <b>{p.get('winrate', 0)}%</b>\n"
         f"• متوسط الربح: {fmt_usd(p.get('avg_win', 0))} | متوسط الخسارة: {fmt_usd(p.get('avg_loss', 0))}\n"
         f"• معامل الربح: {p.get('profit_factor', 0)}\n"
+        f"• التوقع/صفقة: <b>{p.get('expectancy_r', 0)}R</b> | متوسط R: {p.get('avg_r', 0)}\n"
+        f"• أقصى تراجع: {p.get('max_drawdown_pct', 0)}% | شارب تقريبي: {p.get('sharpe_like', 0)}\n"
+        f"• متوسط الاحتفاظ: {fmt_duration(p.get('avg_hold_min', 0))}\n"
+        f"• LONG: {(p.get('per_side') or {}).get('LONG', {}).get('n', 0)} "
+        f"({fmt_money((p.get('per_side') or {}).get('LONG', {}).get('pnl', 0))}) | "
+        f"SHORT: {(p.get('per_side') or {}).get('SHORT', {}).get('n', 0)} "
+        f"({fmt_money((p.get('per_side') or {}).get('SHORT', {}).get('pnl', 0))})\n"
         f"• أفضل عملة: {p.get('best_symbol') or '—'} | أسوأ عملة: {p.get('worst_symbol') or '—'}"
     )
 
@@ -206,8 +229,12 @@ def format_cycle_summary(s: dict) -> str:
     ind, sig = s.get("indicators", {}), s.get("signals", {})
     tr, eq = s.get("trades", {}), s.get("equity", {})
     errs = s.get("errors", []) or []
+    tf = s.get("timeframes", {}) or {}
+    trio = f"{tf.get('htf', '?')}/{tf.get('mtf', '?')}/{tf.get('ltf', '?')}"
+    appr = sig.get("approved", []) or sig.get("accepted", []) or []
+    watch = sig.get("watch", []) or []
     lines = [
-        f"🔄 <b>ملخص الدورة #{s.get('cycle_id', '?')}</b>",
+        f"🔄 <b>ملخص الدورة #{s.get('cycle_id', '?')}</b> [{trio}]",
         f"🕒 {libya_str(s.get('started_at', ''))} (ليبيا) | ⏱️ {s.get('duration_sec', 0):.1f} ثانية",
         f"الحالة: {_STATUS.get(s.get('status'), s.get('status'))}",
         "",
@@ -215,13 +242,20 @@ def format_cycle_summary(s: dict) -> str:
         f"• الأسعار: {px.get('ok', 0)}/{px.get('total', 0)} عبر {s.get('data_source', {}).get('prices', '?')}",
         f"• الشموع: {kl.get('ok', 0)}/{kl.get('total', 0)}" + (
             f" (فشل: {', '.join(kl.get('failed_symbols', [])[:5])})" if kl.get("failed_symbols") else " ✅"),
-        "",
-        "📊 <b>المحركات:</b>",
-        f"• المؤشرات محسوبة: {ind.get('computed', 0)}/{ind.get('total', 0)}",
-        f"• إشارات: مفحوصة {sig.get('checked', 0)} | مقبولة {len(sig.get('accepted', []))} | مرفوضة {sig.get('rejected', 0)}",
     ]
-    for a in (sig.get("accepted", []) or [])[:5]:
-        lines.append(f"   ✔ {a.get('symbol')} {a.get('side')} ({a.get('strength', '')})")
+    if kl.get("invalid_data"):
+        lines.append(f"• بيانات مرفوضة (تحقق): {', '.join(kl['invalid_data'][:5])}")
+    if kl.get("stale_cache"):
+        lines.append(f"• بيانات قديمة (بلا دخول جديد): {', '.join(kl['stale_cache'][:5])}")
+    lines += [
+        "",
+        "📊 <b>القرار:</b>",
+        f"• مفحوصة {sig.get('checked', 0)} | معتمدة {len(appr)} | مراقبة {sig.get('watch_count', 0)} | مرفوضة {sig.get('rejected', 0)}",
+    ]
+    for a in appr[:5]:
+        lines.append(f"   ✔ {a.get('symbol')} {a.get('side')} — {a.get('score', '?')}/100 (1:{a.get('rr', '?')})")
+    for w in watch[:4]:
+        lines.append(f"   👀 {w.get('symbol')} {w.get('side')} — {w.get('score', '?')}/100")
     top = sig.get("top_reject") or {}
     if top:
         k = max(top, key=lambda k: top[k])
@@ -236,8 +270,11 @@ def format_cycle_summary(s: dict) -> str:
     for c in (tr.get("closed", []) or [])[:5]:
         icon = "✅" if c.get("result") == "WIN" else "❌"
         lines.append(f"   {icon} {c.get('symbol')} {fmt_money(c.get('pnl', 0))} ({c.get('exit_reason', '')[:40]})")
-    if tr.get("blocked_by_limit"):
-        lines.append(f"• أُهملت {tr['blocked_by_limit']} إشارة لامتلاء الحد الأقصى")
+    gates = s.get("gates", {}) or {}
+    for g, cnt in list(gates.items())[:4]:
+        lines.append(f"• بوابة: {g} ({cnt}×)")
+    if tr.get("portfolio_risk_pct") is not None:
+        lines.append(f"• مخاطرة المحفظة: {tr.get('portfolio_risk_pct')}% (الحد 3%)")
     lines.append(f"• المحفظة: {fmt_usd(eq.get('equity', 0))} ({fmt_pct(eq.get('return_pct', 0))})")
     rt = s.get("realtime", {}) or {}
     ws = rt.get("ws", {}) or {}
@@ -253,4 +290,88 @@ def format_cycle_summary(s: dict) -> str:
     lines += ["", "⚠️ <b>الأخطاء:</b> " + ("لا يوجد ✅" if not errs else "")]
     for e in errs[:4]:
         lines.append(f"• {str(e)[:140]}")
+    return "\n".join(lines)
+
+
+# =====================================================
+#  الأوامر الجديدة (§52)
+# =====================================================
+
+def format_status(info: dict) -> str:
+    paused = info.get("paused")
+    eng = "⏸️ متوقف مؤقتاً" if paused else "🟢 يعمل"
+    ws = info.get("ws", {}) or {}
+    ws_t = "متصل ✅" if ws.get("connected") else "متوقف ⏸️"
+    tf = info.get("timeframes", "") or ""
+    return (
+        "🖥️ <b>حالة النظام</b>\n"
+        "━━━━━━━━━━━━\n"
+        f"⚙️ المحرك: {eng}\n"
+        f"📊 الفريمات: {tf}\n"
+        f"🗄️ قاعدة البيانات: {info.get('db_mode', '?')}"
+        f"{' ⚠️ (SAFE)' if info.get('db_degraded') else ''}\n"
+        f"⚡ البث: {ws_t} ({ws.get('symbols', 0)} رمزاً)\n"
+        f"🔄 آخر دورة: #{info.get('cycle_id', '?')} ({info.get('cycle_status', '?')}) "
+        f"قبل {info.get('cycle_age', '?')}\n"
+        f"📂 المفتوحة: {info.get('open_count', 0)} | 👀 المراقبة: {info.get('watch_count', 0)}\n"
+        f"💼 المحفظة: {fmt_usd(info.get('equity', 0))} ({fmt_pct(info.get('return_pct', 0))})"
+    )
+
+
+def format_why(symbol: str, dec: dict | None, sig: dict | None) -> str:
+    if not dec and not sig:
+        return f"❓ <b>لماذا {symbol}؟</b>\n\nلا يوجد قرار مسجل لهذا الرمز في الدورة الأخيرة."
+    if sig:
+        snap = sig.get("snapshot", {}) or {}
+        parts = sig.get("score_parts", {}) or {}
+        lines = [
+            f"❓ <b>لماذا {symbol} — {sig.get('direction', '')}؟</b>",
+            f"الدرجة: <b>{sig.get('score', '?')}/100</b> ({parts.get('grade', '')})",
+            f"الحالة: {sig.get('status', '')}",
+            "━━━━━━━━━━━━",
+            f"• الترند: {parts.get('trend', '?')}/25 | فيبو: {parts.get('fibonacci', '?')}/25",
+            f"• الستوكاستيك: {parts.get('stochastic', '?')}/20 | التأكيد: {parts.get('confirmation', '?')}/20",
+            f"• المنطقة: {parts.get('zone', '?')}/10",
+            f"• فيبو: {sig.get('fib_zone', '')} | تأكيد: {sig.get('price_confirmation', '')}",
+            f"• الدخول: {fmt_price(sig.get('entry'))} | الوقف: {fmt_price(sig.get('stop_loss'))} | الهدف: {fmt_price(sig.get('take_profit'))}",
+            "",
+            "<b>الأسباب:</b>",
+        ]
+        lines += [f"• {r}" for r in (sig.get("reasons", []) or [])[:8]]
+        return "\n".join(lines)
+    rej = "\n".join(f"• {r}" for r in (dec.get("rejects", []) or [])[:4]) or "• —"
+    return (
+        f"❓ <b>لماذا {symbol}؟</b>\n"
+        f"الحالة: مرفوضة ❌ | الدرجة: {dec.get('score', '—')}\n"
+        "━━━━━━━━━━━━\n"
+        f"<b>أسباب الرفض:</b>\n{rej}\n"
+        f"\n🕒 القرار من: {libya_str(dec.get('ts', ''))}"
+    )
+
+
+def format_signals_list(sigs: list) -> str:
+    if not sigs:
+        return "👀 <b>آخر الإشارات</b>\n\nلا توجد إشارات مسجلة بعد."
+    lines = ["👀 <b>آخر الإشارات</b>\n"]
+    for g in sigs[:8]:
+        icon = "✔" if g.get("status") == "APPROVED" else "👀"
+        lines.append(
+            f"{icon} <b>{g.get('symbol')}</b> {g.get('direction')} — "
+            f"<b>{g.get('score', '?')}/100</b> (1:{g.get('rr', '?')})\n"
+            f"   {g.get('status', '')} | {libya_str(g.get('created_at', ''))}"
+        )
+    return "\n".join(lines)
+
+
+def format_report(rep: dict) -> str:
+    lines = [
+        "📋 <b>التقرير اليومي</b>",
+        f"🕒 {libya_str(rep.get('ts', ''))} (ليبيا)",
+        "━━━━━━━━━━━━",
+        f"💼 المحفظة: {fmt_usd(rep.get('equity', 0))} ({fmt_pct(rep.get('return_pct', 0))})",
+        f"• صفقات اليوم: {rep.get('today_trades', 0)} | ربح اليوم: {fmt_money(rep.get('today_pnl', 0))}",
+        f"• الفائزة: {rep.get('today_wins', 0)} | الخاسرة: {rep.get('today_losses', 0)}",
+        f"• الإشارات (معتمدة/مراقبة): {rep.get('approved', 0)}/{rep.get('watch', 0)}",
+        f"• المفتوحة الآن: {rep.get('open_count', 0)}",
+    ]
     return "\n".join(lines)
