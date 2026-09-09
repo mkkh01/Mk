@@ -33,16 +33,16 @@ def _now_iso() -> str:
 
 
 def create_database(url: str = "", key: str = "", local_dir: str = "data"):
-    """مصنع قواعد البيانات:
+    """مصنع قواعد البيانات (وضع صارم بدون بدائل صامتة):
+    - رابط postgresql:// → اتصال Postgres مباشر (ينشئ الجداول تلقائياً)
     - رابط https:// + مفتاح → Supabase API
-    - رابط postgresql:// مرفوض؛ يجب استخدام مشروع Supabase المحدد
-    - بدون بيانات → يفشل التشغيل؛ Supabase إلزامية
+    - بدون بيانات → يفشل التشغيل بصوت عالٍ (لا تخزين محلي صامت)
     """
     if (url or "").startswith("postgres"):
-        raise RuntimeError(
-            "رابط Postgres المباشر غير مدعوم؛ استخدم SUPABASE_URL بصيغة https:// "
-            "مع SUPABASE_KEY لمشروع Supabase الصحيح"
-        )
+        from .postgres_db import PostgresDatabase
+        return PostgresDatabase(url, local_dir)
+    if not (url and key):
+        raise RuntimeError("SUPABASE_URL و SUPABASE_KEY مطلوبان؛ لا يوجد fallback محلي")
     return Database(url, key, local_dir)
 
 

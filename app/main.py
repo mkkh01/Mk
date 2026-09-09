@@ -23,7 +23,19 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("main")
 
 settings = app_config.settings
-APP_VERSION = "27f69f4"
+
+
+def _app_version() -> str:
+    try:
+        import subprocess
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+APP_VERSION = _app_version()
 
 
 class AppCtx:
