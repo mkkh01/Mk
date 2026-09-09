@@ -17,7 +17,8 @@ from app.decision import compute_score, grade  # noqa: E402
 from app.indicators import (  # noqa: E402
     ema, ema_slope_value, pivot_highs, pivot_lows, slope_state, stochastic,
     validate_ohlc)
-from app.paper_engine import close_trade, fill_price, position_size  # noqa: E402
+from app.paper_engine import (build_open_trade, close_trade,  # noqa: E402
+                                fill_price, fixed_tp_price, position_size)
 from app.strategy import evaluate  # noqa: E402
 from app.structure import build_swing  # noqa: E402
 
@@ -99,6 +100,18 @@ def main() -> int:
         print("  DEBUG:", dec.rejects, dec.debug, getattr(dec.signal, "score_parts", None))
     check("LONG تُعتمد بدرجة ≥70", dec.approved and dec.direction == "LONG" and dec.score >= 70,
           f"{dec.rejects} {dec.debug}")
+    # ---- 1-مكرر) مسار الفتح الكامل بإشارة حقيقية (انحدار signal.side) ----
+    sig = dec.signal if (dec.approved and dec.signal) else None
+    check("إشارة حقيقية معتمدة للاختبار", sig is not None)
+    if sig is not None:
+        sz = position_size(10000, 1.0, sig.entry, sig.stop_loss, fixed_notional=30.0)
+        tr = build_open_trade(sig, sz, 1, 5)
+        check("بناء الصفقة من إشارة حقيقية", tr["side"] == "LONG" and tr["symbol"] == "TESTUSDT"
+              and abs(tr["notional"] - 30.0) < 0.01, str({k: tr.get(k) for k in ("side", "notional")}))
+        tr["tp"] = fixed_tp_price(tr["side"], tr["entry_price"], tr["qty"], 0.22, 0.1, 5)
+        c = close_trade(tr, tr["tp"], "تحقيق الهدف 🎯", 0.1, 5)
+        check("إغلاق الهدف للمسار الكامل رابح", c["result"] == "WIN" and 0.19 <= c["pnl"] <= 0.26,
+              f"pnl={c['pnl']}")
     if dec.signal:
         check("RR طبيعي ≥1.3", dec.signal.rr >= 1.3, str(dec.signal.rr))
         check("وقف تحت القاع بهامش ATR", dec.signal.stop_loss < dec.signal.swing_low)

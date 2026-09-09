@@ -42,10 +42,19 @@ async def run_cycle(ctx) -> dict:
             "trades": {}, "equity": {}, "per_symbol": {},
         }
         try:
+            prev = await ctx.cache.get("cycle:last") or {}
+            same = (prev.get("status") == "failed" and (prev.get("errors") or [""])[0]
+                    == (summary["errors"] or [""])[0])
+        except Exception:
+            same = False
+        try:
             await ctx.db.insert_cycle(summary)
             await ctx.cache.set("cycle:last", summary, ttl=3600)
             await ctx.db.insert_event("cycle_failed", {"error": str(e)[:300]})
-            await ctx.notifier.send(f"❌ <b>فشلت دورة النظام</b>\n{str(e)[:300]}")
+            if not same:
+                await ctx.notifier.send(
+                    f"❌ <b>فشلت دورة النظام</b>\n{str(e)[:300]}"
+                    "\n(لن تتكرر الرسالة حتى يتغير الخطأ — /stop يوقف المحاولات)")
         except Exception:
             pass
     finally:
@@ -252,56 +261,62 @@ async def _run(ctx, started, t0) -> dict:
     open_syms = {t["symbol"] for t in remaining_open}
     slots = cfg.MAX_OPEN_TRADES - len(remaining_open)
     for sig in sorted(approved, key=lambda s: s.score, reverse=True):
-        if paused:
-            blocked["المحرك متوقف مؤقتاً (/resume)"] += 1
-            continue
-        if degraded:
-            blocked["قاعدة البيانات متعثرة (SAFE)"] += 1
-            continue
-        if sig.symbol in open_syms:
-            continue
-        if slots <= 0:
-            blocked["الحد الأقصى للصفقات"] += 1
-            continue
-        # تبريد §32
-        last_exit = closed_by_sym.get(sig.symbol)
         try:
-            if last_exit and (now - datetime.fromisoformat(last_exit)).total_seconds() / 60 < cfg.COOLDOWN_MINUTES:
-                blocked[f"تبريد {cfg.COOLDOWN_MINUTES} دقيقة"] += 1
+            if paused:
+                blocked["المحرك متوقف مؤقتاً (/resume)"] += 1
                 continue
-        except Exception:
-            pass
-        # إشارة مكررة §33
-        if sig.setup_id and (sig.setup_id in open_setup_ids or sig.setup_id in closed_setup_ids):
-            blocked["إشارة مكررة"] += 1
+            if degraded:
+                blocked["قاعدة البيانات متعثرة (SAFE)"] += 1
+                continue
+            if sig.symbol in open_syms:
+                continue
+            if slots <= 0:
+                blocked["الحد الأقصى للصفقات"] += 1
+                continue
+            # تبريد §32
+            last_exit = closed_by_sym.get(sig.symbol)
+            try:
+                if last_exit and (now - datetime.fromisoformat(last_exit)).total_seconds() / 60 < cfg.COOLDOWN_MINUTES:
+                    blocked[f"تبريد {cfg.COOLDOWN_MINUTES} دقيقة"] += 1
+                    continue
+            except Exception:
+                pass
+            # إشارة مكررة §33
+            if sig.setup_id and (sig.setup_id in open_setup_ids or sig.setup_id in closed_setup_ids):
+                blocked["إشارة مكررة"] += 1
+                continue
+            # مخاطرة المحفظة §25
+            new_risk = equity * cfg.RISK_PCT / 100
+            if existing_risk + new_risk > equity * cfg.MAX_PORTFOLIO_RISK / 100:
+                blocked["تجاوز حد مخاطر المحفظة 3%"] += 1
+                continue
+            sizing = pe.position_size(equity, cfg.RISK_PCT, sig.entry, sig.stop_loss,
+                                      cfg.LEVERAGE, cfg.MIN_NOTIONAL, cfg.MAX_NOTIONAL_PCT,
+                                      cfg.FIXED_NOTIONAL_USDT)
+            if not sizing:
+                blocked["حجم صفقة غير صالح"] += 1
+                continue
+            trade = pe.build_open_trade(sig, sizing, cfg.LEVERAGE, cfg.SLIPPAGE_BPS)
+            if cfg.FIXED_TP_NET_USDT > 0:
+                trade["tp"] = pe.fixed_tp_price(trade["side"], trade["entry_price"], trade["qty"],
+                                                cfg.FIXED_TP_NET_USDT, cfg.FEE_PCT, cfg.SLIPPAGE_BPS)
+                trade["snapshot"]["fixed_tp_net"] = cfg.FIXED_TP_NET_USDT
+            trade["current_price"] = trade["entry_price"]
+            trade["unrealized_pnl"] = round(
+                -(trade["snapshot"].get("entry_slip", 0)
+                  + 2 * trade["notional"] * cfg.FEE_PCT / 100), 4)
+            await db.insert_open_trade(trade)
+            opened_now.append(trade)
+            open_syms.add(sig.symbol)
+            if sig.setup_id:
+                open_setup_ids.add(sig.setup_id)
+            existing_risk += sizing["risk_amount"]
+            slots -= 1
+        except Exception as e:
+            log.exception("فشل فتح %s: %s", sig.symbol, e)
+            errors.append(f"فتح {sig.symbol} فشل ({str(e)[:120]})")
             continue
-        # مخاطرة المحفظة §25
-        new_risk = equity * cfg.RISK_PCT / 100
-        if existing_risk + new_risk > equity * cfg.MAX_PORTFOLIO_RISK / 100:
-            blocked["تجاوز حد مخاطر المحفظة 3%"] += 1
-            continue
-        sizing = pe.position_size(equity, cfg.RISK_PCT, sig.entry, sig.stop_loss,
-                                  cfg.LEVERAGE, cfg.MIN_NOTIONAL, cfg.MAX_NOTIONAL_PCT,
-                                  cfg.FIXED_NOTIONAL_USDT)
-        if not sizing:
-            blocked["حجم صفقة غير صالح"] += 1
-            continue
-        trade = pe.build_open_trade(sig, sizing, cfg.LEVERAGE, cfg.SLIPPAGE_BPS)
-        if cfg.FIXED_TP_NET_USDT > 0:
-            trade["tp"] = pe.fixed_tp_price(trade["side"], trade["entry_price"], trade["qty"],
-                                            cfg.FIXED_TP_NET_USDT, cfg.FEE_PCT, cfg.SLIPPAGE_BPS)
-            trade["snapshot"]["fixed_tp_net"] = cfg.FIXED_TP_NET_USDT
-        trade["current_price"] = trade["entry_price"]
-        trade["unrealized_pnl"] = round(
-            -(trade["snapshot"].get("entry_slip", 0)
-              + 2 * trade["notional"] * cfg.FEE_PCT / 100), 4)
-        await db.insert_open_trade(trade)
-        opened_now.append(trade)
-        open_syms.add(sig.symbol)
-        if sig.setup_id:
-            open_setup_ids.add(sig.setup_id)
-        existing_risk += sizing["risk_amount"]
-        slots -= 1
+
     open_pnl_total += sum(t["unrealized_pnl"] for t in opened_now)
     equity = cfg.START_BALANCE + realized + open_pnl_total
 

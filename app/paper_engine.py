@@ -95,7 +95,10 @@ def position_size(equity: float, risk_pct: float, entry: float, sl: float,
 def build_open_trade(signal, sizing: dict, leverage: int = 1,
                      slippage_bps: float = 5) -> dict:
     req = signal.entry
-    filled = fill_price(signal.side, req, slippage_bps, True)
+    side = getattr(signal, "direction", None) or getattr(signal, "side", None)
+    if side not in ("LONG", "SHORT"):
+        raise ValueError(f"اتجاه إشارة غير صالح: {side!r}")
+    filled = fill_price(side, req, slippage_bps, True)
     slip_cost = abs(filled - req) * sizing["qty"]
     return {
         "id": uuid.uuid4().hex[:12],
@@ -103,7 +106,7 @@ def build_open_trade(signal, sizing: dict, leverage: int = 1,
         "setup_id": getattr(signal, "setup_id", ""),
         "state": "OPEN",
         "symbol": signal.symbol,
-        "side": signal.side,
+        "side": side,
         "entry_price": filled,
         "qty": sizing["qty"],
         "leverage": leverage,
