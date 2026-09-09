@@ -168,8 +168,6 @@ class PostgresDatabase:
         self._dsn = dsn
         self._pool = None
         self.mode = "local"
-        from .database import Database
-        self._local = Database("", "", local_dir)
 
     @property
     def _ok(self) -> bool:
@@ -191,9 +189,9 @@ class PostgresDatabase:
             self.mode = "postgres"
             log.info("متصل بـ Postgres مباشرة + الجداول جاهزة ✅")
         except Exception as e:
-            log.warning("تعذر Postgres المباشر (%s) - التحويل للتخزين المحلي", str(e)[:200])
             self._pool = None
-            self.mode = "local"
+            self.mode = "supabase_unavailable"
+            raise RuntimeError(f"تعذر الاتصال بقاعدة Supabase عبر Postgres: {e}") from e
 
     async def close(self):
         if self._pool:
@@ -207,18 +205,18 @@ class PostgresDatabase:
 
     async def get_open_trades(self) -> list:
         if not self._ok:
-            return await self._local.get_open_trades()
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 rows = await c.fetch("select * from open_trades order by entry_time")
                 return [_row(r) for r in rows]
         except Exception as e:
             log.error("get_open_trades فشل: %s", str(e)[:150])
-            return await self._local.get_open_trades()
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def insert_open_trade(self, trade: dict):
         if not self._ok:
-            return await self._local.insert_open_trade(trade)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -236,11 +234,11 @@ class PostgresDatabase:
                     float(trade.get("unrealized_pnl", 0)))
         except Exception as e:
             log.error("insert_open_trade فشل: %s", str(e)[:150])
-            await self._local.insert_open_trade(trade)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def update_open_trade(self, trade_id: str, fields: dict):
         if not self._ok:
-            return await self._local.update_open_trade(trade_id, fields)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             sets, vals = [], []
             i = 1
@@ -255,22 +253,22 @@ class PostgresDatabase:
             async with self._pool.acquire() as c:
                 await c.execute(f"update open_trades set {', '.join(sets)} where id = ${i}", *vals, trade_id)
         except Exception as e:
-            log.error("update_open_trade فشل: %s", str(e)[:150])
+            raise RuntimeError(f"update_open_trade فشل: {e}") from e
 
     async def delete_open_trade(self, trade_id: str):
         if not self._ok:
-            return await self._local.delete_open_trade(trade_id)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute("delete from open_trades where id = $1", trade_id)
         except Exception as e:
-            log.error("delete_open_trade فشل: %s", str(e)[:150])
+            raise RuntimeError(f"delete_open_trade فشل: {e}") from e
 
     # ---------- الصفقات المغلقة ----------
 
     async def insert_closed_trade(self, trade: dict):
         if not self._ok:
-            return await self._local.insert_closed_trade(trade)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -291,11 +289,11 @@ class PostgresDatabase:
                     float(trade.get("duration_min", 0)))
         except Exception as e:
             log.error("insert_closed_trade فشل: %s", str(e)[:150])
-            await self._local.insert_closed_trade(trade)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def list_closed_trades(self, limit: int = 50) -> list:
         if not self._ok:
-            return await self._local.list_closed_trades(limit)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 rows = await c.fetch(
@@ -303,13 +301,13 @@ class PostgresDatabase:
                 return [_row(r) for r in rows]
         except Exception as e:
             log.error("list_closed_trades فشل: %s", str(e)[:150])
-            return await self._local.list_closed_trades(limit)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     # ---------- الدورات ----------
 
     async def insert_cycle(self, cycle: dict):
         if not self._ok:
-            return await self._local.insert_cycle(cycle)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -322,11 +320,11 @@ class PostgresDatabase:
                     float(cycle.get("duration_sec", 0)), cycle.get("status", ""), _j(cycle))
         except Exception as e:
             log.error("insert_cycle فشل: %s", str(e)[:150])
-            await self._local.insert_cycle(cycle)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def get_last_cycle(self):
         if not self._ok:
-            return await self._local.get_last_cycle()
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 r = await c.fetchrow("select summary from cycles order by cycle_id desc limit 1")
@@ -336,13 +334,13 @@ class PostgresDatabase:
                 return None
         except Exception as e:
             log.error("get_last_cycle فشل: %s", str(e)[:150])
-            return await self._local.get_last_cycle()
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     # ---------- المحفظة والحالة ----------
 
     async def insert_equity(self, snap: dict):
         if not self._ok:
-            return await self._local.insert_equity(snap)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -353,11 +351,11 @@ class PostgresDatabase:
                     int(snap.get("open_count", 0)))
         except Exception as e:
             log.error("insert_equity فشل: %s", str(e)[:150])
-            await self._local.insert_equity(snap)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def get_state(self, key: str, default=None):
         if not self._ok:
-            return await self._local.get_state(key, default)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 r = await c.fetchrow("select value from bot_state where key = $1", key)
@@ -367,11 +365,11 @@ class PostgresDatabase:
                 return default
         except Exception as e:
             log.error("get_state فشل: %s", str(e)[:150])
-            return await self._local.get_state(key, default)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def set_state(self, key: str, value):
         if not self._ok:
-            return await self._local.set_state(key, value)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -380,13 +378,13 @@ class PostgresDatabase:
                     key, _j(value))
         except Exception as e:
             log.error("set_state فشل: %s", str(e)[:150])
-            await self._local.set_state(key, value)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     # ---------- الإشارات (§43) ----------
 
     async def insert_signal(self, sig: dict):
         if not self._ok:
-            return await self._local.insert_signal(sig)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -411,22 +409,22 @@ class PostgresDatabase:
                     _j(sig.get("snapshot", {})))
         except Exception as e:
             log.error("insert_signal فشل: %s", str(e)[:150])
-            await self._local.insert_signal(sig)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def get_signal(self, signal_id: str):
         if not self._ok:
-            return await self._local.get_signal(signal_id)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 r = await c.fetchrow("select * from signals where signal_id = $1", signal_id)
                 return _row(r) if r else None
         except Exception as e:
             log.error("get_signal فشل: %s", str(e)[:150])
-            return await self._local.get_signal(signal_id)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def list_signals(self, limit: int = 20) -> list:
         if not self._ok:
-            return await self._local.list_signals(limit)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 rows = await c.fetch(
@@ -434,11 +432,11 @@ class PostgresDatabase:
                 return [_row(r) for r in rows]
         except Exception as e:
             log.error("list_signals فشل: %s", str(e)[:150])
-            return await self._local.list_signals(limit)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def insert_swing(self, row: dict):
         if not self._ok:
-            return await self._local.insert_swing(row)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -449,11 +447,11 @@ class PostgresDatabase:
                     float(row.get("high", 0)), float(row.get("quality", 0)))
         except Exception as e:
             log.error("insert_swing فشل: %s", str(e)[:150])
-            await self._local.insert_swing(row)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
 
     async def insert_event(self, event_type: str, payload: dict):
         if not self._ok:
-            return await self._local.insert_event(event_type, payload)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
@@ -461,4 +459,4 @@ class PostgresDatabase:
                     event_type, _j(payload or {}))
         except Exception as e:
             log.error("insert_event فشل: %s", str(e)[:150])
-            await self._local.insert_event(event_type, payload)
+            raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")

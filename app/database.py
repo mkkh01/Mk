@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""طبقة قاعدة البيانات: Supabase إن توفرت، وإلا ملفات JSON محلية (وضع التجربة)."""
+"""طبقة قاعدة البيانات: Supabase إلزامية؛ لا يوجد تخزين محلي بديل."""
 import asyncio
 import json
 import logging
@@ -17,7 +17,7 @@ def create_database(url: str = "", key: str = "", local_dir: str = "data"):
     """مصنع قواعد البيانات:
     - رابط postgresql:// → اتصال Postgres مباشر (ينشئ الجداول تلقائياً)
     - رابط https:// + مفتاح → Supabase API
-    - بدون بيانات → تخزين محلي
+    - بدون بيانات → يفشل التشغيل؛ Supabase إلزامية
     """
     if (url or "").startswith("postgres"):
         from .postgres_db import PostgresDatabase
@@ -52,8 +52,7 @@ class Database:
 
     async def connect(self):
         if not (self._url and self._key):
-            log.warning("SUPABASE غير مضبوط - العمل بتخزين محلي في مجلد data/")
-            return
+            raise RuntimeError("SUPABASE_URL و SUPABASE_KEY مطلوبان؛ لا يوجد fallback محلي")
         try:
             from supabase import create_client
             sb = create_client(self._url, self._key)
@@ -62,25 +61,17 @@ class Database:
             self.mode = "supabase"
             log.info("متصل بـ Supabase بنجاح")
         except Exception as e:
-            log.warning("تعذر الاتصال بـ Supabase (%s) - التحويل للتخزين المحلي", e)
             self._sb = None
-            self.mode = "local"
+            self.mode = "supabase_unavailable"
+            raise RuntimeError(f"تعذر الاتصال بـ Supabase: {e}") from e
 
-    # ---------- أدوات التخزين المحلي ----------
+    # ---------- منع التخزين المحلي ----------
 
     def _load(self, name: str):
-        p = self._files[name]
-        if not os.path.exists(p):
-            return [] if name != "bot_state" else {}
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return [] if name != "bot_state" else {}
+        raise RuntimeError(f"قراءة التخزين المحلي غير مسموحة ({name}); استخدم Supabase")
 
     def _save(self, name: str, data):
-        with open(self._files[name], "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, default=str)
+        raise RuntimeError(f"الكتابة إلى التخزين المحلي غير مسموحة ({name}); استخدم Supabase")
 
     # ---------- الصفقات المفتوحة ----------
 

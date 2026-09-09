@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""طبقة الكاش: Redis إن توفر، وإلا ذاكرة محلية (وضع التجربة)."""
+"""طبقة الكاش: Redis إلزامي؛ لا يوجد تخزين بديل داخل الذاكرة."""
 import json
 import logging
-import time
 
 log = logging.getLogger("cache")
 
@@ -11,13 +10,16 @@ class Cache:
     def __init__(self, redis_url: str = ""):
         self._redis_url = redis_url
         self._redis = None
-        self._mem: dict = {}
-        self.mode = "memory"
+        self.mode = "redis"
+
+    def _require_redis(self):
+        if self._redis is None:
+            raise RuntimeError("Redis غير متصل؛ التخزين داخل الذاكرة معطل")
+        return self._redis
 
     async def connect(self):
         if not self._redis_url:
-            log.warning("REDIS_URL غير مضبوط - العمل بذاكرة محلية (تُفقد عند إعادة التشغيل)")
-            return
+            raise RuntimeError("REDIS_URL غير مضبوط؛ Redis مطلوب ولا يوجد fallback محلي")
         try:
             import redis.asyncio as aioredis
             self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
@@ -25,90 +27,62 @@ class Cache:
             self.mode = "redis"
             log.info("متصل بـ Redis بنجاح")
         except Exception as e:
-            log.warning("تعذر الاتصال بـ Redis (%s) - التحويل للذاكرة المحلية", e)
             self._redis = None
-            self.mode = "memory"
+            self.mode = "redis_unavailable"
+            raise RuntimeError(f"تعذر الاتصال بـ Redis: {e}") from e
 
     async def close(self):
         if self._redis:
             try:
-                await self._redis.close()
+                await self._redis.aclose()
             except Exception:
                 pass
-
-    # ---------- عمليات أساسية ----------
+            self._redis = None
 
     async def get(self, key: str, default=None):
-        if self._redis:
-            try:
-                v = await self._redis.get(key)
-                return default if v is None else json.loads(v)
-            except Exception as e:
-                log.warning("Redis get فشل: %s", e)
-        item = self._mem.get(key)
-        if item is None:
-            return default
-        val, exp = item
-        if exp and time.time() > exp:
-            self._mem.pop(key, None)
-            return default
-        return val
+        redis = self._require_redis()
+        try:
+            v = await redis.get(key)
+            return default if v is None else json.loads(v)
+        except Exception as e:
+            raise RuntimeError(f"Redis get فشل للمفتاح {key}: {e}") from e
 
     async def set(self, key: str, value, ttl: int = 0):
-        if self._redis:
-            try:
-                data = json.dumps(value, ensure_ascii=False, default=str)
-                if ttl:
-                    await self._redis.set(key, data, ex=ttl)
-                else:
-                    await self._redis.set(key, data)
-                return
-            except Exception as e:
-                log.warning("Redis set فشل: %s", e)
-        exp = time.time() + ttl if ttl else 0
-        self._mem[key] = (value, exp)
+        redis = self._require_redis()
+        try:
+            data = json.dumps(value, ensure_ascii=False, default=str)
+            if ttl:
+                await redis.set(key, data, ex=ttl)
+            else:
+                await redis.set(key, data)
+        except Exception as e:
+            raise RuntimeError(f"Redis set فشل للمفتاح {key}: {e}") from e
 
     async def delete(self, key: str):
-        if self._redis:
-            try:
-                await self._redis.delete(key)
-            except Exception as e:
-                log.warning("Redis delete فشل: %s", e)
-        self._mem.pop(key, None)
+        redis = self._require_redis()
+        try:
+            await redis.delete(key)
+        except Exception as e:
+            raise RuntimeError(f"Redis delete فشل للمفتاح {key}: {e}") from e
 
     async def incr(self, key: str) -> int:
-        if self._redis:
-            try:
-                return int(await self._redis.incr(key))
-            except Exception as e:
-                log.warning("Redis incr فشل: %s", e)
-        cur = self._mem.get(key, (0, 0))[0]
+        redis = self._require_redis()
         try:
-            cur = int(cur) + 1
-        except (TypeError, ValueError):
-            cur = 1
-        self._mem[key] = (cur, 0)
-        return cur
+            return int(await redis.incr(key))
+        except Exception as e:
+            raise RuntimeError(f"Redis incr فشل للمفتاح {key}: {e}") from e
 
     async def acquire_lock(self, key: str, ttl: int = 50) -> bool:
-        """قفل لمنع تداخل دورتين. يرجع True إذا حصل على القفل."""
-        if self._redis:
-            try:
-                return bool(await self._redis.set(key, "1", ex=ttl, nx=True))
-            except Exception as e:
-                log.warning("Redis lock فشل: %s", e)
-        item = self._mem.get(key)
-        if item:
-            _, exp = item
-            if exp and time.time() < exp:
-                return False
-        self._mem[key] = (True, time.time() + ttl)
-        return True
+        """قفل Redis لمنع تداخل دورتين."""
+        redis = self._require_redis()
+        try:
+            return bool(await redis.set(key, "1", ex=ttl, nx=True))
+        except Exception as e:
+            raise RuntimeError(f"Redis lock فشل للمفتاح {key}: {e}") from e
 
     async def release_lock(self, key: str):
-        if self._redis:
-            try:
-                await self._redis.delete(key)
-            except Exception:
-                pass
-        self._mem.pop(key, None)
+        redis = self._require_redis()
+        try:
+            await redis.delete(key)
+        except Exception as e:
+            raise RuntimeError(f"Redis unlock فشل للمفتاح {key}: {e}") from e
