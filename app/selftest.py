@@ -259,6 +259,32 @@ def main() -> int:
           dec_fx.approved or all("العائد" not in r for r in dec_fx.rejects),
           f"{dec_fx.rejects}")
 
+    # ---- 16) فلتر أعمدة API + جدول الإشارات (انحدار PostgREST) ----
+    from app.database import (  # noqa: E402
+        _CLOSED_COLS, _OPEN_COLS, _SIGNAL_COLS, SIGNAL_TABLE, _pick)
+    check("جدول الإشارات = bot_signals (لا يمس legacy)", SIGNAL_TABLE == "bot_signals")
+    _sz16 = position_size(10000, 1.0, sig.entry, sig.stop_loss, fixed_notional=30.0)
+    _tr16 = build_open_trade(sig, _sz16, 1, 5)
+    _tr16["tp"] = fixed_tp_price(_tr16["side"], _tr16["entry_price"], _tr16["qty"], 0.22, 0.1, 5)
+    _c16 = close_trade(_tr16, _tr16["tp"], "تحقيق الهدف 🎯", 0.1, 5)
+    dirty_open = dict(_tr16, signal_id="x", setup_id="y", state="OPEN", bogus=1)
+    clean = _pick(dirty_open, _OPEN_COLS)
+    check("فلتر المفتوحة يسقط الزوائد ويبقي الأساس",
+          "bogus" not in clean and "state" not in clean and "setup_id" not in clean
+          and clean["symbol"] == "TESTUSDT" and clean["side"] == "LONG", str(sorted(clean)))
+    dirty_closed = dict(_c16, signal_id="x", setup_id="y", state="CLOSED", exit_code="TP",
+                        notional=30.0, bogus=1)
+    clean_c = _pick(dirty_closed, _CLOSED_COLS)
+    check("فلتر المغلقة يسقط الزوائد ويبقي الأساس",
+          "bogus" not in clean_c and "exit_code" not in clean_c and "notional" not in clean_c
+          and clean_c["pnl"] == _c16["pnl"] and clean_c["result"] == "WIN")
+    dirty_sig = dict(sig.to_dict(), fib_price_low=1.0, fib_price_high=2.0, ema_slope=0.1,
+                     bogus=1)
+    clean_s = _pick(dirty_sig, _SIGNAL_COLS)
+    check("فلتر الإشارات يسقط الزوائد ويبقي الأساس",
+          "bogus" not in clean_s and "fib_price_low" not in clean_s and "ema_slope" not in clean_s
+          and clean_s["signal_id"] == sig.signal_id and clean_s["direction"] == "LONG")
+
     print(f"\n{'=' * 40}\nالنتيجة: {len(PASS)} ناجح | {len(FAIL)} فاشل")
     if FAIL:
         print("الفاشلة:", FAIL)

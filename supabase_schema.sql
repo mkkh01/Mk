@@ -88,8 +88,8 @@ insert into bot_state (key, value)
 values ('realized_pnl', '{"total": 0}')
 on conflict (key) do nothing;
 
--- 7) سجل الإشارات (§43)
-create table if not exists signals (
+-- 7) سجل إشارات البوت (§43) — bot_signals لأن signals يخص نظاماً قديماً
+create table if not exists bot_signals (
   signal_id text primary key,
   created_at timestamptz not null default now(),
   symbol text not null,
@@ -114,8 +114,8 @@ create table if not exists signals (
   score_parts jsonb not null default '{}',
   snapshot jsonb not null default '{}'
 );
-create index if not exists idx_signals_created on signals(created_at desc);
-create index if not exists idx_signals_symbol on signals(symbol);
+create index if not exists idx_bot_signals_created on signals(created_at desc);
+create index if not exists idx_bot_signals_symbol on signals(symbol);
 
 -- 8) نقاط الـ Swings
 create table if not exists swing_points (

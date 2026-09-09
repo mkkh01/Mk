@@ -8,6 +8,25 @@ from datetime import datetime, timezone
 
 log = logging.getLogger("database")
 
+# الأعمدة الحقيقية للجداول (PostgREST يرفض أي مفتاح زائد، لذا تُصفّى الحمولة)
+_OPEN_COLS = {"id", "symbol", "side", "entry_price", "qty", "leverage", "margin",
+              "notional", "sl", "tp", "risk_amount", "entry_time", "entry_reasons",
+              "snapshot", "current_price", "unrealized_pnl", "updated_at"}
+_CLOSED_COLS = {"id", "symbol", "side", "entry_price", "exit_price", "qty", "leverage",
+                "margin", "sl", "tp", "risk_amount", "entry_time", "exit_time",
+                "entry_reasons", "snapshot", "exit_reason", "pnl", "pnl_pct",
+                "r_multiple", "fees", "result", "duration_min"}
+_SIGNAL_COLS = {"signal_id", "created_at", "symbol", "direction", "status", "score",
+                 "entry", "stop_loss", "take_profit", "rr", "setup_id", "htf", "mtf",
+                 "ltf", "ema_state", "swing_low", "swing_high", "swing_id", "fib_zone",
+                 "stoch_k", "stoch_d", "stoch_cross", "price_confirmation", "reasons",
+                 "score_parts", "snapshot"}
+SIGNAL_TABLE = "bot_signals"  # جدول signals القديم يخص نظاماً آخر — لا نمسه
+
+
+def _pick(row: dict, cols: set) -> dict:
+    return {k: v for k, v in row.items() if k in cols}
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -93,7 +112,7 @@ class Database:
         trade.setdefault("updated_at", _now_iso())
         if self._sb:
             try:
-                await asyncio.to_thread(lambda: self._sb.table("open_trades").insert(trade).execute())
+                await asyncio.to_thread(lambda: self._sb.table("open_trades").insert(_pick(trade, _OPEN_COLS)).execute())
                 return
             except Exception as e:
                 log.error("insert_open_trade فشل: %s", e)
@@ -135,7 +154,7 @@ class Database:
     async def insert_closed_trade(self, trade: dict):
         if self._sb:
             try:
-                await asyncio.to_thread(lambda: self._sb.table("closed_trades").insert(trade).execute())
+                await asyncio.to_thread(lambda: self._sb.table("closed_trades").insert(_pick(trade, _CLOSED_COLS)).execute())
                 return
             except Exception as e:
                 log.error("insert_closed_trade فشل: %s", e)
@@ -246,7 +265,7 @@ class Database:
         sig.setdefault("created_at", _now_iso())
         if self._sb:
             try:
-                await asyncio.to_thread(lambda: self._sb.table("signals").insert(sig).execute())
+                await asyncio.to_thread(lambda: self._sb.table(SIGNAL_TABLE).insert(_pick(sig, _SIGNAL_COLS)).execute())
                 return
             except Exception as e:
                 log.error("insert_signal فشل: %s", e)
@@ -258,7 +277,7 @@ class Database:
         if self._sb:
             try:
                 r = await asyncio.to_thread(
-                    lambda: self._sb.table("signals").select("*").eq("signal_id", signal_id).execute()
+                    lambda: self._sb.table(SIGNAL_TABLE).select("*").eq("signal_id", signal_id).execute()
                 )
                 return (r.data or [None])[0]
             except Exception as e:
@@ -272,7 +291,7 @@ class Database:
         if self._sb:
             try:
                 r = await asyncio.to_thread(
-                    lambda: self._sb.table("signals").select("*")
+                    lambda: self._sb.table(SIGNAL_TABLE).select("*")
                     .order("created_at", desc=True).limit(limit).execute()
                 )
                 return r.data or []

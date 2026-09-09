@@ -82,7 +82,7 @@ create table if not exists bot_state (
   value jsonb not null default '{}',
   updated_at timestamptz not null default now()
 );
-create table if not exists signals (
+create table if not exists bot_signals (
   signal_id text primary key,
   created_at timestamptz not null default now(),
   symbol text not null,
@@ -107,8 +107,8 @@ create table if not exists signals (
   score_parts jsonb not null default '{}',
   snapshot jsonb not null default '{}'
 );
-create index if not exists idx_signals_created on signals(created_at desc);
-create index if not exists idx_signals_symbol on signals(symbol);
+create index if not exists idx_bot_signals_created on signals(created_at desc);
+create index if not exists idx_bot_signals_symbol on signals(symbol);
 create table if not exists swing_points (
   id bigserial primary key,
   ts timestamptz not null default now(),
@@ -388,7 +388,7 @@ class PostgresDatabase:
         try:
             async with self._pool.acquire() as c:
                 await c.execute(
-                    """insert into signals
+                    """insert into bot_signals
                        (signal_id,symbol,direction,status,score,entry,stop_loss,take_profit,rr,
                         setup_id,htf,mtf,ltf,ema_state,swing_low,swing_high,swing_id,fib_zone,
                         stoch_k,stoch_d,stoch_cross,price_confirmation,reasons,score_parts,snapshot)
@@ -416,7 +416,7 @@ class PostgresDatabase:
             raise RuntimeError("قاعدة Supabase غير متاحة؛ لا يوجد fallback محلي")
         try:
             async with self._pool.acquire() as c:
-                r = await c.fetchrow("select * from signals where signal_id = $1", signal_id)
+                r = await c.fetchrow("select * from bot_signals where signal_id = $1", signal_id)
                 return _row(r) if r else None
         except Exception as e:
             log.error("get_signal فشل: %s", str(e)[:150])
@@ -428,7 +428,7 @@ class PostgresDatabase:
         try:
             async with self._pool.acquire() as c:
                 rows = await c.fetch(
-                    "select * from signals order by created_at desc limit $1", int(limit))
+                    "select * from bot_signals order by created_at desc limit $1", int(limit))
                 return [_row(r) for r in rows]
         except Exception as e:
             log.error("list_signals فشل: %s", str(e)[:150])
