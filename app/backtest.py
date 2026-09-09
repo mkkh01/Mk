@@ -77,10 +77,11 @@ def _closed_before(df: pd.DataFrame, close_ms: int, tf_dur_ms: int, warmup: int)
 
 
 async def backtest_symbol(client: MarketDataClient, symbol: str, s,
-                          days: int) -> dict:
+                          days: int, end_days_ago: int = 0) -> dict:
     now = datetime.now(timezone.utc)
-    since_ms = int((now - timedelta(days=days + 30)).timestamp() * 1000)
-    until_ms = int(now.timestamp() * 1000)
+    end_dt = now - timedelta(days=end_days_ago)
+    since_ms = int((end_dt - timedelta(days=days + 30)).timestamp() * 1000)
+    until_ms = int(end_dt.timestamp() * 1000)
     htf = await _fetch_many(client, symbol, s.HTF, since_ms, until_ms)
     mtf = await _fetch_many(client, symbol, s.MTF, since_ms, until_ms)
     ltf = await _fetch_many(client, symbol, s.LTF, since_ms, until_ms)
@@ -89,7 +90,7 @@ async def backtest_symbol(client: MarketDataClient, symbol: str, s,
     mtf_d = TF_SECONDS[s.MTF] * 1000
     htf_d = TF_SECONDS[s.HTF] * 1000
     ltf_d = TF_SECONDS[s.LTF] * 1000
-    eval_from = int((now - timedelta(days=days)).timestamp() * 1000)
+    eval_from = int((end_dt - timedelta(days=days)).timestamp() * 1000)
     warmup = s.EMA_LEN + s.PIVOT_K + 5
 
     closed, open_pos = [], None
@@ -167,6 +168,12 @@ async def backtest_symbol(client: MarketDataClient, symbol: str, s,
         closed.append(c)
     realized = sum(float(t.get("pnl", 0) or 0) for t in closed)
     perf = pe.compute_performance([], closed, realized, s.START_BALANCE, 0.0)
+    slip_total = sum(float((t.get("snapshot") or {}).get("slippage_cost", 0) or 0)
+                      for t in closed)
+    perf["slippage_sensitivity"] = {
+        "slippage_paid": round(slip_total, 2),
+        "pnl_2x_slippage": round(realized - slip_total, 2),
+    }
     return {"symbol": symbol, "stats": stats, "performance": perf, "trades": closed}
 
 
@@ -184,22 +191,31 @@ def _print_report(all_res: list, days: int, s):
         print(f"\n<b>{r['symbol']}</b>: شموع {st['bars']} | معتمدة {st['approved']} | مراقبة {st['watch']}")
         print(f"  صفقات: {p['total_trades']} | فوز: {p['winrate']}% | PF: {p['profit_factor']} | "
               f"توقع: {p['expectancy_r']}R | تراجع: {p['max_drawdown_pct']}% | PnL: {p['realized_pnl']:+.2f}$")
+        sens = p.get("slippage_sensitivity", {})
+        print(f"  حساسية الانزلاق: مدفوع {sens.get('slippage_paid', 0)}$ | "
+              f"PnL بانزلاق ×2: {sens.get('pnl_2x_slippage', 0):+.2f}$")
     n_sym = sum(1 for r in all_res if "error" not in r)
     print(f"\n{'=' * 55}\nالإجمالي ({n_sym} رموز): {tot_tr} صفقة | "
           f"فوز {(tot_w / tot_tr * 100 if tot_tr else 0):.1f}% | PnL: {tot_pnl:+.2f}$")
     print("⚠️ نتائج افتراضية: الخروج المعاكس غير مشمول، ورأس المال ثابت بلا تراكم.")
 
 
-async def main_async(symbols: list, days: int):
+async def main_async(symbols: list, days: int, walk: int = 1):
     s = app_config.settings
     client = MarketDataClient(s.DATA_SOURCES)
     out = []
-    for sym in symbols:
-        print(f"⏳ اختبار {sym} ...")
-        try:
-            out.append(await backtest_symbol(client, sym, s, days))
-        except Exception as e:
-            out.append({"symbol": sym, "error": str(e)[:200]})
+    for w in range(walk):
+        span = max(1, days // max(walk, 1))
+        end_ago = (walk - 1 - w) * span if walk > 1 else 0
+        label = f" [نافذة {w + 1}/{walk}]" if walk > 1 else ""
+        for sym in symbols:
+            print(f"⏳ اختبار {sym}{label} ...")
+            try:
+                r = await backtest_symbol(client, sym, s, span, end_ago)
+                r["window"] = w + 1 if walk > 1 else 0
+                out.append(r)
+            except Exception as e:
+                out.append({"symbol": sym, "window": w + 1, "error": str(e)[:200]})
     await client.close()
     _print_report(out, days, s)
     os.makedirs("backtest_results", exist_ok=True)
@@ -215,9 +231,16 @@ def main():
     ap.add_argument("symbols", nargs="?", default="BTCUSDT",
                     help="رموز بفاصلة (افتراضي BTCUSDT)")
     ap.add_argument("--days", type=int, default=60, help="أيام فترة الاختبار (افتراضي 60)")
+    ap.add_argument("--walk", type=int, default=1, help="عدد نوافذ Walk-Forward (افتراضي 1)")
+    ap.add_argument("--min-score", type=int, default=None, help="تجاوز حد الاعتماد (افتراضي من الإعدادات)")
+    ap.add_argument("--rr-min", type=float, default=None, help="تجاوز حد العائد (افتراضي من الإعدادات)")
     a = ap.parse_args()
+    if a.min_score is not None:
+        app_config.settings.MIN_SCORE = a.min_score
+    if a.rr_min is not None:
+        app_config.settings.RR_MIN = a.rr_min
     syms = [x.strip().upper() for x in a.symbols.split(",") if x.strip()]
-    asyncio.run(main_async(syms, max(7, a.days)))
+    asyncio.run(main_async(syms, max(7, a.days), max(1, a.walk)))
 
 
 if __name__ == "__main__":

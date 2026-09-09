@@ -17,7 +17,7 @@ from app.decision import compute_score, grade  # noqa: E402
 from app.indicators import (  # noqa: E402
     ema, ema_slope_value, pivot_highs, pivot_lows, slope_state, stochastic,
     validate_ohlc)
-from app.paper_engine import fill_price  # noqa: E402
+from app.paper_engine import close_trade, fill_price, position_size  # noqa: E402
 from app.strategy import evaluate  # noqa: E402
 from app.structure import build_swing  # noqa: E402
 
@@ -174,6 +174,52 @@ def main() -> int:
           ("Strong Up", "Weak Up", "Flat", "Weak Down", "Strong Down"))
     k, d = stochastic(ltf)
     check("ستوكاستيك الإشارة مشبع بيعياً", float(k.iloc[-1]) < 20, f"K={float(k.iloc[-1]):.1f}")
+
+    # ---- 11) EMA مقابل مرجع يدوي (§52) ----
+    closes = mtf["close"]
+    alpha = 2 / (200 + 1)
+    ref = float(closes.iloc[0])
+    for c in closes.iloc[1:]:
+        ref = float(c) * alpha + ref * (1 - alpha)
+    check("EMA يطابق الحساب اليدوي", abs(float(e.iloc[-1]) - ref) < 1e-6,
+          f"{float(e.iloc[-1])} vs {ref}")
+
+    # ---- 12) السوق المسطح (§52: ستوكاستيك مسطح) ----
+    flat = pd.DataFrame([{"ts": 1_700_000_000 + i * 300, "open": 100.0, "high": 100.0,
+                          "low": 100.0, "close": 100.0, "volume": 10.0} for i in range(210)])
+    kf, df_ = stochastic(flat)
+    import math as _m
+    check("السوق المسطح تماماً يعطي NaN آمناً", _m.isnan(float(kf.iloc[-1])),
+          f"K={float(kf.iloc[-1])}")
+    dec_flat = evaluate("TESTUSDT", htf, mtf, flat, live, cfg)
+    check("السوق المسطح يُرفض بسبب الستوكاستيك", not dec_flat.approved,
+          f"{dec_flat.rejects}")
+
+    # ---- 13) حواف المخاطرة (§52) ----
+    check("مسافة صفر → لا حجم", position_size(10000, 1.0, 100.0, 100.0) is None)
+    check("رصيد غير كافٍ → لا حجم", position_size(10, 1.0, 50000.0, 49000.0,
+                                                  min_notional=5.0) is None)
+    huge = position_size(10000, 1.0, 100.0, 50.0)
+    check("وقف ضخم → حجم صغير صالح", huge is not None and huge["qty"] > 0)
+    tiny = position_size(10000, 1.0, 100.0, 99.99)
+    check("وقف صغير → حجم محدود بالقيمة القصوى",
+          tiny is not None and tiny["notional"] <= 10000 * 0.30 + 1)
+
+    # ---- 14) رياضيات الإغلاق (§52: تنفيذ) ----
+    tr = {"id": "t", "symbol": "T", "side": "LONG", "entry_price": 100.0, "qty": 1.0,
+          "margin": 100.0, "notional": 100.0, "sl": 95.0, "tp": 110.0,
+          "risk_amount": 5.0, "entry_time": "2026-01-01T00:00:00+00:00",
+          "entry_reasons": [], "snapshot": {"entry_slip": 0.05}}
+    c_tp = close_trade(tr, 110.0, "تحقيق الهدف 🎯", 0.1, 5)
+    check("إغلاق الهدف: رابح + R موجب + كود TP",
+          c_tp["result"] == "WIN" and c_tp["r_multiple"] > 0 and c_tp["exit_code"] == "TP",
+          str(c_tp["r_multiple"]))
+    c_sl = close_trade(tr, 95.0, "ضرب وقف الخسارة 🛑", 0.1, 5)
+    check("إغلاق الوقف: خاسر + R≈-1 + كود SL",
+          c_sl["result"] == "LOSS" and -1.2 < c_sl["r_multiple"] < -0.8
+          and c_sl["exit_code"] == "SL", str(c_sl["r_multiple"]))
+    check("تكلفة الانزلاق مسجلة (دخول+خروج)",
+          float(c_tp["snapshot"].get("slippage_cost", 0)) > 0.05)
 
     print(f"\n{'=' * 40}\nالنتيجة: {len(PASS)} ناجح | {len(FAIL)} فاشل")
     if FAIL:

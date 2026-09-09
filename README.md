@@ -62,6 +62,8 @@
 ```bash
 python -m app.selftest                 # فحص سريع: سيناريو LONG/SHORT + فلاتر + نقاط
 python -m app.backtest BTCUSDT --days 60   # اختبار تاريخي بنفس محرك القرار الحي
+python -m app.backtest BTCUSDT --days 90 --walk 3  # نوافذ Walk-Forward (3×30 يوم)
+python -m app.backtest BTCUSDT --days 60 --min-score 75 --rr-min 1.5  # تجاوز بارامترات
 ```
 
 ## 3. الأزواج الثلاثون (مقومة بـ USDT)
@@ -91,8 +93,9 @@ ARB, OP, SUI, APT, INJ, LTC, BCH, FIL, ETC, HBAR, ICP, RENDER, PEPE, WIF, FET, A
 | 🔄 ملخص الدورة | تشخيص آخر دورة: البيانات، القرار، الإشارات، الصفقات، الأخطاء |
 
 **الأوامر النصية:** `/status` الحالة · `/open` المفتوحة · `/closed` المغلقة ·
-`/why BTCUSDT` لماذا؟ · `/signals` الإشارات · `/report` التقرير اليومي ·
-`/stop` إيقاف مؤقت · `/resume` استئناف.
+`/why BTCUSDT` (أو `/why signal_id`) لماذا؟ · `/signals` الإشارات · `/report` اليومي ·
+`/performance` الأداء · `/symbol` رمز · `/risk` المخاطرة · `/health` الصحة ·
+`/config` الإعدادات · `/stop` إيقاف مؤقت · `/resume` استئناف.
 
 + إشعار تلقائي 🚀 عند كل فتح و✅/❌ عند كل إغلاق مع الأسباب.
 

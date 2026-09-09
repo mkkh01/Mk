@@ -114,7 +114,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 <b>مرحباً بك في نظام المؤشرات الثلاثة</b>\n"
         f"📊 {len(ctx.cfg.SYMBOLS)} زوجاً | فريم {ctx.cfg.HTF}/{ctx.cfg.MTF}/{ctx.cfg.LTF} | دورة كل دقيقة\n"
-        "الأوامر: /status /open /closed /why /signals /report /stop /resume\n"
+        "الأوامر: /status /open /closed /why /signals /report /performance\n/symbol /risk /health /config /stop /resume\n"
         "اختر من الأزرار:",
         parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
@@ -180,15 +180,23 @@ async def cmd_why(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❓ الاستخدام: <code>/why BTCUSDT</code>",
                                         parse_mode=ParseMode.HTML)
         return
-    sym = args[0].upper().replace("/", "").replace("-", "").replace("_", "")
+    raw = args[0].strip()
+    try:
+        sig = await ctx.db.get_signal(raw)
+    except Exception:
+        sig = None
+    if sig:
+        await update.message.reply_text(fmt.format_why(sig.get("symbol", "?"), None, sig)[:4000],
+                                        parse_mode=ParseMode.HTML)
+        return
+    sym = raw.upper().replace("/", "").replace("-", "").replace("_", "")
     if sym not in ctx.cfg.SYMBOLS:
         await update.message.reply_text(
-            f"❓ الرمز <b>{sym}</b> غير مراقب. الأزواج: {', '.join(ctx.cfg.SYMBOLS[:10])} ...",
+            f"❓ الاستخدام: <code>/why BTCUSDT</code> أو <code>/why signal_id</code>",
             parse_mode=ParseMode.HTML)
         return
     dec = await ctx.cache.get(f"decision:{sym}")
-    sig = None
-    if dec and dec.get("signal_id"):
+    if sig is None and dec and dec.get("signal_id"):
         try:
             sig = await ctx.db.get_signal(dec["signal_id"])
         except Exception:
@@ -243,6 +251,110 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "open_count": len(opens),
     }
     await update.message.reply_text(fmt.format_report(rep), parse_mode=ParseMode.HTML)
+
+
+async def cmd_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ctx = _ctx(context)
+    if not _allowed(ctx, update.effective_chat.id):
+        return
+    perf = await _perf_snapshot(ctx)
+    await update.message.reply_text(
+        fmt.format_performance(perf, ctx.cfg.START_BALANCE)[:4000], parse_mode=ParseMode.HTML)
+
+
+async def cmd_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ctx = _ctx(context)
+    if not _allowed(ctx, update.effective_chat.id):
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("الاستخدام: <code>/symbol BTCUSDT</code>",
+                                        parse_mode=ParseMode.HTML)
+        return
+    sym = args[0].upper().replace("/", "").replace("-", "").replace("_", "")
+    if sym not in ctx.cfg.SYMBOLS:
+        await update.message.reply_text(f"الرمز <b>{sym}</b> غير مراقب.", parse_mode=ParseMode.HTML)
+        return
+    cached = await ctx.cache.get("prices:live") or {}
+    q = (cached.get("prices") or {}).get(sym) or {}
+    dec = await ctx.cache.get(f"decision:{sym}") or {}
+    snap = dec.get("snapshot", {}) or {}
+    opens = [t for t in await ctx.db.get_open_trades() if t.get("symbol") == sym]
+    lines = [f"🔍 <b>{sym}</b>",
+             f"💰 السعر: <b>{fmt.fmt_price(q.get('price'))}</b> ({fmt.fmt_pct(q.get('change_pct', 0))})",
+             f"📊 EMA200 ({ctx.cfg.HTF}): {fmt.fmt_price(snap.get('ema_htf'))} — {snap.get('slope_state_htf', '?')}",
+             f"📊 EMA200 ({ctx.cfg.MTF}): {fmt.fmt_price(snap.get('ema_mtf'))}",
+             f"📈 ستوكاستيك: K={snap.get('stoch_k', '?')} D={snap.get('stoch_d', '?')}",
+             f"🎯 القرار: {'✅ ' + str(dec.get('direction', '')) if dec.get('approved') else '❌ مرفوضة'}"
+             f" ({dec.get('score', '—')}/100)"]
+    if opens:
+        t = opens[0]
+        lines.append(f"📂 صفقة مفتوحة: {t['side']} @ {fmt.fmt_price(t['entry_price'])} | "
+                     f"عائم {fmt.fmt_money(t.get('unrealized_pnl', 0))}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ctx = _ctx(context)
+    if not _allowed(ctx, update.effective_chat.id):
+        return
+    opens = await ctx.db.get_open_trades()
+    st = await db_state_total(ctx)
+    open_pnl = sum(float(t.get("unrealized_pnl") or 0) for t in opens)
+    equity = ctx.cfg.START_BALANCE + st + open_pnl
+    risk = sum(float(t.get("risk_amount", 0) or 0) for t in opens)
+    lim = equity * ctx.cfg.MAX_PORTFOLIO_RISK / 100
+    lines = ["⚠️ <b>المخاطرة</b>",
+             f"• صفقات: {len(opens)}/{ctx.cfg.MAX_OPEN_TRADES}",
+             f"• مخاطرة حالية: {fmt.fmt_usd(risk)} من حد {fmt.fmt_usd(lim)} ({ctx.cfg.MAX_PORTFOLIO_RISK}%)",
+             f"• مخاطرة/صفقة: {ctx.cfg.RISK_PCT}% | الرافعة: {ctx.cfg.LEVERAGE}x",
+             f"• متاح لصفقة جديدة: {'✅' if risk + equity * ctx.cfg.RISK_PCT / 100 <= lim and len(opens) < ctx.cfg.MAX_OPEN_TRADES else '❌'}"]
+    for t in opens:
+        lines.append(f"   • {t['symbol']} {t['side']}: مخاطرة {fmt.fmt_usd(t.get('risk_amount', 0))}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def db_state_total(ctx) -> float:
+    st = await ctx.db.get_state("realized_pnl", {"total": 0}) or {"total": 0}
+    try:
+        return float(st.get("total", 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ctx = _ctx(context)
+    if not _allowed(ctx, update.effective_chat.id):
+        return
+    feed = getattr(ctx, "ws", None)
+    last = await ctx.cache.get("cycle:last") or {}
+    import time as _t
+    tick_age = (round(_t.time() - feed.last_msg, 1) if feed and feed.last_msg else None)
+    await update.message.reply_text(
+        "🏥 <b>الصحة</b>\n"
+        f"• قاعدة البيانات: {getattr(ctx.db, 'mode', '?')}"
+        f"{' ⚠️' if getattr(ctx.db, 'degraded', False) else ' ✅'}\n"
+        f"• الكاش: {ctx.cache.mode}\n"
+        f"• البث: {'متصل ✅' if feed and feed.connected else 'متوقف ⏸️'}"
+        f"{f' (آخر تيك قبل {tick_age} ث)' if tick_age is not None else ''}\n"
+        f"• آخر دورة: #{last.get('cycle_id', '?')} — {last.get('status', '?')}",
+        parse_mode=ParseMode.HTML)
+
+
+async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ctx = _ctx(context)
+    if not _allowed(ctx, update.effective_chat.id):
+        return
+    c = ctx.cfg
+    await update.message.reply_text(
+        "⚙️ <b>الإعدادات النشطة</b>\n"
+        f"• الفريمات: {c.HTF}/{c.MTF}/{c.LTF} | الدورة: {c.CYCLE_SECONDS} ث\n"
+        f"• الدرجة: اعتماد {c.MIN_SCORE} / مراقبة {c.WATCH_SCORE}\n"
+        f"• المخاطرة: {c.RISK_PCT}% | حد المحفظة: {c.MAX_PORTFOLIO_RISK}% | صفقات: {c.MAX_OPEN_TRADES}\n"
+        f"• RR: {c.RR_MIN} | وقف ATR×{c.ATR_SL_MULT} | انزلاق: {c.SLIPPAGE_BPS}bps\n"
+        f"• ستوكاستيك: {c.STOCH_K},{c.STOCH_SMOOTH},{c.STOCH_D} ({c.STOCH_OS}/{c.STOCH_OB})\n"
+        f"• تبريد: {c.COOLDOWN_MINUTES} د | شورت: {'✅' if c.ALLOW_SHORTS else '❌'} | رافعة: {c.LEVERAGE}x",
+        parse_mode=ParseMode.HTML)
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -373,6 +485,11 @@ async def create_bot(ctx) -> tuple[Application | None, bool]:
     app.add_handler(CommandHandler("why", cmd_why))
     app.add_handler(CommandHandler("signals", cmd_signals))
     app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("performance", cmd_performance))
+    app.add_handler(CommandHandler("symbol", cmd_symbol))
+    app.add_handler(CommandHandler("risk", cmd_risk))
+    app.add_handler(CommandHandler("health", cmd_health))
+    app.add_handler(CommandHandler("config", cmd_config))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CallbackQueryHandler(on_button))
